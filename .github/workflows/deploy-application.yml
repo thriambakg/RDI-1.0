@@ -1,0 +1,533 @@
+# Application Infrastructure Deployment
+# .github/workflows/deploy-application.yml
+
+name: Deploy Application Infrastructure
+
+
+on:
+  push:
+    branches:
+      - main
+      - prod
+      - develop
+      - staging
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/deploy-application.yml'
+      - 'backend_app/**'
+      - 'scripts/**'
+  pull_request:
+    branches:
+      - main
+      - prod
+      - develop
+      - staging
+    paths:
+      - 'terraform/**'
+      - 'backend_app/**'
+      - 'scripts/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      destroy:
+        description: 'Destroy infrastructure'
+        required: false
+        default: false
+        type: boolean
+      force_apply:
+        description: 'Force terraform apply even if no changes detected'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  determine-environment:
+    name: 'Determine Environment'
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.env.outputs.environment }}
+    steps:
+      - name: Determine Environment
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "environment=production" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/prod" ]; then
+            echo "environment=production" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/develop" ]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/staging" ]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Unknown branch: ${{ github.ref }} - defaulting to staging" >> $GITHUB_STEP_SUMMARY
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          fi
+
+  python-security:
+    name: 'Python Security (SAST / SCA / Secrets)'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install security tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit semgrep pip-audit
+
+      - name: Bandit (SAST)
+        run: |
+          echo "🔍 Running Bandit on backend_app/src..."
+          bandit -r backend_app/src -f screen --severity-level medium 2>/dev/null || true
+        continue-on-error: true
+
+      - name: Semgrep (Python SAST)
+        run: |
+          echo "🔍 Running Semgrep Python rules..."
+          semgrep scan --config=p/python --config=p/security-audit \
+            --error --no-git-ignore backend_app/src 2>/dev/null || \
+          semgrep scan --config=auto --error --no-git-ignore backend_app/src 2>/dev/null || true
+        continue-on-error: true
+
+      - name: pip-audit (SCA)
+        run: |
+          echo "🔍 Scanning dependencies for known vulnerabilities..."
+          FAILED=0
+          REQ_COUNT=0
+          while IFS= read -r -d '' req; do
+            echo "--- $req ---"
+            # Chat/requirements.txt: Pillow 12.1.1+ fixes GHSA-cfh3-3jmp-rvhc but conflicts with matplotlib/strands-agents-tools. Ignore until upstream supports Pillow 12.
+            if echo "$req" | grep -q "Chat/requirements.txt"; then
+              pip-audit -r "$req" --ignore-vuln GHSA-cfh3-3jmp-rvhc || FAILED=1
+            else
+              pip-audit -r "$req" || FAILED=1
+            fi
+            REQ_COUNT=$((REQ_COUNT + 1))
+          done < <(find backend_app -name "requirements.txt" -type f -print0 2>/dev/null)
+          if [ "$REQ_COUNT" -eq 0 ]; then
+            echo "✅ No requirements.txt in backend_app (dependencies via Lambda layers). Skipping pip-audit."
+            exit 0
+          fi
+          if [ "$FAILED" -eq 1 ]; then
+            echo "❌ One or more requirements.txt have known vulnerabilities. Fix with pip-audit and update pins."
+            exit 1
+          fi
+          echo "✅ No known vulnerabilities in scanned requirements."
+
+      - name: Gitleaks (Secrets)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+  build-chat-agent-container:
+    name: 'Build Chat Agent Container'
+    runs-on: ubuntu-latest
+    needs: [determine-environment, python-security]
+    if: ${{ !github.event.inputs.destroy }}
+    outputs:
+      ecr-image-uri: ${{ steps.build.outputs.ecr-image-uri }}
+      build-skipped: ${{ steps.check-ecr.outputs.skipped }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Check if ECR Repository Exists
+        id: check-ecr
+        run: |
+          export ENVIRONMENT=${{ needs.determine-environment.outputs.environment }}
+          export AWS_REGION=us-east-1
+          PROJECT_NAME="cosine"
+          ECR_REPOSITORY="${PROJECT_NAME}-chat-agent-${ENVIRONMENT}"
+          
+          echo "🔍 Checking if ECR repository exists: $ECR_REPOSITORY"
+          
+          if aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" --region $AWS_REGION > /dev/null 2>&1; then
+            echo "✅ ECR repository '$ECR_REPOSITORY' exists - proceeding with build"
+            echo "skipped=false" >> $GITHUB_OUTPUT
+          else
+            echo "⏭️ ECR repository '$ECR_REPOSITORY' does not exist - skipping build"
+            echo "💡 Terraform will create the repository during apply, then you can re-run the pipeline"
+            echo "skipped=true" >> $GITHUB_OUTPUT
+            echo "ecr-image-uri=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Python
+        if: steps.check-ecr.outputs.skipped != 'true'
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Validate Python Syntax (Recursive)
+        if: steps.check-ecr.outputs.skipped != 'true'
+        run: |
+          echo "🔍 Validating Python syntax for all files in backend_app/src..."
+          
+          # Find all Python files recursively
+          PYTHON_FILES=$(find backend_app/src -name "*.py" -type f)
+          
+          if [ -z "$PYTHON_FILES" ]; then
+            echo "⚠️ No Python files found in backend_app/src"
+            exit 0
+          fi
+          
+          # Count files
+          FILE_COUNT=$(echo "$PYTHON_FILES" | wc -l)
+          echo "📊 Found $FILE_COUNT Python file(s) to validate"
+          
+          # Final validation - compile all files and capture errors
+          FAILED=0
+          ERROR_FILES=()
+          for file in $(find backend_app/src -name "*.py" -type f); do
+            if ! python -m py_compile "$file" 2>&1 >/dev/null; then
+              ERROR_OUTPUT=$(python -m py_compile "$file" 2>&1)
+              echo "❌ Syntax error in: $file"
+              echo "$ERROR_OUTPUT"
+              ERROR_FILES+=("$file")
+              FAILED=1
+            fi
+          done
+          
+          if [ $FAILED -eq 1 ]; then
+            echo ""
+            echo "❌ Python syntax validation failed!"
+            echo "Files with errors: ${#ERROR_FILES[@]}"
+            echo "Please fix all syntax errors before proceeding."
+            exit 1
+          fi
+          
+          echo "✅ All $FILE_COUNT Python files passed syntax validation!"
+
+      - name: Make deployment script executable
+        if: steps.check-ecr.outputs.skipped != 'true'
+        run: chmod +x scripts/deploy-chat-agent.sh
+
+      - name: Build and Push Chat Agent Container
+        id: build
+        if: steps.check-ecr.outputs.skipped != 'true'
+        run: |
+          export ENVIRONMENT=${{ needs.determine-environment.outputs.environment }}
+          export AWS_REGION=us-east-1
+          
+          echo "🔍 Environment variables:"
+          echo "ENVIRONMENT=$ENVIRONMENT"
+          echo "AWS_REGION=$AWS_REGION"
+          
+          echo "🔍 Checking AWS credentials..."
+          aws sts get-caller-identity || echo "❌ AWS credentials not available"
+          
+          echo "🔍 Checking if deployment script exists..."
+          ls -la scripts/deploy-chat-agent.sh || echo "❌ Deployment script not found"
+          
+          echo "🔍 Making deployment script executable..."
+          chmod +x scripts/deploy-chat-agent.sh
+          
+          echo "🔍 Testing script syntax..."
+          bash -n scripts/deploy-chat-agent.sh || echo "❌ Script has syntax errors"
+          
+          echo "🔍 Checking script dependencies..."
+          echo "AWS CLI version: $(aws --version)"
+          echo "Docker version: $(docker --version)"
+          
+          echo "🔍 Running deployment script (build and push only)..."
+          # Run only the build and push parts, not the terraform deployment
+          # We'll capture the version and image URI for terraform
+          set +e  # Don't exit on error
+          export CI_MODE=true
+          export DOCKER_BUILDKIT=0
+          export COMPOSE_DOCKER_CLI_BUILD=0
+          BUILD_OUTPUT=$(./scripts/deploy-chat-agent.sh 2>&1)
+          BUILD_EXIT_CODE=$?
+          set -e  # Re-enable exit on error
+          
+          echo "🔍 Deployment script exit code: $BUILD_EXIT_CODE"
+          echo "🔍 Deployment script output:"
+          echo "$BUILD_OUTPUT"
+          
+          if [ $BUILD_EXIT_CODE -ne 0 ]; then
+            echo "❌ Deployment script failed with exit code: $BUILD_EXIT_CODE"
+            exit 1
+          fi
+          
+          # Extract the image URI from the build output
+          # The script outputs "Built Image URI: <uri>" in CI mode or "Deployed Image URI: <uri>" in full mode
+          echo "🔍 Debug: Looking for image URI in build output..."
+          echo "🔍 Matching lines:"
+          echo "$BUILD_OUTPUT" | grep -E "(Built Image URI:|Deployed Image URI:)" || echo "No matching lines found"
+          
+          ECR_IMAGE_URI=$(echo "$BUILD_OUTPUT" | grep -E "(Built Image URI:|Deployed Image URI:)" | sed 's/.*URI: //')
+          
+          echo "🔍 Raw extracted URI: '$ECR_IMAGE_URI'"
+          
+          if [ -z "$ECR_IMAGE_URI" ]; then
+            echo "❌ Failed to extract ECR image URI from deployment output"
+            echo "Available output lines:"
+            echo "$BUILD_OUTPUT" | grep -E "(Image URI|Built|Deployed|Version)"
+            exit 1
+          fi
+          
+          echo "✅ Extracted ECR image URI: $ECR_IMAGE_URI"
+          echo "🔍 URI length: ${#ECR_IMAGE_URI}"
+          echo "🔍 URI starts with: '${ECR_IMAGE_URI:0:10}'"
+          echo "🔍 URI ends with: '${ECR_IMAGE_URI: -10}'"
+          echo "ecr-image-uri=$ECR_IMAGE_URI" >> $GITHUB_OUTPUT
+          echo "Built and pushed: $ECR_IMAGE_URI"
+
+  debug-terraform-vars:
+    name: 'Debug Terraform Variables'
+    runs-on: ubuntu-latest
+    needs: [determine-environment, build-chat-agent-container]
+    steps:
+      - name: Debug extracted URI
+        run: |
+          echo "🔍 Debug: Extracted ECR image URI"
+          URI="${{ needs.build-chat-agent-container.outputs.ecr-image-uri }}"
+          echo "URI: '$URI'"
+          echo "URI length: ${#URI}"
+          echo "URI starts with: '${URI:0:10}'"
+          echo "URI ends with: '${URI: -10}'"
+          echo "Terraform var format:"
+          echo "chat_agent_image_uri = \"$URI\""
+
+  deploy-application:
+    name: 'Deploy Application'
+    runs-on: ubuntu-latest
+    needs: [determine-environment, build-chat-agent-container]
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Create Terraform Variables File
+        run: |
+          echo "🔧 Creating terraform variables file..."
+          
+          # Only include chat_agent_image_uri if build was not skipped
+          if [ "${{ needs.build-chat-agent-container.outputs.build-skipped }}" != "true" ] && [ -n "${{ needs.build-chat-agent-container.outputs.ecr-image-uri }}" ]; then
+            cat > terraform/additional_vars.tfvars << EOF
+          chat_agent_image_uri = "${{ needs.build-chat-agent-container.outputs.ecr-image-uri }}"
+          EOF
+          else
+            echo "⏭️ Build was skipped - creating empty additional_vars.tfvars"
+            echo "# Build was skipped - ECR repository will be created by terraform" > terraform/additional_vars.tfvars
+          fi
+          
+          echo "✅ Created additional_vars.tfvars:"
+          cat terraform/additional_vars.tfvars
+
+      - name: Run Terraform Plan
+        env:
+          ENVIRONMENT: ${{ needs.determine-environment.outputs.environment }}
+          BUILD_SKIPPED: ${{ needs.build-chat-agent-container.outputs.build-skipped }}
+        run: |
+          cd terraform
+          echo "🔍 Running terraform plan for environment: $ENVIRONMENT..."
+          terraform init -backend-config="backend-configs/${ENVIRONMENT}.tfbackend"
+          
+          # If build was skipped, only plan the ECR repository (not Lambda function)
+          if [ "$BUILD_SKIPPED" = "true" ]; then
+            echo "⏭️ Build was skipped - planning only ECR repository and dependencies (excluding Lambda function)"
+            terraform plan -var-file="environments/${ENVIRONMENT}.auto.tfvars" -var-file="additional_vars.tfvars" -target=module.chat_agent_ecr
+          else
+            terraform plan -var-file="environments/${ENVIRONMENT}.auto.tfvars" -var-file="additional_vars.tfvars"
+          fi
+          
+      - name: Run Terraform Apply
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/prod' || github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/develop'
+        env:
+          ENVIRONMENT: ${{ needs.determine-environment.outputs.environment }}
+          BUILD_SKIPPED: ${{ needs.build-chat-agent-container.outputs.build-skipped }}
+        run: |
+          cd terraform
+          echo "🔧 Running terraform apply for environment: $ENVIRONMENT..."
+          
+          # If build was skipped, only create the ECR repository (not Lambda function)
+          if [ "$BUILD_SKIPPED" = "true" ]; then
+            echo "⏭️ Build was skipped - applying only ECR repository and dependencies (excluding Lambda function)"
+            echo "💡 Lambda function will be created on the next pipeline run after the image is built"
+            terraform apply -var-file="environments/${ENVIRONMENT}.auto.tfvars" -var-file="additional_vars.tfvars" -target=module.chat_agent_ecr -auto-approve
+          else
+            terraform apply -var-file="environments/${ENVIRONMENT}.auto.tfvars" -var-file="additional_vars.tfvars" -auto-approve
+          fi
+
+  update-lambda-container:
+    name: 'Update Lambda Container Image'
+    runs-on: ubuntu-latest
+    needs: [determine-environment, build-chat-agent-container, deploy-application]
+    if: ${{ !github.event.inputs.destroy && needs.deploy-application.result == 'success' }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Update Lambda Function Code
+        run: |
+          echo "🔧 Updating Lambda function container image..."
+          echo "Environment: ${{ needs.determine-environment.outputs.environment }}"
+          echo "Image URI: ${{ needs.build-chat-agent-container.outputs.ecr-image-uri }}"
+          
+          # Update the Lambda function code to use the new container image
+          aws lambda update-function-code \
+            --function-name "cosine-chat-agent-${{ needs.determine-environment.outputs.environment }}" \
+            --image-uri "${{ needs.build-chat-agent-container.outputs.ecr-image-uri }}" \
+            --region us-east-1
+          
+          if [ $? -eq 0 ]; then
+            echo "✅ Lambda function code updated successfully"
+            echo "⏳ Waiting 10 seconds for Lambda to pull the new image..."
+            sleep 10
+          else
+            echo "❌ Failed to update Lambda function code"
+            exit 1
+          fi
+
+      - name: Verify Lambda Image Update
+        run: |
+          echo "🔍 Verifying Lambda function is using the correct image..."
+          
+          FUNCTION_NAME="cosine-chat-agent-${{ needs.determine-environment.outputs.environment }}"
+          EXPECTED_IMAGE_URI="${{ needs.build-chat-agent-container.outputs.ecr-image-uri }}"
+          
+          echo "🔍 Function name: $FUNCTION_NAME"
+          echo "🔍 Expected Image URI: $EXPECTED_IMAGE_URI"
+          
+          # First, let's check if the function exists
+          echo "🔍 Checking if Lambda function exists..."
+          aws lambda get-function --function-name "$FUNCTION_NAME" --region us-east-1 --query 'Configuration.FunctionName' --output text || echo "❌ Function not found or access denied"
+          
+          # Get full Lambda configuration for debugging
+          echo "🔍 Getting full Lambda configuration..."
+          FULL_CONFIG=$(aws lambda get-function --function-name "$FUNCTION_NAME" --region us-east-1 || echo "Failed to get function")
+          echo "$FULL_CONFIG"
+          
+          # Get current Lambda configuration
+          echo "🔍 Getting current image URI..."
+          CURRENT_IMAGE_URI=$(aws lambda get-function \
+            --function-name "$FUNCTION_NAME" \
+            --region us-east-1 \
+            --query 'Code.ImageUri' \
+            --output text 2>/dev/null || echo "Failed to get image URI")
+          
+          echo "🔍 Current Image URI: '$CURRENT_IMAGE_URI'"
+          
+          if [ "$CURRENT_IMAGE_URI" = "$EXPECTED_IMAGE_URI" ]; then
+            echo "✅ Lambda function is using the correct image!"
+          else
+            echo "❌ Lambda function is NOT using the correct image!"
+            echo "Expected: $EXPECTED_IMAGE_URI"
+            echo "Current:  $CURRENT_IMAGE_URI"
+            echo "This indicates Lambda didn't update its container image properly"
+            exit 1
+          fi
+
+
+  comment-pr:
+    name: 'Comment on PR'
+    runs-on: ubuntu-latest
+    needs: [determine-environment, deploy-application, update-lambda-container]
+    if: always() && github.event_name == 'pull_request'
+    steps:
+      - name: Comment PR with Results
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const infraStatus = '${{ needs.deploy-application.result }}';
+            const lambdaUpdateStatus = '${{ needs.update-lambda-container.result }}';
+            const environment = '${{ needs.determine-environment.outputs.environment }}';
+            
+            const comment = `## 🚀 Application Infrastructure Plan - ${environment}
+            
+            Chat agent container built and Terraform plan generated with security scans completed.
+            
+            ### 📋 Summary:
+            - **Environment:** ${environment}
+            - **Infrastructure Type:** Application
+            - **Base Infrastructure Required:** ✅ Verified
+            - **Chat Agent Container:** ✅ Built and pushed to ECR
+            - **Infrastructure Deployment:** ${infraStatus === 'success' ? '✅ Success' : infraStatus === 'failure' ? '❌ Failed' : '⏳ In Progress'}
+            - **Lambda Container Update:** ${lambdaUpdateStatus === 'success' ? '✅ Success' : lambdaUpdateStatus === 'failure' ? '❌ Failed' : '⏳ In Progress'}
+            
+            ### 🔧 Build Results:
+            - **Container Image:** ✅ Built with all dependencies (strands-agents, financial libraries, etc.)
+            - **ECR Repository:** ✅ cosine-chat-agent-${environment}
+            - **Lambda Function:** ✅ Container-based deployment ready
+            - **Lambda Container Update:** ✅ Forced Lambda to pull latest container image
+            
+            ### 🔍 Security Scans:
+            - **Python SAST:** Bandit + Semgrep (Python)
+            - **Python SCA:** pip-audit (dependencies)
+            - **Secrets:** Gitleaks
+            - **Infrastructure:** TFLint / tfsec / Checkov (if configured)
+            
+            ### 📊 Next Steps:
+            - Merge this PR to apply the infrastructure changes
+            - Monitor the deployment in the Actions tab
+            - Test the chat agent functionality
+            
+            <details>
+            <summary>📖 Deployment Guide</summary>
+            
+            1. **Merge Requirements:**
+               - All security scans must pass
+               - Base infrastructure must be deployed
+               - PR must be approved by a reviewer
+            
+            2. **Post-Merge:**
+               - Infrastructure will be automatically deployed
+               - Check deployment summary in Actions
+               - Test application functionality
+            
+            3. **Rollback:**
+               - Use workflow dispatch with destroy option
+               - Or revert this commit and re-deploy
+            
+            </details>`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });

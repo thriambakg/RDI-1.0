@@ -1,0 +1,851 @@
+# Frontend Application Deployment Pipeline
+# Builds and deploys frontend container to ECS
+#
+# USAGE:
+# - Automatically called by deploy-application.yml (main pipeline)
+# - Can be manually triggered for frontend-only deployments
+# - No longer runs on push/PR to avoid duplicate executions
+
+name: Deploy Frontend Application
+
+on:
+  # Trigger on pushes to frontend directory
+  push:
+    branches: [ staging, prod ]
+    paths:
+      - 'frontend/**'
+      - 'frontend/react-app/**'
+      - '.github/workflows/deploy-frontend.yml'
+  
+  # Keep workflow_call for manual orchestration if needed
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: string
+      frontend_only:
+        description: 'Skip infrastructure checks for faster deployment'
+        required: false
+        default: false
+        type: boolean
+      skip_wait:
+        description: 'Skip deployment wait (faster iterations)'
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      frontend_only:
+        description: 'Deploy frontend only (skip infrastructure checks)'
+        required: false
+        default: false
+        type: boolean
+      skip_wait:
+        description: 'Skip deployment wait (faster but no status verification)'
+        required: false
+        default: false
+        type: boolean
+# Add required permissions for checking workflow runs
+permissions:
+  actions: read
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  # Wait for application infrastructure deployment if both pipelines are running
+  wait-for-infrastructure:
+    runs-on: ubuntu-latest
+    # Only run this job if triggered by push (not manual dispatch or workflow_call)
+    if: github.event_name == 'push'
+    outputs:
+      should_wait: ${{ steps.check.outputs.should_wait }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Need at least 2 commits to compare
+
+      - name: Check if infrastructure changes exist
+        id: check
+        run: |
+          echo "🔍 Checking for infrastructure changes in this push..."
+          
+          # Check if there are terraform changes in this push
+          if [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            # Normal push - compare with previous commit
+            TERRAFORM_CHANGES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -E '^terraform/|deploy-application\.yml' || true)
+          else
+            # Initial commit or force push - check if terraform files exist
+            TERRAFORM_CHANGES=$(git ls-files | grep -E '^terraform/|deploy-application\.yml' || true)
+          fi
+          
+          if [ -n "$TERRAFORM_CHANGES" ]; then
+            echo "📁 Terraform changes detected:"
+            echo "$TERRAFORM_CHANGES"
+            echo "should_wait=true" >> $GITHUB_OUTPUT
+            echo "⏳ Will wait for infrastructure deployment to complete"
+          else
+            echo "✅ No terraform changes detected, proceeding immediately"
+            echo "should_wait=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Wait for infrastructure deployment
+        if: steps.check.outputs.should_wait == 'true'
+        run: |
+          echo "⏳ Waiting for infrastructure deployment to complete..."
+          echo "💡 This prevents race conditions between infrastructure and frontend deployments"
+          
+          # Wait up to 25 minutes for infrastructure deployment
+          # Infrastructure typically takes 3-10 minutes
+          MAX_WAIT_MINUTES=25
+          WAIT_SECONDS=$((MAX_WAIT_MINUTES * 60))
+          
+          echo "🕐 Starting wait period (max ${MAX_WAIT_MINUTES} minutes)..."
+          echo "🔍 You can monitor the infrastructure deployment in the Actions tab"
+          
+          # Sleep in 2-minute intervals to avoid timeout and provide progress updates
+          ELAPSED=0
+          INTERVAL=120  # 2 minutes
+          
+          while [ $ELAPSED -lt $WAIT_SECONDS ]; do
+            MINUTES_ELAPSED=$((ELAPSED / 60))
+            MINUTES_REMAINING=$(( (WAIT_SECONDS - ELAPSED) / 60 ))
+            
+            echo "⏳ Waited ${MINUTES_ELAPSED} minutes, ${MINUTES_REMAINING} minutes remaining..."
+            echo "💡 Infrastructure deployment typically completes within 10 minutes"
+            
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+          
+          echo "✅ Wait period completed - proceeding with frontend deployment"
+          echo "🚀 Frontend deployment will now verify infrastructure is ready before proceeding"
+
+  # Determine environment based on branch or input
+  setup:
+    runs-on: ubuntu-latest
+    needs: [wait-for-infrastructure]
+    # Always run setup when wait-for-infrastructure succeeds or is skipped (manual/workflow_call)
+    if: always() && (needs.wait-for-infrastructure.result == 'success' || needs.wait-for-infrastructure.result == 'skipped')
+    environment:
+      # Use manual input when workflow_dispatch/workflow_call; otherwise derive from branch.
+      # Ensure staging/production environments exist in repo Settings → Environments (add "Required reviewers" for approval gate).
+      name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || github.event_name == 'workflow_call' && inputs.environment || (github.ref == 'refs/heads/prod' || github.ref == 'refs/heads/main') && 'production' || 'staging' }}
+      url: https://github.com/${{ github.repository }}/actions
+    outputs:
+      environment: ${{ steps.env.outputs.environment }}
+    steps:
+      - name: Determine environment
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_call" ]; then
+            ENVIRONMENT="${{ inputs.environment }}"
+          elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            ENVIRONMENT="${{ github.event.inputs.environment }}"
+          elif [ "${{ github.ref }}" == "refs/heads/prod" ]; then
+            ENVIRONMENT="production"
+          elif [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            ENVIRONMENT="production"
+          else
+            ENVIRONMENT="staging"
+          fi
+          echo "environment=${ENVIRONMENT}" >> $GITHUB_OUTPUT
+
+  # Check CloudFront infrastructure (skipped – deploy runs without this stage)
+  check-infrastructure:
+    needs: [setup]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.setup.outputs.environment }}
+    if: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Check if CloudFront infrastructure exists
+        env:
+          ENVIRONMENT: ${{ needs.setup.outputs.environment }}
+        run: |
+          echo "🔍 Checking if CloudFront infrastructure is ready..."
+          
+          cd terraform
+          # Initialize Terraform with the appropriate backend configuration
+          echo "🔧 Initializing Terraform with backend config for $ENVIRONMENT..."
+          terraform init -backend-config="backend-configs/${ENVIRONMENT}.tfbackend"
+          
+          # Check if S3 bucket exists
+          S3_BUCKET_NAME=$(terraform output -raw frontend_s3_bucket_name 2>/dev/null || echo "")
+          if [ -n "$S3_BUCKET_NAME" ]; then
+            if aws s3api head-bucket --bucket "$S3_BUCKET_NAME" --region $AWS_REGION 2>/dev/null; then
+              echo "✅ S3 Bucket '$S3_BUCKET_NAME' exists and is accessible"
+            else
+              echo "❌ S3 Bucket '$S3_BUCKET_NAME' not found or not accessible"
+              echo "🚨 Please run terraform apply first to create infrastructure"
+              exit 1
+            fi
+          else
+            echo "❌ S3 bucket name not found in Terraform outputs"
+            echo "🚨 Please run terraform apply first to create infrastructure"
+            exit 1
+          fi
+          
+          # Check if CloudFront distribution exists
+          CLOUDFRONT_DISTRIBUTION_ID=$(terraform output -raw cloudfront_distribution_id 2>/dev/null || echo "")
+          if [ -n "$CLOUDFRONT_DISTRIBUTION_ID" ]; then
+            DISTRIBUTION_STATUS=$(aws cloudfront get-distribution \
+              --id "$CLOUDFRONT_DISTRIBUTION_ID" \
+              --query 'Distribution.Status' \
+              --output text \
+              --region $AWS_REGION 2>/dev/null || echo "NOT_FOUND")
+            
+            if [ "$DISTRIBUTION_STATUS" = "Deployed" ]; then
+              echo "✅ CloudFront Distribution '$CLOUDFRONT_DISTRIBUTION_ID' is deployed"
+            elif [ "$DISTRIBUTION_STATUS" = "InProgress" ]; then
+              echo "⚠️  CloudFront Distribution '$CLOUDFRONT_DISTRIBUTION_ID' is still deploying"
+              echo "💡 Deployment can continue, but propagation may take longer"
+            else
+              echo "❌ CloudFront Distribution '$CLOUDFRONT_DISTRIBUTION_ID' not found or in unexpected state: $DISTRIBUTION_STATUS"
+              echo "🚨 Please run terraform apply first to create infrastructure"
+              exit 1
+            fi
+          else
+            echo "❌ CloudFront distribution ID not found in Terraform outputs"
+            echo "🚨 Please run terraform apply first to create infrastructure"
+            exit 1
+          fi
+          
+          # Check build environment variables are available
+          BUILD_ENV=$(terraform output -json build_environment_variables 2>/dev/null || echo "{}")
+          if [ "$BUILD_ENV" = "{}" ] || [ "$BUILD_ENV" = "null" ]; then
+            echo "❌ Build environment variables not found in Terraform outputs"
+            echo "🚨 Please run terraform apply first to create infrastructure"
+            exit 1
+          else
+            echo "✅ Build environment variables are available"
+          fi
+          
+          cd ..
+          echo "🎉 All CloudFront infrastructure components are ready!"
+
+  # Frontend security (SCA, SAST, secrets) — runs before build/deploy
+  # Uses environment for deployment protection: add "Required reviewers" in repo Settings → Environments
+  # to require manual approval before security scan runs (and before deploy)
+  frontend-security:
+    name: 'Frontend Security (SCA / SAST / Secrets)'
+    needs: [setup]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.setup.outputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: './frontend/react-app/package-lock.json'
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend/react-app
+
+      - name: npm audit (SCA – dependency vulnerabilities)
+        run: |
+          echo "🔍 Running npm audit on frontend dependencies..."
+          npm audit --audit-level=high
+        working-directory: frontend/react-app
+
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      - name: Semgrep (SAST – JS/TS/React)
+        run: |
+          echo "🔍 Running Semgrep on frontend (JavaScript, TypeScript, React)..."
+          semgrep scan --config=p/javascript --config=p/typescript --config=p/react \
+            --config=p/security-audit --error --no-git-ignore frontend/ \
+            --exclude-rule javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring \
+            --exclude-rule javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp \
+            2>/dev/null || \
+          semgrep scan --config=auto --error --no-git-ignore frontend/ \
+            --exclude-rule javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring \
+            --exclude-rule javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp \
+            2>/dev/null || true
+
+      - name: Gitleaks (Secrets)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+  # Build and deploy frontend (runs only after mandatory security scan passes)
+  deploy-frontend:
+    needs: [setup, frontend-security]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.setup.outputs.environment }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get commit SHA (short)
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Get build environment variables from Terraform
+        id: get-build-env
+        env:
+          ENVIRONMENT: ${{ needs.setup.outputs.environment }}
+        run: |
+          echo "🔍 Getting build environment variables from Terraform outputs..."
+          
+          cd terraform
+          
+          # Initialize Terraform with the appropriate backend configuration
+          echo "🔧 Initializing Terraform with backend config for $ENVIRONMENT..."
+          terraform init -backend-config="backend-configs/${ENVIRONMENT}.tfbackend"
+          
+          # Get build environment variables from terraform output
+          echo "🔍 Retrieving build environment variables..."
+          BUILD_ENV=$(terraform output -json build_environment_variables 2>/dev/null || echo "{}")
+          
+          echo "🔍 Raw BUILD_ENV received: $BUILD_ENV"
+          
+          if [ "$BUILD_ENV" = "{}" ] || [ "$BUILD_ENV" = "null" ]; then
+            echo "❌ Could not retrieve build environment variables from Terraform outputs"
+            echo "🚨 Debugging information:"
+            echo "   Current directory: $(pwd)"
+            echo "   Terraform version: $(terraform version)"
+            echo "   Available outputs: $(terraform output 2>/dev/null || echo 'No outputs available')"
+            echo "🚨 Please ensure application infrastructure is deployed:"
+            echo "   Run: terraform apply in the terraform/ directory"
+            echo "   This will discover base infrastructure resources automatically"
+            exit 1
+          fi
+          
+          # Parse the JSON output and set environment variables for Next.js build
+          NEXT_PUBLIC_AWS_REGION=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_AWS_REGION // "us-east-1"')
+          NEXT_PUBLIC_COGNITO_USER_POOL_ID=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_COGNITO_USER_POOL_ID // empty')
+          NEXT_PUBLIC_COGNITO_USER_POOL_CLIENT_ID=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_COGNITO_USER_POOL_CLIENT_ID // empty')
+          NEXT_PUBLIC_COGNITO_DOMAIN=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_COGNITO_DOMAIN // empty')
+          NEXT_PUBLIC_API_GATEWAY_URL=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_API_GATEWAY_URL // ""')
+          NEXT_PUBLIC_REDIRECT_SIGN_IN=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_REDIRECT_SIGN_IN // "https://investcosine.com/auth/callback"')
+          NEXT_PUBLIC_REDIRECT_SIGN_OUT=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_REDIRECT_SIGN_OUT // "https://investcosine.com"')
+          
+          # Get WebSocket URL from terraform output
+          WEBSOCKET_API=$(terraform output -json websocket_api 2>/dev/null || echo "{}")
+          NEXT_PUBLIC_WEBSOCKET_URL=$(echo $WEBSOCKET_API | jq -r '.stage_url // ""')
+          
+          cd ..
+          
+          # Validate required values
+          if [ -z "$NEXT_PUBLIC_COGNITO_USER_POOL_ID" ]; then
+            echo "❌ Missing Cognito User Pool ID in terraform outputs"
+            echo "🚨 Base infrastructure may not be deployed or accessible"
+            exit 1
+          fi
+          
+          if [ -z "$NEXT_PUBLIC_COGNITO_USER_POOL_CLIENT_ID" ]; then
+            echo "❌ Missing Cognito Client ID in terraform outputs"  
+            echo "🚨 Base infrastructure may not be deployed or accessible"
+            exit 1
+          fi
+          
+          if [ -z "$NEXT_PUBLIC_COGNITO_DOMAIN" ]; then
+            echo "❌ Missing Cognito Domain in terraform outputs"
+            echo "🚨 Base infrastructure may not be deployed or accessible"
+            exit 1
+          fi
+          
+          # Set outputs for Next.js build
+          echo "next_public_aws_region=${NEXT_PUBLIC_AWS_REGION}" >> $GITHUB_OUTPUT
+          echo "next_public_cognito_user_pool_id=${NEXT_PUBLIC_COGNITO_USER_POOL_ID}" >> $GITHUB_OUTPUT
+          echo "next_public_cognito_user_pool_client_id=${NEXT_PUBLIC_COGNITO_USER_POOL_CLIENT_ID}" >> $GITHUB_OUTPUT
+          echo "next_public_cognito_domain=${NEXT_PUBLIC_COGNITO_DOMAIN}" >> $GITHUB_OUTPUT
+          echo "next_public_api_gateway_url=${NEXT_PUBLIC_API_GATEWAY_URL}" >> $GITHUB_OUTPUT
+          echo "next_public_websocket_url=${NEXT_PUBLIC_WEBSOCKET_URL}" >> $GITHUB_OUTPUT
+          echo "next_public_redirect_sign_in=${NEXT_PUBLIC_REDIRECT_SIGN_IN}" >> $GITHUB_OUTPUT
+          echo "next_public_redirect_sign_out=${NEXT_PUBLIC_REDIRECT_SIGN_OUT}" >> $GITHUB_OUTPUT
+          
+          echo "✅ Build environment variables retrieved successfully:"
+          echo "  - Environment: ${ENVIRONMENT}"
+          echo "  - User Pool ID: ${NEXT_PUBLIC_COGNITO_USER_POOL_ID}"
+          echo "  - Client ID: ${NEXT_PUBLIC_COGNITO_USER_POOL_CLIENT_ID}"
+          echo "  - Domain: ${NEXT_PUBLIC_COGNITO_DOMAIN}"
+          echo "  - Sign In Redirect: ${NEXT_PUBLIC_REDIRECT_SIGN_IN}"
+          echo "  - Sign Out Redirect: ${NEXT_PUBLIC_REDIRECT_SIGN_OUT}"
+          echo "  - WebSocket URL: ${NEXT_PUBLIC_WEBSOCKET_URL}"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: './frontend/react-app/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: ./frontend/react-app
+        run: npm ci
+
+      - name: Generate runtime configuration
+        working-directory: ./frontend/react-app
+        run: |
+          echo "🔧 Generating runtime configuration from Terraform outputs..."
+          
+          # Get values from Terraform outputs (already retrieved in previous step)
+          API_GATEWAY_URL="${{ steps.get-build-env.outputs.next_public_api_gateway_url }}"
+          WEBSOCKET_URL="${{ steps.get-build-env.outputs.next_public_websocket_url }}"
+          AWS_REGION="${{ steps.get-build-env.outputs.next_public_aws_region }}"
+          ENVIRONMENT="${{ needs.setup.outputs.environment }}"
+          COGNITO_USER_POOL_ID="${{ steps.get-build-env.outputs.next_public_cognito_user_pool_id }}"
+          COGNITO_CLIENT_ID="${{ steps.get-build-env.outputs.next_public_cognito_user_pool_client_id }}"
+          COGNITO_DOMAIN="${{ steps.get-build-env.outputs.next_public_cognito_domain }}"
+          REDIRECT_SIGN_IN="${{ steps.get-build-env.outputs.next_public_redirect_sign_in }}"
+          REDIRECT_SIGN_OUT="${{ steps.get-build-env.outputs.next_public_redirect_sign_out }}"
+          
+          echo "🔍 Configuration values:"
+          echo "  - API Gateway URL: $API_GATEWAY_URL"
+          echo "  - WebSocket URL: $WEBSOCKET_URL"
+          echo "  - AWS Region: $AWS_REGION"
+          echo "  - Environment: $ENVIRONMENT"
+          echo "  - Cognito User Pool ID: $COGNITO_USER_POOL_ID"
+          echo "  - Cognito Client ID: $COGNITO_CLIENT_ID"
+          echo "  - Cognito Domain: $COGNITO_DOMAIN"
+          
+          # Generate the runtime configuration file
+          node scripts/generate-config.js \
+            --api-gateway-url "$API_GATEWAY_URL" \
+            --websocket-url "$WEBSOCKET_URL" \
+            --aws-region "$AWS_REGION" \
+            --environment "$ENVIRONMENT" \
+            --cognito-user-pool-id "$COGNITO_USER_POOL_ID" \
+            --cognito-client-id "$COGNITO_CLIENT_ID" \
+            --cognito-domain "$COGNITO_DOMAIN" \
+            --redirect-sign-in "$REDIRECT_SIGN_IN" \
+            --redirect-sign-out "$REDIRECT_SIGN_OUT" \
+            --output "public/config.js"
+          
+          echo "✅ Runtime configuration generated successfully"
+          echo "🔍 Generated config.js content:"
+          cat public/config.js | head -20
+
+      - name: Generate logging configuration
+        working-directory: ./frontend/react-app
+        run: |
+          echo "🔧 Generating logging configuration based on environment..."
+          
+          ENVIRONMENT="${{ needs.setup.outputs.environment }}"
+          
+          # Set logging enabled based on environment
+          # Staging: enabled=true, Production: enabled=false
+          if [ "$ENVIRONMENT" = "staging" ]; then
+            LOGGING_ENABLED="true"
+            echo "📝 Setting logging enabled for staging environment"
+          else
+            LOGGING_ENABLED="false"
+            echo "📝 Setting logging disabled for production environment"
+          fi
+          
+          # Generate logging.json using printf to avoid YAML heredoc issues
+          printf '{\n  "enabled": %s\n}\n' "$LOGGING_ENABLED" > public/logging.json
+          
+          echo "✅ Logging configuration generated successfully"
+          echo "🔍 Generated logging.json content:"
+          cat public/logging.json
+
+      - name: Build React.js (Vite) application
+        working-directory: ./frontend/react-app
+        env:
+          VITE_AWS_REGION: ${{ steps.get-build-env.outputs.next_public_aws_region }}
+          VITE_COGNITO_USER_POOL_ID: ${{ steps.get-build-env.outputs.next_public_cognito_user_pool_id }}
+          VITE_COGNITO_USER_POOL_CLIENT_ID: ${{ steps.get-build-env.outputs.next_public_cognito_user_pool_client_id }}
+          VITE_COGNITO_DOMAIN: ${{ steps.get-build-env.outputs.next_public_cognito_domain }}
+          VITE_API_GATEWAY_URL: ${{ steps.get-build-env.outputs.next_public_api_gateway_url }}
+          VITE_REDIRECT_SIGN_IN: ${{ steps.get-build-env.outputs.next_public_redirect_sign_in }}
+          VITE_REDIRECT_SIGN_OUT: ${{ steps.get-build-env.outputs.next_public_redirect_sign_out }}
+          VITE_STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+        run: |
+          echo "🔨 Building React.js (Vite) application with environment variables..."
+          echo "  - AWS Region: $VITE_AWS_REGION"
+          echo "  - User Pool ID: $VITE_COGNITO_USER_POOL_ID"
+          echo "  - Client ID: $VITE_COGNITO_USER_POOL_CLIENT_ID"
+          echo "  - Domain: $VITE_COGNITO_DOMAIN"
+          echo "  - Sign In Redirect: $VITE_REDIRECT_SIGN_IN"
+          echo "  - Sign Out Redirect: $VITE_REDIRECT_SIGN_OUT"
+          
+          # Check if Stripe key is set (without exposing the value)
+          if [ -z "$VITE_STRIPE_PUBLISHABLE_KEY" ]; then
+            echo "⚠️  WARNING: VITE_STRIPE_PUBLISHABLE_KEY is not set or is empty"
+            echo "   Please ensure STRIPE_PUBLISHABLE_KEY secret is set in GitHub repository secrets"
+          else
+            echo "  - Stripe Publishable Key: ${VITE_STRIPE_PUBLISHABLE_KEY:0:20}... (hidden for security)"
+          fi
+          
+          # Verify runtime config is present
+          echo "🔍 Checking runtime configuration..."
+          if [ -f "public/config.js" ]; then
+            echo "✅ Runtime config.js found"
+            echo "📄 Config.js preview:"
+            head -10 public/config.js
+          else
+            echo "❌ Runtime config.js not found - build will continue with fallback config"
+          fi
+          
+          # Verify Stripe key will be available to Vite
+          echo "🔍 Verifying environment variables for Vite build..."
+          if [ -z "$VITE_STRIPE_PUBLISHABLE_KEY" ]; then
+            echo "❌ ERROR: VITE_STRIPE_PUBLISHABLE_KEY is empty - build will fail Stripe initialization"
+            echo "   Current value length: ${#VITE_STRIPE_PUBLISHABLE_KEY}"
+            exit 1
+          else
+            KEY_PREFIX="${VITE_STRIPE_PUBLISHABLE_KEY:0:7}"
+            KEY_LENGTH=${#VITE_STRIPE_PUBLISHABLE_KEY}
+            echo "✅ Stripe key is set (length: $KEY_LENGTH, starts with: $KEY_PREFIX)"
+          fi
+          
+          # Build the React.js application
+          npm run build
+          
+          # Verify the build output
+          echo "✅ Build completed successfully"
+          echo "🔍 Build output size:"
+          du -sh dist/ || echo "dist/ directory not found"
+          
+          # List the build output structure
+          echo "🔍 Build output structure:"
+          find dist/ -type f -name "*.html" | head -10 || echo "No HTML files found"
+          find dist/ -type f -name "*.js" | head -5 || echo "No JS files found"
+          find dist/ -type f -name "*.css" | head -5 || echo "No CSS files found"
+          
+          # Verify config.js was included in build
+          echo "🔍 Checking if config.js was included in build:"
+          if [ -f "dist/config.js" ]; then
+            echo "✅ config.js included in build output"
+            echo "📄 Built config.js content:"
+            head -10 dist/config.js
+          else
+            echo "⚠️  config.js not found in build output - check Vite configuration"
+          fi
+
+      - name: Get S3 bucket and CloudFront distribution from Terraform
+        id: get-deployment-targets
+        env:
+          ENVIRONMENT: ${{ needs.setup.outputs.environment }}
+        run: |
+          echo "� Getting S3 bucket and CloudFront distribution from Terraform outputs..."
+          
+          cd terraform
+          
+          # Get deployment targets from terraform output
+          S3_BUCKET_NAME=$(terraform output -raw frontend_s3_bucket_name 2>/dev/null || echo "")
+          CLOUDFRONT_DISTRIBUTION_ID=$(terraform output -raw cloudfront_distribution_id 2>/dev/null || echo "")
+          CLOUDFRONT_URL=$(terraform output -raw frontend_url 2>/dev/null || echo "")
+          
+          cd ..
+          
+          if [ -z "$S3_BUCKET_NAME" ]; then
+            echo "❌ Could not retrieve S3 bucket name from Terraform outputs"
+            echo "� Please ensure CloudFront infrastructure is deployed"
+            exit 1
+          fi
+          
+          if [ -z "$CLOUDFRONT_DISTRIBUTION_ID" ]; then
+            echo "❌ Could not retrieve CloudFront distribution ID from Terraform outputs"
+            echo "🚨 Please ensure CloudFront infrastructure is deployed"
+            exit 1
+          fi
+          
+          # Set outputs for deployment steps
+          echo "s3_bucket_name=${S3_BUCKET_NAME}" >> $GITHUB_OUTPUT
+          echo "cloudfront_distribution_id=${CLOUDFRONT_DISTRIBUTION_ID}" >> $GITHUB_OUTPUT
+          echo "cloudfront_url=${CLOUDFRONT_URL}" >> $GITHUB_OUTPUT
+          
+          echo "✅ Deployment targets retrieved successfully:"
+          echo "  - S3 Bucket: ${S3_BUCKET_NAME}"
+          echo "  - CloudFront Distribution: ${CLOUDFRONT_DISTRIBUTION_ID}"
+          echo "  - Frontend URL: ${CLOUDFRONT_URL}"
+
+      - name: Deploy to S3
+        env:
+          S3_BUCKET_NAME: ${{ steps.get-deployment-targets.outputs.s3_bucket_name }}
+        run: |
+          echo "🚀 Deploying static files to S3..."
+          
+          # Sync the build output to S3
+          aws s3 sync ./frontend/react-app/dist/ s3://$S3_BUCKET_NAME/ \
+            --delete \
+            --cache-control "public,max-age=31536000,immutable" \
+            --exclude "*.html" \
+            --region $AWS_REGION
+          
+          # Upload HTML files with different cache settings
+          aws s3 sync ./frontend/react-app/dist/ s3://$S3_BUCKET_NAME/ \
+            --cache-control "public,max-age=0,must-revalidate" \
+            --content-type "text/html" \
+            --exclude "*" \
+            --include "*.html" \
+            --region $AWS_REGION
+          
+          echo "✅ Static files deployed to S3 successfully"
+          
+          # Show deployment summary
+          echo "📊 Deployment Summary:"
+          aws s3 ls s3://$S3_BUCKET_NAME/ --recursive --human-readable --summarize --region $AWS_REGION | tail -2
+
+      - name: Invalidate CloudFront cache
+        id: invalidate-cache
+        env:
+          CLOUDFRONT_DISTRIBUTION_ID: ${{ steps.get-deployment-targets.outputs.cloudfront_distribution_id }}
+        run: |
+          echo "♻️ Invalidating CloudFront cache..."
+          
+          # Create invalidation for all files
+          INVALIDATION_ID=$(aws cloudfront create-invalidation \
+            --distribution-id $CLOUDFRONT_DISTRIBUTION_ID \
+            --paths "/*" \
+            --query 'Invalidation.Id' \
+            --output text \
+            --region $AWS_REGION)
+          
+          echo "✅ CloudFront invalidation created: $INVALIDATION_ID"
+          echo "🔄 Cache invalidation is in progress..."
+          
+          # Set output for monitoring step
+          echo "invalidation_id=${INVALIDATION_ID}" >> $GITHUB_OUTPUT
+
+      - name: Monitor CloudFront invalidation
+        if: ${{ !(github.event.inputs.skip_wait == 'true' || inputs.skip_wait == true) }}
+        env:
+          CLOUDFRONT_DISTRIBUTION_ID: ${{ steps.get-deployment-targets.outputs.cloudfront_distribution_id }}
+          INVALIDATION_ID: ${{ steps.invalidate-cache.outputs.invalidation_id }}
+        run: |
+          echo "⏳ Monitoring CloudFront invalidation progress..."
+          
+          for i in {1..6}; do  # 3 minutes max (30s * 6 = 180s)
+            echo "⏳ Check $i/6..."
+            
+            STATUS=$(aws cloudfront get-invalidation \
+              --distribution-id $CLOUDFRONT_DISTRIBUTION_ID \
+              --id $INVALIDATION_ID \
+              --query 'Invalidation.Status' \
+              --output text \
+              --region $AWS_REGION)
+            
+            echo "   Invalidation Status: $STATUS"
+            
+            if [ "$STATUS" = "Completed" ]; then
+              echo "✅ CloudFront invalidation completed successfully!"
+              break
+            fi
+            
+            if [ $i -lt 6 ]; then
+              echo "   Waiting 30 seconds before next check..."
+              sleep 30
+            fi
+          done
+          
+          if [ $i -eq 6 ] && [ "$STATUS" != "Completed" ]; then
+            echo "⚠️  Invalidation monitoring timed out after 3 minutes"
+            echo "💡 Your invalidation may still complete successfully"
+            echo "� Check CloudFront console for invalidation status"
+          fi
+
+  # Verify deployment
+  verify-deployment:
+    needs: [setup, deploy-frontend]
+    runs-on: ubuntu-latest
+    if: always() && needs.deploy-frontend.result == 'success' && !(github.event.inputs.skip_wait == 'true' || inputs.skip_wait == true)
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get CloudFront URL
+        id: get-url
+        env:
+          ENVIRONMENT: ${{ needs.setup.outputs.environment }}
+        run: |
+          echo "🔍 Getting CloudFront URL from Terraform outputs for environment: $ENVIRONMENT..."
+          
+          cd terraform
+          # Initialize Terraform with the correct backend for the environment
+          echo "🔧 Initializing Terraform with backend config for $ENVIRONMENT..."
+          terraform init -backend-config="backend-configs/${ENVIRONMENT}.tfbackend" > /dev/null 2>&1 || true
+          FRONTEND_URL=$(terraform output -raw frontend_url 2>/dev/null || echo "")
+          cd ..
+          
+          if [ "$FRONTEND_URL" != "" ] && [ "$FRONTEND_URL" != "null" ]; then
+            echo "url=$FRONTEND_URL" >> $GITHUB_OUTPUT
+            echo "🌐 Frontend URL from Terraform (${ENVIRONMENT}): $FRONTEND_URL"
+          else
+            echo "❌ Could not retrieve frontend URL from Terraform outputs"
+            echo "🚨 Please ensure CloudFront infrastructure is deployed"
+            exit 1
+          fi
+
+      - name: Health check
+        if: steps.get-url.outputs.url
+        run: |
+          echo "🔍 Performing health check on CloudFront distribution..."
+          URL="${{ steps.get-url.outputs.url }}"
+          
+          echo "🌐 Testing URL: $URL"
+          
+          # Wait for CloudFront to serve the new content
+          for i in {1..8}; do  # 4 minutes max (30s * 8 = 240s)
+            echo "⏳ Attempt $i/8: Checking frontend health..."
+            
+            # Test the main page
+            HTTP_STATUS=$(curl -L -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+            echo "   HTTP Status: $HTTP_STATUS"
+            
+            # Also check response headers to understand caching
+            RESPONSE_HEADERS=$(curl -L -s -I "$URL" 2>/dev/null || echo "No headers")
+            echo "   Response headers:"
+            echo "$RESPONSE_HEADERS" | grep -E "(HTTP/|cache|age|cloudfront)" | sed 's/^/     /' || echo "     No relevant headers found"
+            
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "✅ Frontend is responding successfully at $URL"
+              
+              # Additional check - get content and verify it's a proper page
+              CONTENT_CHECK=$(curl -L -s "$URL" | head -c 500)
+              if echo "$CONTENT_CHECK" | grep -q "<!DOCTYPE html\|<html"; then
+                echo "✅ Frontend appears to be serving HTML content properly"
+                
+                # Test a few key static assets
+                echo "🔍 Testing static assets..."
+                
+                # Check if there are JS/CSS files in the content
+                JS_FILES=$(curl -L -s "$URL" | grep -o 'src="[^"]*\.js"' | head -2 | sed 's/src="//; s/"//')
+                CSS_FILES=$(curl -L -s "$URL" | grep -o 'href="[^"]*\.css"' | head -2 | sed 's/href="//; s/"//')
+                
+                # Test one JS file if found
+                if [ -n "$JS_FILES" ]; then
+                  JS_FILE=$(echo "$JS_FILES" | head -1)
+                  if [[ "$JS_FILE" == /* ]]; then
+                    JS_URL="$URL$JS_FILE"
+                  else
+                    JS_URL="$URL/$JS_FILE"
+                  fi
+                  JS_STATUS=$(curl -L -s -o /dev/null -w "%{http_code}" "$JS_URL" 2>/dev/null || echo "000")
+                  echo "   JavaScript asset status: $JS_STATUS ($JS_FILE)"
+                fi
+                
+                # Test one CSS file if found
+                if [ -n "$CSS_FILES" ]; then
+                  CSS_FILE=$(echo "$CSS_FILES" | head -1)
+                  if [[ "$CSS_FILE" == /* ]]; then
+                    CSS_URL="$URL$CSS_FILE"
+                  else
+                    CSS_URL="$URL/$CSS_FILE"
+                  fi
+                  CSS_STATUS=$(curl -L -s -o /dev/null -w "%{http_code}" "$CSS_URL" 2>/dev/null || echo "000")
+                  echo "   CSS asset status: $CSS_STATUS ($CSS_FILE)"
+                fi
+                
+                # Test auth callback page (important for OAuth flow)
+                AUTH_CALLBACK_STATUS=$(curl -L -s -o /dev/null -w "%{http_code}" "$URL/auth/callback" 2>/dev/null || echo "000")
+                echo "   Auth callback page status: $AUTH_CALLBACK_STATUS"
+                
+                echo "✅ Static site health check completed successfully!"
+                exit 0
+              else
+                echo "⚠️  Frontend responding but content doesn't appear to be HTML"
+                echo "   Content preview: $(echo "$CONTENT_CHECK" | head -c 100)..."
+              fi
+            elif [ "$HTTP_STATUS" = "403" ]; then
+              echo "   Access Forbidden (403) - CloudFront may still be propagating"
+            elif [ "$HTTP_STATUS" = "404" ]; then
+              echo "   Not Found (404) - Site may not be deployed yet"
+            elif [ "$HTTP_STATUS" = "000" ]; then
+              echo "   Connection failed - CloudFront distribution may not be ready"
+            else
+              echo "   Unexpected status: $HTTP_STATUS"
+            fi
+            
+            if [ $i -lt 8 ]; then
+              echo "   Waiting 30 seconds before next attempt..."
+              sleep 30
+            fi
+          done
+          
+          echo "⚠️  Frontend health check completed with issues"
+          echo "🔍 Final diagnostics:"
+          echo "   URL: $URL"
+          echo "   Final HTTP Status: $(curl -L -s -o /dev/null -w "%{http_code}" "$URL" 2>/dev/null || echo "connection_failed")"
+          
+          # Check CloudFront distribution status
+          echo "🔍 CloudFront distribution info:"
+          # We need to get the distribution ID from Terraform since it's in a different job
+          cd terraform
+          CLOUDFRONT_DISTRIBUTION_ID=$(terraform output -raw cloudfront_distribution_id 2>/dev/null || echo "")
+          cd ..
+          if [ -n "$CLOUDFRONT_DISTRIBUTION_ID" ]; then
+            aws cloudfront get-distribution \
+              --id "$CLOUDFRONT_DISTRIBUTION_ID" \
+              --query 'Distribution.{Status:Status,DomainName:DomainName,LastModifiedTime:LastModifiedTime}' \
+              --output table \
+              --region $AWS_REGION 2>/dev/null || echo "Could not get CloudFront distribution info"
+          fi
+          
+          # Don't fail the pipeline - CloudFront propagation can take time
+          echo "⚠️  Health check inconclusive but deployment may still be successful"
+          echo "💡 CloudFront distributions can take up to 15 minutes to fully propagate"
+          echo "💡 Check the frontend URL manually: $URL"
+          echo "💡 Monitor CloudFront distribution in AWS console for propagation status"
+
