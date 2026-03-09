@@ -11,6 +11,13 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+.env.local
+.env.*.local
+
+# Generated at build (contains runtime config from Terraform)
+public/config.js
+public/logging.json
 
 # Editor directories and files
 .vscode/*

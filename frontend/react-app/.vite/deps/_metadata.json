@@ -1,0 +1,70 @@
+{
+  "hash": "e1984ba6",
+  "configHash": "9146447d",
+  "lockfileHash": "8b5ccf0c",
+  "browserHash": "83f318a4",
+  "optimized": {
+    "react/jsx-dev-runtime": {
+      "src": "../../node_modules/react/jsx-dev-runtime.js",
+      "file": "react_jsx-dev-runtime.js",
+      "fileHash": "2634e6c6",
+      "needsInterop": true
+    },
+    "react": {
+      "src": "../../node_modules/react/index.js",
+      "file": "react.js",
+      "fileHash": "e50a4697",
+      "needsInterop": true
+    },
+    "react-dom/client": {
+      "src": "../../node_modules/react-dom/client.js",
+      "file": "react-dom_client.js",
+      "fileHash": "3750cc38",
+      "needsInterop": true
+    },
+    "react-router-dom": {
+      "src": "../../node_modules/react-router-dom/dist/index.mjs",
+      "file": "react-router-dom.js",
+      "fileHash": "567a3c4f",
+      "needsInterop": false
+    },
+    "aws-amplify": {
+      "src": "../../node_modules/aws-amplify/dist/esm/index.mjs",
+      "file": "aws-amplify.js",
+      "fileHash": "4d38173f",
+      "needsInterop": false
+    },
+    "@aws-amplify/ui-react": {
+      "src": "../../node_modules/@aws-amplify/ui-react/dist/esm/index.mjs",
+      "file": "@aws-amplify_ui-react.js",
+      "fileHash": "a78f5449",
+      "needsInterop": false
+    },
+    "aws-amplify/auth": {
+      "src": "../../node_modules/aws-amplify/dist/esm/auth/index.mjs",
+      "file": "aws-amplify_auth.js",
+      "fileHash": "781b7cb6",
+      "needsInterop": false
+    }
+  },
+  "chunks": {
+    "chunk-AU2MKR2E": {
+      "file": "chunk-AU2MKR2E.js"
+    },
+    "chunk-VX2H6PUQ": {
+      "file": "chunk-VX2H6PUQ.js"
+    },
+    "chunk-NL4Q2VHL": {
+      "file": "chunk-NL4Q2VHL.js"
+    },
+    "chunk-4NMF5ZE5": {
+      "file": "chunk-4NMF5ZE5.js"
+    },
+    "chunk-SCD7Y2BU": {
+      "file": "chunk-SCD7Y2BU.js"
+    },
+    "chunk-G3PMV62Z": {
+      "file": "chunk-G3PMV62Z.js"
+    }
+  }
+}
