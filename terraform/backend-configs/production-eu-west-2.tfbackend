@@ -1,6 +1,6 @@
 # Replace ACCOUNT_ID: aws sts get-caller-identity --query Account --output text
 bucket         = "rdi-terraform-state-470900128247"
 key            = "application-infra/production/eu-west-2/terraform.tfstate"
-region         = "eu-west-2"
+region         = "eu-central-1"
 dynamodb_table = "rdi-terraform-locks"
 encrypt        = true
