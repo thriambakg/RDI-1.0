@@ -2,9 +2,9 @@
 # Builds React app and deploys to S3/CloudFront (in base infra)
 #
 # USAGE:
-# - Requires RDI-Base-Infra Terraform outputs (S3 bucket, CloudFront, build env)
-# - Manual: workflow_dispatch, or push to frontend/ on staging|prod
-# - Set BASE_INFRA_REPO (default: org/RDI-Base-Infra) if repo name differs
+# - Reads base infra Terraform outputs via terraform_remote_state (terraform/base-outputs)
+# - No REPO_ACCESS_TOKEN needed; uses RDI-1.0 terraform to read base infra state
+# - Manual: workflow_dispatch, or push to frontend/ on main|staging|prod
 
 
 name: Deploy Frontend Application
@@ -15,6 +15,7 @@ on:
     branches: [ main, staging, prod ]
     paths:
       - 'frontend/**'
+      - 'terraform/base-outputs/**'
       - '.github/workflows/deploy-frontend.yml'
   
   # Keep workflow_call for manual orchestration if needed
@@ -319,13 +320,6 @@ jobs:
       - name: Checkout frontend code
         uses: actions/checkout@v4
 
-      - name: Checkout base infrastructure
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/RDI-Base-Infra
-          path: base-infra
-          token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -347,16 +341,17 @@ jobs:
         env:
           ENVIRONMENT: ${{ needs.setup.outputs.environment }}
         run: |
-          echo "🔍 Getting build environment variables from base infra Terraform outputs..."
-          cd base-infra/terraform
+          echo "🔍 Getting build environment variables from base infra (via terraform_remote_state)..."
+          cd terraform/base-outputs
           
-          # Initialize Terraform with the appropriate backend configuration
-          echo "🔧 Initializing Terraform with backend config for $ENVIRONMENT..."
-          terraform init -backend-config="backend-configs/${ENVIRONMENT}.tfbackend"
+          echo "🔧 Initializing Terraform..."
+          terraform init
           
-          # Get build environment variables from terraform output
+          echo "🔧 Reading base infra state..."
+          terraform apply -var-file="backend-configs/${ENVIRONMENT}.tfvars" -auto-approve
+          
           echo "🔍 Retrieving build environment variables..."
-          BUILD_ENV=$(terraform output -json build_environment_variables 2>/dev/null || echo "{}")
+          BUILD_ENV=$(terraform output -raw build_environment_variables 2>/dev/null || echo "{}")
           
           echo "🔍 Raw BUILD_ENV received: $BUILD_ENV"
           
@@ -380,8 +375,6 @@ jobs:
           NEXT_PUBLIC_REDIRECT_SIGN_IN=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_REDIRECT_SIGN_IN // empty')
           NEXT_PUBLIC_REDIRECT_SIGN_OUT=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_REDIRECT_SIGN_OUT // empty')
           NEXT_PUBLIC_WEBSOCKET_URL=""
-          
-          cd ..
           
           # Validate required values
           if [ -z "$NEXT_PUBLIC_COGNITO_USER_POOL_ID" ]; then
@@ -418,6 +411,7 @@ jobs:
           echo "next_public_redirect_sign_in=${NEXT_PUBLIC_REDIRECT_SIGN_IN}" >> $GITHUB_OUTPUT
           echo "next_public_redirect_sign_out=${NEXT_PUBLIC_REDIRECT_SIGN_OUT}" >> $GITHUB_OUTPUT
           
+          cd $GITHUB_WORKSPACE
           echo "✅ Build environment variables retrieved successfully:"
           echo "  - Environment: ${ENVIRONMENT}"
           echo "  - User Pool ID: ${NEXT_PUBLIC_COGNITO_USER_POOL_ID}"
@@ -564,14 +558,11 @@ jobs:
         run: |
           echo "� Getting S3 bucket and CloudFront distribution from Terraform outputs..."
           
-          cd base-infra/terraform
-          
-          # Get deployment targets from terraform output
+          cd terraform/base-outputs
           S3_BUCKET_NAME=$(terraform output -raw frontend_s3_bucket_name 2>/dev/null || echo "")
           CLOUDFRONT_DISTRIBUTION_ID=$(terraform output -raw cloudfront_distribution_id 2>/dev/null || echo "")
           CLOUDFRONT_URL=$(terraform output -raw frontend_url 2>/dev/null || echo "")
-          
-          cd ..
+          cd $GITHUB_WORKSPACE
           
           if [ -z "$S3_BUCKET_NAME" ]; then
             echo "❌ Could not retrieve S3 bucket name from Terraform outputs"
@@ -688,17 +679,8 @@ jobs:
     if: always() && needs.deploy-frontend.result == 'success' && !(github.event.inputs.skip_wait == 'true' || inputs.skip_wait == true)
     
     steps:
-      - name: Checkout base infrastructure
+      - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/RDI-Base-Infra
-          path: base-infra
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.9.8"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -707,18 +689,22 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
       - name: Get CloudFront URL
         id: get-url
         env:
           ENVIRONMENT: ${{ needs.setup.outputs.environment }}
         run: |
-          echo "🔍 Getting CloudFront URL from base infra Terraform..."
-          cd base-infra/terraform
-          # Initialize Terraform with the correct backend for the environment
-          echo "🔧 Initializing Terraform with backend config for $ENVIRONMENT..."
-          terraform init -backend-config="backend-configs/${ENVIRONMENT}.tfbackend" > /dev/null 2>&1 || true
+          echo "🔍 Getting CloudFront URL from Terraform (base-outputs)..."
+          cd terraform/base-outputs
+          terraform init -input=false
+          terraform apply -var-file="backend-configs/${ENVIRONMENT}.tfvars" -auto-approve -input=false
           FRONTEND_URL=$(terraform output -raw frontend_url 2>/dev/null || echo "")
-          cd ..
+          cd $GITHUB_WORKSPACE
           
           if [ "$FRONTEND_URL" != "" ] && [ "$FRONTEND_URL" != "null" ]; then
             echo "url=$FRONTEND_URL" >> $GITHUB_OUTPUT
@@ -822,10 +808,9 @@ jobs:
           
           # Check CloudFront distribution status
           echo "🔍 CloudFront distribution info:"
-          # We need to get the distribution ID from Terraform
-          cd base-infra/terraform
+          cd terraform/base-outputs
           CLOUDFRONT_DISTRIBUTION_ID=$(terraform output -raw cloudfront_distribution_id 2>/dev/null || echo "")
-          cd ..
+          cd $GITHUB_WORKSPACE
           if [ -n "$CLOUDFRONT_DISTRIBUTION_ID" ]; then
             aws cloudfront get-distribution \
               --id "$CLOUDFRONT_DISTRIBUTION_ID" \
