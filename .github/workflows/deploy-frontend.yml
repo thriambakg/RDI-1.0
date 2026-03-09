@@ -6,6 +6,7 @@
 # - Manual: workflow_dispatch, or push to frontend/ on staging|prod
 # - Set BASE_INFRA_REPO (default: org/RDI-Base-Infra) if repo name differs
 
+
 name: Deploy Frontend Application
 
 on:
