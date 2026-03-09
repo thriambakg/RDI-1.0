@@ -349,7 +349,7 @@ jobs:
           terraform init
           
           echo "🔧 Reading base infra state..."
-          terraform apply -var-file="backend-configs/${ENVIRONMENT}.tfvars" -auto-approve
+          terraform apply -var="environment=${ENVIRONMENT}" -var="state_bucket=rdi-terraform-state-470900128247" -var="state_region=eu-central-1" -var="state_dynamodb_table=rdi-terraform-locks" -auto-approve -input=false
           
           echo "🔍 Retrieving build environment variables..."
           BUILD_ENV=$(terraform output -raw build_environment_variables 2>/dev/null || echo "{}")
@@ -703,7 +703,7 @@ jobs:
           echo "🔍 Getting CloudFront URL from Terraform (base-outputs)..."
           cd terraform/base-outputs
           terraform init -input=false
-          terraform apply -var-file="backend-configs/${ENVIRONMENT}.tfvars" -auto-approve -input=false
+          terraform apply -var="environment=${ENVIRONMENT}" -var="state_bucket=rdi-terraform-state-470900128247" -var="state_region=eu-central-1" -var="state_dynamodb_table=rdi-terraform-locks" -auto-approve -input=false
           FRONTEND_URL=$(terraform output -raw frontend_url 2>/dev/null || echo "")
           cd $GITHUB_WORKSPACE
           
