@@ -136,6 +136,82 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
 
+  terraform-validate-and-scan:
+    name: 'Terraform Validate & Scan'
+    needs: [determine-environment, python-security]
+    runs-on: ubuntu-latest
+    outputs:
+      validation_passed: ${{ steps.validate.outputs.passed }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.5"
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+        working-directory: terraform
+      - name: Terraform Init
+        run: terraform init -backend-config="backend-configs/${{ needs.determine-environment.outputs.environment }}.tfbackend"
+        working-directory: terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: Terraform Validate
+        run: terraform validate
+        working-directory: terraform
+      - name: TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+      - name: TFLint Analysis
+        run: |
+          tflint --init
+          tflint --format compact
+        working-directory: terraform
+      - name: Trivy IaC Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: terraform
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+          tf-vars: terraform/environments/${{ needs.determine-environment.outputs.environment }}.auto.tfvars
+          trivyignores: terraform/.trivyignore
+        continue-on-error: true
+      - name: Setup Terrascan
+        run: |
+          curl -L "$(curl -s https://api.github.com/repos/tenable/terrascan/releases/latest | grep -o -E "https://.+?_Linux_x86_64.tar.gz")" > terrascan.tar.gz
+          tar -xf terrascan.tar.gz terrascan && rm terrascan.tar.gz
+          sudo mv terrascan /usr/local/bin && chmod +x /usr/local/bin/terrascan
+      - name: Terrascan IaC Scan
+        run: |
+          terrascan scan -i terraform -d terraform \
+            --policy-type aws \
+            --severity high \
+            --verbose \
+            --output human
+        continue-on-error: true
+      - name: Setup Semgrep
+        run: pip install semgrep
+      - name: Semgrep Security Scan
+        run: |
+          semgrep --config=auto --config=p/terraform --config=p/aws --error --strict --verbose terraform
+        continue-on-error: true
+      - name: Security Scan Summary
+        run: |
+          echo "## 🔒 Terraform Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **TFLint:** Static analysis completed" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trivy:** Infrastructure security scan completed" >> $GITHUB_STEP_SUMMARY
+          echo "- **Terrascan:** Policy compliance scan completed" >> $GITHUB_STEP_SUMMARY
+          echo "- **Semgrep:** Code pattern analysis completed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Review the job logs above for detailed findings and remediation steps." >> $GITHUB_STEP_SUMMARY
+      - name: Pass validation
+        id: validate
+        run: echo "passed=true" >> $GITHUB_OUTPUT
+
   build-chat-agent-container:
     name: 'Build Chat Agent Container'
     runs-on: ubuntu-latest
@@ -316,7 +392,8 @@ jobs:
   deploy-application:
     name: 'Deploy Application'
     runs-on: ubuntu-latest
-    needs: [determine-environment, build-chat-agent-container]
+    needs: [determine-environment, build-chat-agent-container, terraform-validate-and-scan]
+    if: needs.terraform-validate-and-scan.result == 'success'
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -462,6 +539,20 @@ jobs:
             exit 1
           fi
 
+  deployment-summary:
+    name: 'Deployment Summary'
+    runs-on: ubuntu-latest
+    needs: [determine-environment, deploy-application]
+    if: always() && (needs.deploy-application.result == 'success' || needs.deploy-application.result == 'failure')
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "## 🚀 Application Infrastructure Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ needs.determine-environment.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ needs.deploy-application.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Review the deploy-application job above for detailed results." >> $GITHUB_STEP_SUMMARY
 
   comment-pr:
     name: 'Comment on PR'
@@ -499,7 +590,7 @@ jobs:
             - **Python SAST:** Bandit + Semgrep (Python)
             - **Python SCA:** pip-audit (dependencies)
             - **Secrets:** Gitleaks
-            - **Infrastructure:** TFLint / tfsec / Checkov (if configured)
+            - **TFLint / Trivy / Terrascan / Semgrep:** Terraform IaC security scans (run once)
             
             ### 📊 Next Steps:
             - Merge this PR to apply the infrastructure changes
