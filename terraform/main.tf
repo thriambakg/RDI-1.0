@@ -34,4 +34,24 @@ locals {
   region            = data.aws_region.current.name
 }
 
+output "account_id" {
+  description = "Current AWS account ID"
+  value       = data.aws_caller_identity.current.account_id
+}
+
+output "region" {
+  description = "Deployed region"
+  value       = local.region
+}
+
+output "is_primary_region" {
+  description = "Whether this is the primary region"
+  value       = local.is_primary_region
+}
+
+output "regions" {
+  description = "All deployment regions"
+  value       = var.regions
+}
+
 # Application resources - add modules and resources here
