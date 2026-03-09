@@ -32,6 +32,7 @@ data "aws_region" "current" {}
 locals {
   is_primary_region = var.primary_region != "" && var.region == var.primary_region
   region            = data.aws_region.current.name
+  name_prefix       = "rdi-${var.environment}"
 }
 
 output "account_id" {
@@ -53,5 +54,3 @@ output "regions" {
   description = "All deployment regions"
   value       = var.regions
 }
-
-# Application resources - add modules and resources here
