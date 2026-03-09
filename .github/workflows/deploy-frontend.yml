@@ -459,7 +459,7 @@ jobs:
           echo "  - Cognito Domain: $COGNITO_DOMAIN"
           
           # Generate the runtime configuration file
-          node scripts/generate-config.js \
+          node scripts/generate-config.cjs \
             --api-gateway-url "$API_GATEWAY_URL" \
             --websocket-url "$WEBSOCKET_URL" \
             --aws-region "$AWS_REGION" \
