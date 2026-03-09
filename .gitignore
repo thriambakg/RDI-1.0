@@ -566,10 +566,17 @@ yarn.lock
 *.sw?
 
 # ==============================================================================
-# PROJECT SPECIFIC
+# PROJECT SPECIFIC - RDI
 # ==============================================================================
 
-# Frontend build output (specific paths for this project)
+# Terraform plan output
+*tfplan*
+
+# Frontend generated config (from deploy script / local dev)
+frontend/react-app/public/config.js
+frontend/react-app/public/logging.json
+
+# Frontend build output
 frontend/out/
 frontend/.next/
 frontend/dist/
