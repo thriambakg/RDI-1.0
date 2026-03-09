@@ -32,7 +32,6 @@ data "aws_region" "current" {}
 locals {
   is_primary_region = var.primary_region != "" && var.region == var.primary_region
   region            = data.aws_region.current.name
-  name_prefix       = "rdi-${var.environment}"
 }
 
 output "account_id" {
