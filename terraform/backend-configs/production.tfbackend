@@ -1,0 +1,6 @@
+# Used by deploy-frontend - points to production primary region
+bucket         = "rdi-terraform-state-470900128247"
+key            = "application-infra/production/eu-central-1/terraform.tfstate"
+region         = "eu-central-1"
+dynamodb_table = "rdi-terraform-locks"
+encrypt        = true

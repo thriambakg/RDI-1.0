@@ -372,8 +372,8 @@ jobs:
           NEXT_PUBLIC_COGNITO_USER_POOL_CLIENT_ID=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_COGNITO_USER_POOL_CLIENT_ID // empty')
           NEXT_PUBLIC_COGNITO_DOMAIN=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_COGNITO_DOMAIN // empty')
           NEXT_PUBLIC_API_GATEWAY_URL=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_API_GATEWAY_URL // ""')
-          NEXT_PUBLIC_REDIRECT_SIGN_IN=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_REDIRECT_SIGN_IN // "https://investcosine.com/auth/callback"')
-          NEXT_PUBLIC_REDIRECT_SIGN_OUT=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_REDIRECT_SIGN_OUT // "https://investcosine.com"')
+          NEXT_PUBLIC_REDIRECT_SIGN_IN=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_REDIRECT_SIGN_IN // empty')
+          NEXT_PUBLIC_REDIRECT_SIGN_OUT=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_REDIRECT_SIGN_OUT // empty')
           
           # Get WebSocket URL from terraform output
           WEBSOCKET_API=$(terraform output -json websocket_api 2>/dev/null || echo "{}")
@@ -397,6 +397,12 @@ jobs:
           if [ -z "$NEXT_PUBLIC_COGNITO_DOMAIN" ]; then
             echo "❌ Missing Cognito Domain in terraform outputs"
             echo "🚨 Base infrastructure may not be deployed or accessible"
+            exit 1
+          fi
+
+          if [ -z "$NEXT_PUBLIC_REDIRECT_SIGN_IN" ] || [ -z "$NEXT_PUBLIC_REDIRECT_SIGN_OUT" ]; then
+            echo "❌ Missing redirect URLs in terraform outputs (needed for Cognito OAuth)"
+            echo "🚨 build_environment_variables should include NEXT_PUBLIC_REDIRECT_SIGN_IN and NEXT_PUBLIC_REDIRECT_SIGN_OUT"
             exit 1
           fi
           
@@ -506,7 +512,6 @@ jobs:
           VITE_API_GATEWAY_URL: ${{ steps.get-build-env.outputs.next_public_api_gateway_url }}
           VITE_REDIRECT_SIGN_IN: ${{ steps.get-build-env.outputs.next_public_redirect_sign_in }}
           VITE_REDIRECT_SIGN_OUT: ${{ steps.get-build-env.outputs.next_public_redirect_sign_out }}
-          VITE_STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
         run: |
           echo "🔨 Building React.js (Vite) application with environment variables..."
           echo "  - AWS Region: $VITE_AWS_REGION"
@@ -516,14 +521,6 @@ jobs:
           echo "  - Sign In Redirect: $VITE_REDIRECT_SIGN_IN"
           echo "  - Sign Out Redirect: $VITE_REDIRECT_SIGN_OUT"
           
-          # Check if Stripe key is set (without exposing the value)
-          if [ -z "$VITE_STRIPE_PUBLISHABLE_KEY" ]; then
-            echo "⚠️  WARNING: VITE_STRIPE_PUBLISHABLE_KEY is not set or is empty"
-            echo "   Please ensure STRIPE_PUBLISHABLE_KEY secret is set in GitHub repository secrets"
-          else
-            echo "  - Stripe Publishable Key: ${VITE_STRIPE_PUBLISHABLE_KEY:0:20}... (hidden for security)"
-          fi
-          
           # Verify runtime config is present
           echo "🔍 Checking runtime configuration..."
           if [ -f "public/config.js" ]; then
@@ -532,18 +529,6 @@ jobs:
             head -10 public/config.js
           else
             echo "❌ Runtime config.js not found - build will continue with fallback config"
-          fi
-          
-          # Verify Stripe key will be available to Vite
-          echo "🔍 Verifying environment variables for Vite build..."
-          if [ -z "$VITE_STRIPE_PUBLISHABLE_KEY" ]; then
-            echo "❌ ERROR: VITE_STRIPE_PUBLISHABLE_KEY is empty - build will fail Stripe initialization"
-            echo "   Current value length: ${#VITE_STRIPE_PUBLISHABLE_KEY}"
-            exit 1
-          else
-            KEY_PREFIX="${VITE_STRIPE_PUBLISHABLE_KEY:0:7}"
-            KEY_LENGTH=${#VITE_STRIPE_PUBLISHABLE_KEY}
-            echo "✅ Stripe key is set (length: $KEY_LENGTH, starts with: $KEY_PREFIX)"
           fi
           
           # Build the React.js application

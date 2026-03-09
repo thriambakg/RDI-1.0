@@ -20,3 +20,22 @@ variable "primary_region" {
   type        = string
   default     = ""
 }
+
+# Cognito - from base infra outputs (run base infra first, then add to tfvars)
+variable "cognito_user_pool_id" {
+  description = "Cognito User Pool ID from base infra"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_client_id" {
+  description = "Cognito App Client ID from base infra"
+  type        = string
+  default     = ""
+}
+
+variable "cognito_domain" {
+  description = "Cognito domain (e.g. rdi-staging-xxxxxx.auth.region.amazoncognito.com)"
+  type        = string
+  default     = ""
+}

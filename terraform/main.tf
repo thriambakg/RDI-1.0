@@ -32,6 +32,16 @@ data "aws_region" "current" {}
 locals {
   is_primary_region = var.primary_region != "" && var.region == var.primary_region
   region            = data.aws_region.current.name
+  name_prefix       = "rdi-${var.environment}"
+}
+
+module "frontend" {
+  source = "./modules/frontend"
+
+  name_prefix = local.name_prefix
+  environment = var.environment
+  region      = var.region
+  tags        = {}
 }
 
 
@@ -55,4 +65,34 @@ output "regions" {
   value       = var.regions
 }
 
-# Application resources - add modules and resources here
+output "frontend_s3_bucket_name" {
+  value = module.frontend.s3_bucket_name
+}
+
+output "cloudfront_distribution_id" {
+  value = module.frontend.cloudfront_distribution_id
+}
+
+output "frontend_url" {
+  value = module.frontend.frontend_url
+}
+
+output "build_environment_variables" {
+  description = "JSON for frontend build (Cognito from base infra)"
+  value = jsonencode({
+    NEXT_PUBLIC_AWS_REGION                  = local.region
+    NEXT_PUBLIC_COGNITO_USER_POOL_ID        = var.cognito_user_pool_id
+    NEXT_PUBLIC_COGNITO_USER_POOL_CLIENT_ID = var.cognito_client_id
+    NEXT_PUBLIC_COGNITO_DOMAIN              = var.cognito_domain
+    NEXT_PUBLIC_REDIRECT_SIGN_IN            = "${module.frontend.frontend_url}/auth/callback"
+    NEXT_PUBLIC_REDIRECT_SIGN_OUT           = module.frontend.frontend_url
+    NEXT_PUBLIC_API_GATEWAY_URL             = ""
+  })
+}
+
+output "websocket_api" {
+  description = "WebSocket placeholder (Wavelength in future)"
+  value = jsonencode({
+    stage_url = ""
+  })
+}
