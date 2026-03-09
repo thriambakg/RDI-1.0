@@ -71,11 +71,9 @@ env:
   AWS_REGION: us-east-1
 
 jobs:
-  # Wait for application infrastructure deployment if both pipelines are running
+  # Wait for application infrastructure deployment if both pipelines are running (push only)
   wait-for-infrastructure:
     runs-on: ubuntu-latest
-    # Only run this job if triggered by push (not manual dispatch or workflow_call)
-    if: github.event_name == 'push'
     outputs:
       should_wait: ${{ steps.check.outputs.should_wait }}
     steps:
@@ -87,6 +85,11 @@ jobs:
       - name: Check if infrastructure changes exist
         id: check
         run: |
+          if [ "${{ github.event_name }}" != "push" ]; then
+            echo "Manual/workflow_call trigger - skip waiting for infrastructure"
+            echo "should_wait=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
           echo "🔍 Checking for infrastructure changes in this push..."
           
           # Check if there are terraform changes in this push
@@ -144,8 +147,6 @@ jobs:
   setup:
     runs-on: ubuntu-latest
     needs: [wait-for-infrastructure]
-    # Always run setup when wait-for-infrastructure succeeds or is skipped (manual/workflow_call)
-    if: always() && (needs.wait-for-infrastructure.result == 'success' || needs.wait-for-infrastructure.result == 'skipped')
     environment:
       # Use manual input when workflow_dispatch/workflow_call; otherwise derive from branch.
       # Ensure staging/production environments exist in repo Settings → Environments (add "Required reviewers" for approval gate).
