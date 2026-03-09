@@ -1,0 +1,8 @@
+# Copy to staging-us-east-2.tfbackend and replace ACCOUNT_ID with your AWS account ID
+# Uses same S3 bucket as base infra; application state stored under application-infra/
+#
+bucket         = "rdi-terraform-state-ACCOUNT_ID"
+key            = "application-infra/staging/us-east-2/terraform.tfstate"
+region         = "us-east-2"
+dynamodb_table = "rdi-terraform-locks"
+encrypt        = true

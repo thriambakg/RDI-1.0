@@ -1,0 +1,7 @@
+# Copy to production-eu-central-1.tfbackend and replace ACCOUNT_ID
+#
+bucket         = "rdi-terraform-state-ACCOUNT_ID"
+key            = "application-infra/production/eu-central-1/terraform.tfstate"
+region         = "eu-central-1"
+dynamodb_table = "rdi-terraform-locks"
+encrypt        = true
