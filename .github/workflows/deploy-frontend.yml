@@ -10,12 +10,11 @@
 name: Deploy Frontend Application
 
 on:
-  # Trigger on pushes to frontend directory
+  # Trigger on pushes to frontend directory or this workflow file
   push:
-    branches: [ staging, prod ]
+    branches: [ main, staging, prod ]
     paths:
       - 'frontend/**'
-      - 'frontend/react-app/**'
       - '.github/workflows/deploy-frontend.yml'
   
   # Keep workflow_call for manual orchestration if needed
