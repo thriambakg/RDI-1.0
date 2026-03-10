@@ -28,3 +28,14 @@ const content = `window.__RDI_CONFIG__ = ${JSON.stringify(config, null, 2)};
 `;
 fs.writeFileSync(outPath, content);
 console.log('Generated', outPath);
+
+// Also inject config inline into index.html so it's always available (avoids 404 when
+// CloudFront returns index.html for missing files due to SPA custom error responses)
+const indexPath = path.join(path.dirname(outPath) === 'public' ? '.' : path.dirname(outPath), 'index.html');
+if (fs.existsSync(indexPath)) {
+  let html = fs.readFileSync(indexPath, 'utf8');
+  const inlineScript = `<script>window.__RDI_CONFIG__ = ${JSON.stringify(config)};</script>`;
+  html = html.replace(/<script src="\/config\.js"[^>]*><\/script>/i, inlineScript);
+  fs.writeFileSync(indexPath, html);
+  console.log('Injected config into', indexPath);
+}
