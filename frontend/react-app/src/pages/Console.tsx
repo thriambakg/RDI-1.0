@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button, Heading } from '@aws-amplify/ui-react'
 import { signOut } from 'aws-amplify/auth'
@@ -31,7 +31,16 @@ const MOCK_DRONES: Record<string, { id: string; name: string; status: string }[]
 export default function Console() {
   const [selectedRegion, setSelectedRegion] = useState<(typeof REGIONS)[number]>(REGIONS[0])
   const [folders] = useState<string[]>(['My Drones', 'Shared'])
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const navigate = useNavigate()
+
+  // Close sidebar when resizing to desktop
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)')
+    const handler = () => { if (mq.matches) setSidebarOpen(false) }
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
 
   const drones = MOCK_DRONES[selectedRegion.id] || []
 
@@ -43,14 +52,25 @@ export default function Console() {
   return (
     <div className="console">
       <header className="console-header">
+        <button
+          className="sidebar-toggle"
+          onClick={() => setSidebarOpen((o) => !o)}
+          aria-label="Toggle sidebar"
+        >
+          <span className="hamburger" />
+          <span className="hamburger" />
+          <span className="hamburger" />
+        </button>
         <Heading level={4}>RDI Console</Heading>
         <Button variation="link" onClick={handleSignOut}>
           Sign Out
         </Button>
       </header>
 
+      <div className={`sidebar-backdrop ${sidebarOpen ? 'open' : ''}`} onClick={() => setSidebarOpen(false)} aria-hidden="true" />
+
       <div className="console-body">
-        <aside className="sidebar">
+        <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
           <h3>Region</h3>
           <select
             value={selectedRegion.id}

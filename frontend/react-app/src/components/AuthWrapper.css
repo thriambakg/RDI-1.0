@@ -1,0 +1,5 @@
+/* Cosine-style auth: clean, minimal */
+.auth-password-strength-wrapper {
+  margin-top: 0.25rem;
+  padding: 0 0.25rem;
+}

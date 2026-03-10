@@ -8,6 +8,7 @@ const getArg = (name) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : '';
 };
 
+const enableGoogle = getArg('--enable-google') === 'true';
 const config = {
   AWS_REGION: getArg('--aws-region') || 'us-east-1',
   COGNITO_USER_POOL_ID: getArg('--cognito-user-pool-id'),
@@ -18,6 +19,7 @@ const config = {
   API_GATEWAY_URL: getArg('--api-gateway-url') || '',
   WEBSOCKET_URL: getArg('--websocket-url') || '',
   ENVIRONMENT: getArg('--environment') || 'staging',
+  ENABLE_GOOGLE_AUTH: enableGoogle,
 };
 
 const outPath = getArg('--output') || 'public/config.js';

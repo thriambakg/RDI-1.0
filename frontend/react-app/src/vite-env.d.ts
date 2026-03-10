@@ -10,6 +10,7 @@ interface RDIConfig {
   API_GATEWAY_URL: string;
   WEBSOCKET_URL: string;
   ENVIRONMENT: string;
+  ENABLE_GOOGLE_AUTH?: boolean;
 }
 
 interface Window {

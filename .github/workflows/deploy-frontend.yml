@@ -376,6 +376,7 @@ jobs:
           NEXT_PUBLIC_REDIRECT_SIGN_IN=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_REDIRECT_SIGN_IN // empty')
           NEXT_PUBLIC_REDIRECT_SIGN_OUT=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_REDIRECT_SIGN_OUT // empty')
           NEXT_PUBLIC_WEBSOCKET_URL=""
+          ENABLE_GOOGLE_AUTH=$(echo $BUILD_ENV | jq -r '.ENABLE_GOOGLE_AUTH // "false"')
           
           # Validate required values
           if [ -z "$NEXT_PUBLIC_COGNITO_USER_POOL_ID" ]; then
@@ -411,6 +412,7 @@ jobs:
           echo "next_public_websocket_url=${NEXT_PUBLIC_WEBSOCKET_URL}" >> $GITHUB_OUTPUT
           echo "next_public_redirect_sign_in=${NEXT_PUBLIC_REDIRECT_SIGN_IN}" >> $GITHUB_OUTPUT
           echo "next_public_redirect_sign_out=${NEXT_PUBLIC_REDIRECT_SIGN_OUT}" >> $GITHUB_OUTPUT
+          echo "enable_google_auth=${ENABLE_GOOGLE_AUTH}" >> $GITHUB_OUTPUT
           
           cd $GITHUB_WORKSPACE
           echo "✅ Build environment variables retrieved successfully:"
@@ -448,6 +450,7 @@ jobs:
           COGNITO_DOMAIN="${{ steps.get-build-env.outputs.next_public_cognito_domain }}"
           REDIRECT_SIGN_IN="${{ steps.get-build-env.outputs.next_public_redirect_sign_in }}"
           REDIRECT_SIGN_OUT="${{ steps.get-build-env.outputs.next_public_redirect_sign_out }}"
+          ENABLE_GOOGLE_AUTH="${{ steps.get-build-env.outputs.enable_google_auth }}"
           
           echo "🔍 Configuration values:"
           echo "  - API Gateway URL: $API_GATEWAY_URL"
@@ -469,6 +472,7 @@ jobs:
             --cognito-domain "$COGNITO_DOMAIN" \
             --redirect-sign-in "$REDIRECT_SIGN_IN" \
             --redirect-sign-out "$REDIRECT_SIGN_OUT" \
+            --enable-google "$ENABLE_GOOGLE_AUTH" \
             --output "public/config.js"
           
           echo "✅ Runtime configuration generated successfully"
@@ -509,6 +513,7 @@ jobs:
           VITE_API_GATEWAY_URL: ${{ steps.get-build-env.outputs.next_public_api_gateway_url }}
           VITE_REDIRECT_SIGN_IN: ${{ steps.get-build-env.outputs.next_public_redirect_sign_in }}
           VITE_REDIRECT_SIGN_OUT: ${{ steps.get-build-env.outputs.next_public_redirect_sign_out }}
+          VITE_ENABLE_GOOGLE_AUTH: ${{ steps.get-build-env.outputs.enable_google_auth }}
         run: |
           echo "🔨 Building React.js (Vite) application with environment variables..."
           echo "  - AWS Region: $VITE_AWS_REGION"

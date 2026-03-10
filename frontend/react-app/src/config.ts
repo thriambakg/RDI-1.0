@@ -9,6 +9,7 @@ export function getConfig(): RDIConfig {
     API_GATEWAY_URL: import.meta.env.VITE_API_GATEWAY_URL || '',
     WEBSOCKET_URL: import.meta.env.VITE_WEBSOCKET_URL || '',
     ENVIRONMENT: import.meta.env.VITE_ENVIRONMENT || 'staging',
+    ENABLE_GOOGLE_AUTH: import.meta.env.VITE_ENABLE_GOOGLE_AUTH === 'true' || false,
   };
   return cfg;
 }
