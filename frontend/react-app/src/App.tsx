@@ -1,14 +1,21 @@
+import { useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import '@aws-amplify/ui-react/styles.css'
-import Landing from './pages/Landing'
-import Console from './pages/Console'
-import { AuthWrapper } from './components/AuthWrapper'
+import Landing from './pages/landing'
+import Console from './pages/console'
+import { AuthModal } from './components/authmodals'
 import { getConfig } from './config'
 
 export default function App() {
   const config = getConfig()
   const hasAuth = Boolean(config.COGNITO_USER_POOL_ID && config.COGNITO_CLIENT_ID)
-  const socialProviders = config.ENABLE_GOOGLE_AUTH ? (['google'] as const) : []
+  const socialProviders: ('google' | 'amazon' | 'apple' | 'facebook')[] = hasAuth ? ['google'] : []
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      console.log('[RDI] App config', { hasAuth, socialProviders })
+    }
+  }, [hasAuth, socialProviders])
 
   return (
     <Routes>
@@ -17,9 +24,9 @@ export default function App() {
         path="/auth/callback"
         element={
           hasAuth ? (
-            <AuthWrapper socialProviders={socialProviders} variation="modal">
+            <AuthModal socialProviders={socialProviders} variation="modal">
               <Console />
-            </AuthWrapper>
+            </AuthModal>
           ) : (
             <Navigate to="/" replace />
           )
@@ -29,9 +36,9 @@ export default function App() {
         path="/console"
         element={
           hasAuth ? (
-            <AuthWrapper socialProviders={socialProviders} variation="modal">
+            <AuthModal socialProviders={socialProviders} variation="modal">
               <Console />
-            </AuthWrapper>
+            </AuthModal>
           ) : (
             <Navigate to="/" replace />
           )
