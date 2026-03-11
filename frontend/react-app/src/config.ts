@@ -12,8 +12,8 @@ function parseAvailableRegions(val: unknown): string[] {
 }
 
 export function getConfig(): RDIConfig {
-  const raw = (typeof window !== 'undefined' && window.__RDI_CONFIG__)
-  const cfg = raw || {
+  const raw = typeof window !== 'undefined' ? window.__RDI_CONFIG__ : undefined
+  const fallback: RDIConfig = {
     AWS_REGION: import.meta.env.VITE_AWS_REGION || 'us-east-1',
     COGNITO_USER_POOL_ID: import.meta.env.VITE_COGNITO_USER_POOL_ID || '',
     COGNITO_CLIENT_ID: import.meta.env.VITE_COGNITO_USER_POOL_CLIENT_ID || '',
@@ -26,9 +26,10 @@ export function getConfig(): RDIConfig {
     ENABLE_GOOGLE_AUTH: import.meta.env.VITE_ENABLE_GOOGLE_AUTH === 'true' || false,
     AVAILABLE_REGIONS: parseAvailableRegions(import.meta.env.VITE_AVAILABLE_REGIONS || '[]'),
   }
-  const base = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : cfg
+  if (!raw || typeof raw !== 'object') return fallback
+  const r = raw as RDIConfig
   return {
-    ...base,
-    AVAILABLE_REGIONS: parseAvailableRegions(base?.AVAILABLE_REGIONS ?? cfg.AVAILABLE_REGIONS ?? []),
-  } as RDIConfig
+    ...r,
+    AVAILABLE_REGIONS: parseAvailableRegions(r.AVAILABLE_REGIONS ?? fallback.AVAILABLE_REGIONS ?? []),
+  }
 }
