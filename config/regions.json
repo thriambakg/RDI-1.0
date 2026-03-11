@@ -1,0 +1,4 @@
+{
+  "staging": ["us-east-2"],
+  "production": ["eu-central-1", "eu-west-2", "eu-west-3"]
+}

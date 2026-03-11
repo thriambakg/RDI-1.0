@@ -15,6 +15,7 @@ on:
     branches: [ main, staging, prod ]
     paths:
       - 'frontend/**'
+      - 'config/**'
       - 'terraform/base-outputs/**'
       - '.github/workflows/deploy-frontend.yml'
   
@@ -377,7 +378,6 @@ jobs:
           NEXT_PUBLIC_REDIRECT_SIGN_OUT=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_REDIRECT_SIGN_OUT // empty')
           NEXT_PUBLIC_WEBSOCKET_URL=""
           ENABLE_GOOGLE_AUTH=$(echo $BUILD_ENV | jq -r '.ENABLE_GOOGLE_AUTH // "false"')
-          AVAILABLE_REGIONS=$(echo $BUILD_ENV | jq -r '.AVAILABLE_REGIONS // "[]"')
           
           # Validate required values
           if [ -z "$NEXT_PUBLIC_COGNITO_USER_POOL_ID" ]; then
@@ -404,6 +404,11 @@ jobs:
             exit 1
           fi
           
+          # Read available regions from RDI-1.0 config (based on branch/environment)
+          AVAILABLE_REGIONS=$(jq -r --arg env "$ENVIRONMENT" '.[$env] | join(",")' $GITHUB_WORKSPACE/config/regions.json 2>/dev/null || echo "us-east-2")
+          echo "available_regions=${AVAILABLE_REGIONS}" >> $GITHUB_OUTPUT
+          echo "  - Available regions: ${AVAILABLE_REGIONS}"
+          
           # Set outputs for Next.js build
           echo "next_public_aws_region=${NEXT_PUBLIC_AWS_REGION}" >> $GITHUB_OUTPUT
           echo "next_public_cognito_user_pool_id=${NEXT_PUBLIC_COGNITO_USER_POOL_ID}" >> $GITHUB_OUTPUT
@@ -414,7 +419,6 @@ jobs:
           echo "next_public_redirect_sign_in=${NEXT_PUBLIC_REDIRECT_SIGN_IN}" >> $GITHUB_OUTPUT
           echo "next_public_redirect_sign_out=${NEXT_PUBLIC_REDIRECT_SIGN_OUT}" >> $GITHUB_OUTPUT
           echo "enable_google_auth=${ENABLE_GOOGLE_AUTH}" >> $GITHUB_OUTPUT
-          echo "available_regions=${AVAILABLE_REGIONS}" >> $GITHUB_OUTPUT
           
           cd $GITHUB_WORKSPACE
           echo "✅ Build environment variables retrieved successfully:"
@@ -518,6 +522,7 @@ jobs:
           VITE_REDIRECT_SIGN_IN: ${{ steps.get-build-env.outputs.next_public_redirect_sign_in }}
           VITE_REDIRECT_SIGN_OUT: ${{ steps.get-build-env.outputs.next_public_redirect_sign_out }}
           VITE_ENABLE_GOOGLE_AUTH: ${{ steps.get-build-env.outputs.enable_google_auth }}
+          VITE_AVAILABLE_REGIONS: ${{ steps.get-build-env.outputs.available_regions }}
         run: |
           echo "🔨 Building React.js (Vite) application with environment variables..."
           echo "  - AWS Region: $VITE_AWS_REGION"

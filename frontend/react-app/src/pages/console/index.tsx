@@ -12,15 +12,6 @@ const ALL_REGIONS = [
   { id: 'us-east-2', city: 'Columbus', country: 'USA (Ohio)' },
 ] as const
 
-type Region = (typeof ALL_REGIONS)[number]
-
-function getAvailableRegions(): Region[] {
-  const config = getConfig()
-  const ids = config.AVAILABLE_REGIONS
-  if (!ids || ids.length === 0) return [...ALL_REGIONS]
-  return ALL_REGIONS.filter((r) => ids.includes(r.id))
-}
-
 const MOCK_DRONES: Record<string, { id: string; name: string; status: string }[]> = {
   'eu-central-1': [
     { id: 'drone-1', name: 'FPV-Racer-01', status: 'connected' },
@@ -32,18 +23,23 @@ const MOCK_DRONES: Record<string, { id: string; name: string; status: string }[]
 }
 
 export default function Console() {
-  const availableRegions = useMemo(() => getAvailableRegions(), [])
-  const [selectedRegion, setSelectedRegion] = useState<Region>(availableRegions[0] ?? ALL_REGIONS[0])
+  const config = getConfig()
+  const availableIds = config.AVAILABLE_REGIONS ?? ALL_REGIONS.map((r) => r.id)
+  const regions = useMemo(
+    () => ALL_REGIONS.filter((r) => availableIds.includes(r.id)),
+    [availableIds]
+  )
+  const defaultRegion = regions[0] ?? ALL_REGIONS[0]
+  const [selectedRegion, setSelectedRegion] = useState<(typeof ALL_REGIONS)[number]>(defaultRegion)
+
+  useEffect(() => {
+    if (!regions.some((r) => r.id === selectedRegion.id)) {
+      setSelectedRegion(defaultRegion)
+    }
+  }, [regions, defaultRegion, selectedRegion.id])
   const [folders] = useState<string[]>(['My Drones', 'Shared'])
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const navigate = useNavigate()
-
-  useEffect(() => {
-    const valid = availableRegions.some((r) => r.id === selectedRegion.id)
-    if (!valid && availableRegions.length > 0) {
-      setSelectedRegion(availableRegions[0])
-    }
-  }, [availableRegions, selectedRegion.id])
 
   useEffect(() => {
     const mq = window.matchMedia('(min-width: 768px)')
@@ -79,11 +75,11 @@ export default function Console() {
           <select
             value={selectedRegion.id}
             onChange={(e) => {
-              const r = availableRegions.find((x) => x.id === e.target.value)
+              const r = regions.find((x) => x.id === e.target.value)
               if (r) setSelectedRegion(r)
             }}
           >
-            {availableRegions.map((r) => (
+            {regions.map((r) => (
               <option key={r.id} value={r.id}>{r.city} ({r.country})</option>
             ))}
           </select>
