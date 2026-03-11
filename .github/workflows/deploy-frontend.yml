@@ -377,6 +377,7 @@ jobs:
           NEXT_PUBLIC_REDIRECT_SIGN_OUT=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_REDIRECT_SIGN_OUT // empty')
           NEXT_PUBLIC_WEBSOCKET_URL=""
           ENABLE_GOOGLE_AUTH=$(echo $BUILD_ENV | jq -r '.ENABLE_GOOGLE_AUTH // "false"')
+          AVAILABLE_REGIONS=$(echo $BUILD_ENV | jq -r '.AVAILABLE_REGIONS // "[]"')
           
           # Validate required values
           if [ -z "$NEXT_PUBLIC_COGNITO_USER_POOL_ID" ]; then
@@ -413,6 +414,7 @@ jobs:
           echo "next_public_redirect_sign_in=${NEXT_PUBLIC_REDIRECT_SIGN_IN}" >> $GITHUB_OUTPUT
           echo "next_public_redirect_sign_out=${NEXT_PUBLIC_REDIRECT_SIGN_OUT}" >> $GITHUB_OUTPUT
           echo "enable_google_auth=${ENABLE_GOOGLE_AUTH}" >> $GITHUB_OUTPUT
+          echo "available_regions=${AVAILABLE_REGIONS}" >> $GITHUB_OUTPUT
           
           cd $GITHUB_WORKSPACE
           echo "✅ Build environment variables retrieved successfully:"
@@ -451,6 +453,7 @@ jobs:
           REDIRECT_SIGN_IN="${{ steps.get-build-env.outputs.next_public_redirect_sign_in }}"
           REDIRECT_SIGN_OUT="${{ steps.get-build-env.outputs.next_public_redirect_sign_out }}"
           ENABLE_GOOGLE_AUTH="${{ steps.get-build-env.outputs.enable_google_auth }}"
+          AVAILABLE_REGIONS="${{ steps.get-build-env.outputs.available_regions }}"
           
           echo "🔍 Configuration values:"
           echo "  - API Gateway URL: $API_GATEWAY_URL"
@@ -473,6 +476,7 @@ jobs:
             --redirect-sign-in "$REDIRECT_SIGN_IN" \
             --redirect-sign-out "$REDIRECT_SIGN_OUT" \
             --enable-google "$ENABLE_GOOGLE_AUTH" \
+            --available-regions "$AVAILABLE_REGIONS" \
             --output "public/config.js"
           
           echo "✅ Runtime configuration generated successfully"

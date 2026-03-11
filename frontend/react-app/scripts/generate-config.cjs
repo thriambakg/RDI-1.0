@@ -9,6 +9,14 @@ const getArg = (name) => {
 };
 
 const enableGoogle = getArg('--enable-google') === 'true';
+let availableRegions = [];
+try {
+  const raw = getArg('--available-regions') || '[]';
+  availableRegions = JSON.parse(raw);
+  if (!Array.isArray(availableRegions)) availableRegions = [];
+} catch (_) {
+  availableRegions = [];
+}
 const config = {
   AWS_REGION: getArg('--aws-region') || 'us-east-1',
   COGNITO_USER_POOL_ID: getArg('--cognito-user-pool-id'),
@@ -20,6 +28,7 @@ const config = {
   WEBSOCKET_URL: getArg('--websocket-url') || '',
   ENVIRONMENT: getArg('--environment') || 'staging',
   ENABLE_GOOGLE_AUTH: enableGoogle,
+  AVAILABLE_REGIONS: availableRegions,
 };
 
 const outPath = getArg('--output') || 'public/config.js';

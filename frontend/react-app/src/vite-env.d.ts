@@ -11,6 +11,7 @@ interface RDIConfig {
   WEBSOCKET_URL: string;
   ENVIRONMENT: string;
   ENABLE_GOOGLE_AUTH?: boolean;
+  AVAILABLE_REGIONS?: string[];
 }
 
 interface Window {

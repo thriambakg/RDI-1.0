@@ -4,6 +4,7 @@ import '@aws-amplify/ui-react/styles.css'
 import Landing from './pages/landing'
 import Console from './pages/console'
 import { AuthModal } from './components/authmodals'
+import { ConsoleRoute } from './components/ConsoleRoute'
 import { getConfig } from './config'
 
 export default function App() {
@@ -36,9 +37,7 @@ export default function App() {
         path="/console"
         element={
           hasAuth ? (
-            <AuthModal socialProviders={socialProviders} variation="modal">
-              <Console />
-            </AuthModal>
+            <ConsoleRoute socialProviders={socialProviders} />
           ) : (
             <Navigate to="/" replace />
           )
