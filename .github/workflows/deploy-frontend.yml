@@ -367,13 +367,6 @@ jobs:
             exit 1
           fi
           
-          # Get available regions for frontend region selector
-          AVAILABLE_REGIONS=$(terraform output -json available_regions 2>/dev/null | jq -c '.' 2>/dev/null || echo '[]')
-          if [ "$AVAILABLE_REGIONS" = "null" ] || [ -z "$AVAILABLE_REGIONS" ]; then
-            AVAILABLE_REGIONS="[]"
-          fi
-          echo "available_regions=$AVAILABLE_REGIONS" >> $GITHUB_OUTPUT
-          
           # Parse the JSON output and set environment variables for Next.js build
           NEXT_PUBLIC_AWS_REGION=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_AWS_REGION // "us-east-1"')
           NEXT_PUBLIC_COGNITO_USER_POOL_ID=$(echo $BUILD_ENV | jq -r '.NEXT_PUBLIC_COGNITO_USER_POOL_ID // empty')
@@ -458,7 +451,6 @@ jobs:
           REDIRECT_SIGN_IN="${{ steps.get-build-env.outputs.next_public_redirect_sign_in }}"
           REDIRECT_SIGN_OUT="${{ steps.get-build-env.outputs.next_public_redirect_sign_out }}"
           ENABLE_GOOGLE_AUTH="${{ steps.get-build-env.outputs.enable_google_auth }}"
-          AVAILABLE_REGIONS="${{ steps.get-build-env.outputs.available_regions }}"
           
           echo "🔍 Configuration values:"
           echo "  - API Gateway URL: $API_GATEWAY_URL"
@@ -481,7 +473,6 @@ jobs:
             --redirect-sign-in "$REDIRECT_SIGN_IN" \
             --redirect-sign-out "$REDIRECT_SIGN_OUT" \
             --enable-google "$ENABLE_GOOGLE_AUTH" \
-            --available-regions "${AVAILABLE_REGIONS:-[]}" \
             --output "public/config.js"
           
           echo "✅ Runtime configuration generated successfully"

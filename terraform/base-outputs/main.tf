@@ -53,8 +53,3 @@ output "build_environment_variables" {
   description = "JSON object of build env vars for frontend"
   value       = data.terraform_remote_state.base.outputs.build_environment_variables
 }
-
-output "available_regions" {
-  description = "List of AWS regions available for this environment (for frontend region selector)"
-  value       = data.terraform_remote_state.base.outputs.all_regions
-}

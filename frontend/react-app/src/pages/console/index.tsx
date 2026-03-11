@@ -1,32 +1,24 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button, Heading } from '@aws-amplify/ui-react'
 import { signOut } from 'aws-amplify/auth'
-import { getConfig } from '../../config'
-import { getRegionsForConfig } from '../../regionMetadata'
+import { getEnvironmentRegions } from '../../config'
 import './Console.css'
 
+const { regions: REGIONS } = getEnvironmentRegions()
+
 const MOCK_DRONES: Record<string, { id: string; name: string; status: string }[]> = {
+  'us-east-2': [{ id: 'drone-1', name: 'Ohio-Test', status: 'idle' }],
   'eu-central-1': [
-    { id: 'drone-1', name: 'FPV-Racer-01', status: 'connected' },
-    { id: 'drone-2', name: 'Survey-Pro', status: 'idle' },
+    { id: 'drone-2', name: 'FPV-Racer-01', status: 'connected' },
+    { id: 'drone-3', name: 'Survey-Pro', status: 'idle' },
   ],
-  'eu-west-2': [{ id: 'drone-3', name: 'Cine-UK-01', status: 'connected' }],
-  'eu-west-3': [{ id: 'drone-4', name: 'Paris-Inspector', status: 'offline' }],
-  'us-east-2': [{ id: 'drone-5', name: 'Ohio-Test', status: 'idle' }],
+  'eu-west-2': [{ id: 'drone-4', name: 'Cine-UK-01', status: 'connected' }],
+  'eu-west-3': [{ id: 'drone-5', name: 'Paris-Inspector', status: 'offline' }],
 }
 
 export default function Console() {
-  const config = getConfig()
-  const regionIds = config.AVAILABLE_REGIONS ?? ['us-east-2']
-  const REGIONS = useMemo(() => getRegionsForConfig(regionIds), [JSON.stringify(regionIds)])
-  const defaultRegion = REGIONS[0] ?? { id: 'us-east-2', city: 'Columbus', country: 'USA (Ohio)' }
-  const [selectedRegion, setSelectedRegion] = useState(defaultRegion)
-
-  useEffect(() => {
-    const valid = REGIONS.some((r) => r.id === selectedRegion.id)
-    if (!valid && REGIONS.length > 0) setSelectedRegion(REGIONS[0])
-  }, [REGIONS, selectedRegion.id])
+  const [selectedRegion, setSelectedRegion] = useState(REGIONS[0] ?? { id: 'us-east-2', city: 'Columbus', country: 'USA (Ohio)' })
   const [folders] = useState<string[]>(['My Drones', 'Shared'])
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const navigate = useNavigate()
@@ -36,6 +28,13 @@ export default function Console() {
     const handler = () => { if (mq.matches) setSidebarOpen(false) }
     mq.addEventListener('change', handler)
     return () => mq.removeEventListener('change', handler)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const { environment, regions } = getEnvironmentRegions()
+      console.log('[RDI Console] Environment', environment, '| Regions', regions.map((r) => r.id).join(', '))
+    }
   }, [])
 
   const drones = MOCK_DRONES[selectedRegion.id] || []

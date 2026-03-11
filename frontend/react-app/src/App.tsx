@@ -5,7 +5,7 @@ import Landing from './pages/landing'
 import Console from './pages/console'
 import { AuthModal } from './components/authmodals'
 import { ConsoleRoute } from './components/ConsoleRoute'
-import { getConfig } from './config'
+import { getConfig, getEnvironmentRegions } from './config'
 
 export default function App() {
   const config = getConfig()
@@ -14,6 +14,12 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
+      const { environment, regions } = getEnvironmentRegions()
+      console.log('[RDI] Environment', {
+        environment,
+        regions: regions.map((r) => `${r.id} (${r.city})`),
+        regionCount: regions.length,
+      })
       console.log('[RDI] App config', { hasAuth, socialProviders })
     }
   }, [hasAuth, socialProviders])

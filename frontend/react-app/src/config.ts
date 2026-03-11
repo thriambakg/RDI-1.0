@@ -1,4 +1,4 @@
-const DEFAULT_AVAILABLE_REGIONS = ['us-east-2']
+import { getRegionsForEnvironment } from './config/environment-regions'
 
 export function getConfig(): RDIConfig {
   const cfg = (typeof window !== 'undefined' && window.__RDI_CONFIG__) || {
@@ -12,18 +12,13 @@ export function getConfig(): RDIConfig {
     WEBSOCKET_URL: import.meta.env.VITE_WEBSOCKET_URL || '',
     ENVIRONMENT: import.meta.env.VITE_ENVIRONMENT || 'staging',
     ENABLE_GOOGLE_AUTH: import.meta.env.VITE_ENABLE_GOOGLE_AUTH === 'true' || false,
-    AVAILABLE_REGIONS: (() => {
-      try {
-        const v = import.meta.env.VITE_AVAILABLE_REGIONS;
-        return v ? JSON.parse(v) : ['us-east-2'];
-      } catch {
-        return ['us-east-2'];
-      }
-    })(),
-  }
-  const merged: RDIConfig = { ...cfg }
-  if (!Array.isArray(merged.AVAILABLE_REGIONS) || merged.AVAILABLE_REGIONS.length === 0) {
-    merged.AVAILABLE_REGIONS = DEFAULT_AVAILABLE_REGIONS
-  }
-  return merged
+  };
+  return cfg;
+}
+
+export function getEnvironmentRegions(): { environment: string; regions: ReturnType<typeof getRegionsForEnvironment> } {
+  const config = getConfig()
+  const environment = config.ENVIRONMENT || 'staging'
+  const regions = getRegionsForEnvironment(environment)
+  return { environment, regions }
 }
