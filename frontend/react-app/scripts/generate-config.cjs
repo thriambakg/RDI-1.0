@@ -37,7 +37,10 @@ const indexPath = path.join(path.dirname(outPath) === 'public' ? '.' : path.dirn
 if (fs.existsSync(indexPath)) {
   let html = fs.readFileSync(indexPath, 'utf8');
   const inlineScript = `<script>window.__RDI_CONFIG__ = ${JSON.stringify(config)};</script>`;
+  // Replace config.js reference (template form)
   html = html.replace(/<script src="\/config\.js"[^>]*><\/script>/i, inlineScript);
+  // Replace existing inline __RDI_CONFIG__ (in case index.html already has inline config)
+  html = html.replace(/<script>window\.__RDI_CONFIG__\s*=\s*[^<]+<\/script>/i, inlineScript);
   fs.writeFileSync(indexPath, html);
   console.log('Injected config into', indexPath);
 }
