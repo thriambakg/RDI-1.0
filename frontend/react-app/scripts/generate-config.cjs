@@ -9,9 +9,12 @@ const getArg = (name) => {
 };
 
 const enableGoogle = getArg('--enable-google') === 'true';
-const availableRegionsRaw = getArg('--available-regions') || 'us-east-2';
-const availableRegions = availableRegionsRaw ? availableRegionsRaw.split(',').map((s) => s.trim()).filter(Boolean) : ['us-east-2'];
-
+let availableRegions = [];
+try {
+  const regionsArg = getArg('--available-regions');
+  if (regionsArg) availableRegions = JSON.parse(regionsArg);
+} catch (_) {}
+if (!Array.isArray(availableRegions)) availableRegions = [];
 const config = {
   AWS_REGION: getArg('--aws-region') || 'us-east-1',
   COGNITO_USER_POOL_ID: getArg('--cognito-user-pool-id'),

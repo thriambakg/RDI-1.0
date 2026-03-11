@@ -14,7 +14,6 @@ on:
       - 'terraform/**'
       - 'backend_app/**'
       - 'scripts/**'
-      - '.github/workflows/deploy-application.yml'
   pull_request:
     branches:
       - main
@@ -25,7 +24,6 @@ on:
       - 'terraform/**'
       - 'backend_app/**'
       - 'scripts/**'
-      - '.github/workflows/deploy-application.yml'
   workflow_dispatch:
     inputs:
       environment:
@@ -55,8 +53,6 @@ jobs:
       environment: ${{ steps.env.outputs.environment }}
       regions: ${{ steps.env.outputs.regions }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
       - name: Determine Environment
         id: env
         run: |
@@ -71,8 +67,11 @@ jobs:
             ENV="staging"
           fi
           echo "environment=${ENV}" >> $GITHUB_OUTPUT
-          REGIONS_JSON=$(jq -r --arg env "$ENV" '.[$env] | @json' config/regions.json 2>/dev/null || echo '["us-east-2"]')
-          echo "regions=${REGIONS_JSON}" >> $GITHUB_OUTPUT
+          if [ "${ENV}" == "staging" ]; then
+            echo 'regions=["us-east-2"]' >> $GITHUB_OUTPUT
+          else
+            echo 'regions=["eu-central-1","eu-west-2","eu-west-3"]' >> $GITHUB_OUTPUT
+          fi
 
   python-security:
     name: 'Python Security (SAST / SCA / Secrets)'

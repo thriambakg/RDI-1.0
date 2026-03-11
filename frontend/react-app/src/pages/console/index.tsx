@@ -3,14 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { Button, Heading } from '@aws-amplify/ui-react'
 import { signOut } from 'aws-amplify/auth'
 import { getConfig } from '../../config'
+import { getRegionsForConfig } from '../../regionMetadata'
 import './Console.css'
-
-const ALL_REGIONS = [
-  { id: 'eu-central-1', city: 'Frankfurt', country: 'Germany' },
-  { id: 'eu-west-2', city: 'London', country: 'UK' },
-  { id: 'eu-west-3', city: 'Paris', country: 'France' },
-  { id: 'us-east-2', city: 'Columbus', country: 'USA (Ohio)' },
-] as const
 
 const MOCK_DRONES: Record<string, { id: string; name: string; status: string }[]> = {
   'eu-central-1': [
@@ -24,19 +18,15 @@ const MOCK_DRONES: Record<string, { id: string; name: string; status: string }[]
 
 export default function Console() {
   const config = getConfig()
-  const availableIds = config.AVAILABLE_REGIONS ?? ALL_REGIONS.map((r) => r.id)
-  const regions = useMemo(
-    () => ALL_REGIONS.filter((r) => availableIds.includes(r.id)),
-    [availableIds]
-  )
-  const defaultRegion = regions[0] ?? ALL_REGIONS[0]
-  const [selectedRegion, setSelectedRegion] = useState<(typeof ALL_REGIONS)[number]>(defaultRegion)
+  const regionIds = config.AVAILABLE_REGIONS ?? ['us-east-2']
+  const REGIONS = useMemo(() => getRegionsForConfig(regionIds), [JSON.stringify(regionIds)])
+  const defaultRegion = REGIONS[0] ?? { id: 'us-east-2', city: 'Columbus', country: 'USA (Ohio)' }
+  const [selectedRegion, setSelectedRegion] = useState(defaultRegion)
 
   useEffect(() => {
-    if (!regions.some((r) => r.id === selectedRegion.id)) {
-      setSelectedRegion(defaultRegion)
-    }
-  }, [regions, defaultRegion, selectedRegion.id])
+    const valid = REGIONS.some((r) => r.id === selectedRegion.id)
+    if (!valid && REGIONS.length > 0) setSelectedRegion(REGIONS[0])
+  }, [REGIONS, selectedRegion.id])
   const [folders] = useState<string[]>(['My Drones', 'Shared'])
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const navigate = useNavigate()
@@ -75,11 +65,11 @@ export default function Console() {
           <select
             value={selectedRegion.id}
             onChange={(e) => {
-              const r = regions.find((x) => x.id === e.target.value)
+              const r = REGIONS.find((x) => x.id === e.target.value)
               if (r) setSelectedRegion(r)
             }}
           >
-            {regions.map((r) => (
+            {REGIONS.map((r) => (
               <option key={r.id} value={r.id}>{r.city} ({r.country})</option>
             ))}
           </select>
