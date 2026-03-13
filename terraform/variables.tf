@@ -32,3 +32,4 @@ variable "wavelength_zone_id" {
   type        = string
   default     = ""
 }
+
