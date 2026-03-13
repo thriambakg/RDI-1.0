@@ -14,6 +14,7 @@ on:
       - 'terraform/**'
       - 'backend_app/**'
       - 'scripts/**'
+      - '.github/workflows/**'
   pull_request:
     branches:
       - main
@@ -24,6 +25,7 @@ on:
       - 'terraform/**'
       - 'backend_app/**'
       - 'scripts/**'
+      - '.github/workflows/**'
   workflow_dispatch:
     inputs:
       environment:
@@ -311,7 +313,7 @@ jobs:
   deploy-application:
     name: Deploy ${{ matrix.region }}
     needs: [determine-environment, terraform-validate-and-scan, check-lambda-layer, build-lambda-layers]
-    if: needs.terraform-validate-and-scan.result == 'success' && (needs.build-lambda-layers.result == 'success' || needs.build-lambda-layers.result == 'skipped')
+    if: always() && needs.terraform-validate-and-scan.result == 'success' && (needs.build-lambda-layers.result == 'success' || needs.build-lambda-layers.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
