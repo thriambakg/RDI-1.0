@@ -74,6 +74,7 @@ module "kms" {
 
   project_name = var.project_name
   environment  = var.environment
+  region       = local.region
 }
 
 # S3 bucket for Lambda layer artifacts (per-region; same-region upload required for Lambda layers)

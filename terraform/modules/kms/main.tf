@@ -273,9 +273,9 @@ resource "aws_kms_alias" "cloudwatch" {
   target_key_id = aws_kms_key.cloudwatch.key_id
 }
 
-# IAM policy for KMS access
+# IAM policy for KMS access (account-global - region suffix avoids multi-region conflicts)
 resource "aws_iam_policy" "kms_access_policy" {
-  name        = "${var.project_name}-kms-access-policy-${var.environment}"
+  name        = var.region != "" ? "${var.project_name}-kms-access-policy-${var.environment}-${var.region}" : "${var.project_name}-kms-access-policy-${var.environment}"
   description = "IAM policy for accessing KMS keys"
   path        = "/"
 
@@ -301,7 +301,7 @@ resource "aws_iam_policy" "kms_access_policy" {
   })
 
   tags = merge(var.tags, {
-    Name    = "${var.project_name}-kms-access-policy-${var.environment}"
+    Name    = var.region != "" ? "${var.project_name}-kms-access-policy-${var.environment}-${var.region}" : "${var.project_name}-kms-access-policy-${var.environment}"
     Type    = "IAMPolicy"
     Purpose = "KMSAccess"
   })

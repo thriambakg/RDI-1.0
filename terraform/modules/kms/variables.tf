@@ -11,6 +11,12 @@ variable "environment" {
   type        = string
 }
 
+variable "region" {
+  description = "AWS region - used for IAM policy name (account-global, must be unique per region)"
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   description = "Common tags to apply to all resources"
   type        = map(string)
