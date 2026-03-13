@@ -1,0 +1,26 @@
+# Core Dependencies Layer - AWS, HTTP, tables, and utilities for RDI
+# Use for: DynamoDB, S3 (flight logs), API calls, retries
+
+# HTTP and environment
+requests>=2.31.0,<3.0.0
+python-dotenv>=1.0.0,<2.0.0
+
+# AWS SDK (boto3 - S3, DynamoDB, etc.)
+boto3>=1.34.0,<2.0.0
+botocore>=1.34.0,<2.0.0
+
+# Supporting libs (boto3 deps, HTTP)
+certifi>=2017.4.17
+charset-normalizer>=2
+idna>=2.5
+urllib3>=1.21.1,<3.0.0
+jmespath>=0.7.1
+s3transfer>=0.9.0
+python-dateutil>=2.8.2
+six>=1.9
+
+# Async HTTP (useful for WebSocket/MAVLink bridges)
+aiohttp>=3.8.0
+
+# Retries for uploads and API calls
+tenacity>=9.1.2

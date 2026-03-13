@@ -20,3 +20,9 @@ variable "primary_region" {
   type        = string
   default     = ""
 }
+
+variable "project_name" {
+  description = "Project name for resource naming"
+  type        = string
+  default     = "rdi"
+}

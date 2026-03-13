@@ -220,10 +220,98 @@ jobs:
         id: validate
         run: echo "passed=true" >> $GITHUB_OUTPUT
 
+  check-lambda-layer:
+    name: 'Check Lambda Layer'
+    needs: [determine-environment, terraform-validate-and-scan]
+    runs-on: ubuntu-latest
+    outputs:
+      has_lambda_layer: ${{ steps.check.outputs.has_lambda_layer }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for lambda layer
+        id: check
+        run: |
+          if [ -d "terraform/modules/lambda-layer" ] && [ -n "$(find terraform/modules/lambda-layer/layer-definitions -name '*-dependencies.txt' -type f 2>/dev/null)" ]; then
+            echo "has_lambda_layer=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_lambda_layer=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-lambda-layers:
+    name: 'Build Lambda Layers'
+    needs: [determine-environment, check-lambda-layer]
+    if: needs.check-lambda-layer.outputs.has_lambda_layer == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      layers-built: ${{ steps.build.outputs.layers-built }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Build Lambda Layers
+        id: build
+        run: |
+          cd terraform/modules/lambda-layer
+
+          echo "🔧 Building Lambda Layers for environment: ${{ needs.determine-environment.outputs.environment }}"
+
+          chmod +x build-layer.sh
+
+          # Discover layers from layer-definitions/*-dependencies.txt
+          LAYERS_TO_BUILD=()
+          for req_file in layer-definitions/*-dependencies.txt; do
+            if [ -f "$req_file" ]; then
+              layer_name=$(basename "$req_file" -dependencies.txt)
+              LAYERS_TO_BUILD+=("$layer_name")
+              echo "📦 Found layer: $layer_name"
+            fi
+          done
+
+          if [ ${#LAYERS_TO_BUILD[@]} -eq 0 ]; then
+            echo "❌ No layer definitions found in layer-definitions/"
+            exit 1
+          fi
+
+          echo "🎯 Building layers: ${LAYERS_TO_BUILD[*]}"
+
+          for layer in "${LAYERS_TO_BUILD[@]}"; do
+            echo "🔨 Building layer: $layer"
+            ./build-layer.sh "$layer"
+          done
+
+          echo "🔍 Verifying built layers..."
+          layer_count=0
+          for layer_file in layer-*.zip; do
+            if [ -f "$layer_file" ]; then
+              size=$(du -h "$layer_file" | cut -f1)
+              echo "✅ $layer_file found (${size})"
+              layer_count=$((layer_count + 1))
+            fi
+          done
+
+          if [ $layer_count -eq 0 ]; then
+            echo "❌ No layer files produced"
+            exit 1
+          fi
+
+          echo "layers-built=true" >> $GITHUB_OUTPUT
+
+      - name: Upload Lambda Layer Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-layers-${{ needs.determine-environment.outputs.environment }}
+          path: terraform/modules/lambda-layer/layer-*.zip
+          retention-days: 7
+
   deploy-application:
     name: Deploy ${{ matrix.region }}
-    needs: [determine-environment, terraform-validate-and-scan]
-    if: needs.terraform-validate-and-scan.result == 'success'
+    needs: [determine-environment, terraform-validate-and-scan, check-lambda-layer, build-lambda-layers]
+    if: needs.terraform-validate-and-scan.result == 'success' && (needs.build-lambda-layers.result == 'success' || needs.build-lambda-layers.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
@@ -237,7 +325,7 @@ jobs:
       destroy: ${{ github.event.inputs.destroy == 'true' }}
       force_apply: ${{ github.event.inputs.force_apply == 'true' }}
       base_infra_dependency: true
-      has_lambda_layer: false
+      has_lambda_layer: ${{ needs.check-lambda-layer.outputs.has_lambda_layer }}
     secrets:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
