@@ -6,7 +6,7 @@ variable "environment" {
 variable "region" {
   description = "AWS region for this deployment (each region gets its own state and resources)"
   type        = string
-  default     = "us-east-2"
+  default     = "us-east-1"
 }
 
 variable "regions" {

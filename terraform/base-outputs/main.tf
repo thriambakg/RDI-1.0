@@ -19,7 +19,7 @@ provider "aws" {
 }
 
 locals {
-  base_region = var.environment == "staging" ? "us-east-2" : "eu-central-1"
+  base_region = var.environment == "staging" ? "us-east-1" : "eu-central-1"
   state_key   = "base-infra/${var.environment}/${local.base_region}/terraform.tfstate"
 }
 
