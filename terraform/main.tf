@@ -112,28 +112,33 @@ module "core_layer" {
   depends_on = [module.layer_artifacts_bucket]
 }
 
-# Drone controls layer (MAVSDK for PX4/MAVLink)
-module "drone_controls_layer" {
-  source = "./modules/lambda-layer"
-
-  project_name        = var.project_name
-  environment         = var.environment
-  layer_name_suffix   = "drone-controls"
-  layer_description   = "MAVSDK for PX4/MAVLink drone control"
-  requirements_file   = "drone-controls-dependencies.txt"
-  compatible_runtimes = ["python3.11", "python3.12"]
-  s3_bucket_name      = module.layer_artifacts_bucket.bucket_id
-  python_command      = "python3.11"
-
-  depends_on = [module.layer_artifacts_bucket]
-}
-
 output "core_layer_arn" {
   description = "ARN of the core Lambda layer"
   value       = module.core_layer.layer_arn
 }
 
-output "drone_controls_layer_arn" {
-  description = "ARN of the drone-controls Lambda layer"
-  value       = module.drone_controls_layer.layer_arn
+# Wavelength EC2 - PX4 SITL at carrier edge (optional, single zone for MVP)
+module "wavelength_ec2" {
+  count  = var.wavelength_zone_id != "" ? 1 : 0
+  source = "./modules/wavelength-ec2"
+
+  project_name          = var.project_name
+  environment           = var.environment
+  wavelength_zone_id    = var.wavelength_zone_id
+  kms_key_arn           = module.kms.main_key_arn
+  key_name              = "" # Use SSM Session Manager; or set to existing key name for SSH
+  allowed_ssh_cidrs     = ["0.0.0.0/0"]
+  allowed_mavlink_cidrs = ["0.0.0.0/0"]
+  allowed_api_cidrs     = ["0.0.0.0/0"]
 }
+
+output "wavelength_instance_id" {
+  description = "Wavelength EC2 instance ID (when deployed)"
+  value       = length(module.wavelength_ec2) > 0 ? module.wavelength_ec2[0].instance_id : null
+}
+
+output "wavelength_carrier_ip" {
+  description = "Wavelength carrier IP for 5G connectivity"
+  value       = length(module.wavelength_ec2) > 0 ? module.wavelength_ec2[0].carrier_ip : null
+}
+

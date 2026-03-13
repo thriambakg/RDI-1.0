@@ -26,3 +26,9 @@ variable "project_name" {
   type        = string
   default     = "rdi"
 }
+
+variable "wavelength_zone_id" {
+  description = "Wavelength Zone ID for EC2 (e.g. use1-wl1-atl-wlz1). Empty = skip Wavelength deployment"
+  type        = string
+  default     = ""
+}

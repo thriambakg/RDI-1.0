@@ -1,4 +1,0 @@
-# Drone Controls Layer - MAVLink/MAVSDK for PX4 and drone control
-# Use with PX4 SITL, QGroundControl, and cloud-based drone control
-
-mavsdk>=2.0.0,<3.0.0
