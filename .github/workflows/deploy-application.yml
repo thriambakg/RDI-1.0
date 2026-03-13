@@ -70,9 +70,9 @@ jobs:
           fi
           echo "environment=${ENV}" >> $GITHUB_OUTPUT
           if [ "${ENV}" == "staging" ]; then
-            echo 'regions=["us-east-2"]' >> $GITHUB_OUTPUT
+            echo 'regions=["us-east-1"]' >> $GITHUB_OUTPUT
           else
-            echo 'regions=["eu-central-1","eu-west-2","eu-west-3"]' >> $GITHUB_OUTPUT
+            echo 'regions=["eu-central-1","eu-west-2"]' >> $GITHUB_OUTPUT
           fi
 
   python-security:
@@ -327,7 +327,7 @@ jobs:
       destroy: ${{ github.event.inputs.destroy == 'true' }}
       force_apply: ${{ github.event.inputs.force_apply == 'true' }}
       base_infra_dependency: true
-      has_lambda_layer: ${{ needs.check-lambda-layer.outputs.has_lambda_layer }}
+      has_lambda_layer: ${{ needs.check-lambda-layer.outputs.has_lambda_layer == 'true' }}
     secrets:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

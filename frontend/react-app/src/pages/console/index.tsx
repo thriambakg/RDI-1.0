@@ -8,17 +8,16 @@ import './Console.css'
 const { regions: REGIONS } = getEnvironmentRegions()
 
 const MOCK_DRONES: Record<string, { id: string; name: string; status: string }[]> = {
-  'us-east-2': [{ id: 'drone-1', name: 'Ohio-Test', status: 'idle' }],
+  'us-east-1': [{ id: 'drone-1', name: 'Virginia-Test', status: 'idle' }],
   'eu-central-1': [
     { id: 'drone-2', name: 'FPV-Racer-01', status: 'connected' },
     { id: 'drone-3', name: 'Survey-Pro', status: 'idle' },
   ],
   'eu-west-2': [{ id: 'drone-4', name: 'Cine-UK-01', status: 'connected' }],
-  'eu-west-3': [{ id: 'drone-5', name: 'Paris-Inspector', status: 'offline' }],
 }
 
 export default function Console() {
-  const [selectedRegion, setSelectedRegion] = useState(REGIONS[0] ?? { id: 'us-east-2', city: 'Columbus', country: 'USA (Ohio)' })
+  const [selectedRegion, setSelectedRegion] = useState(REGIONS[0] ?? { id: 'us-east-1', city: 'N. Virginia', country: 'USA' })
   const [folders] = useState<string[]>(['My Drones', 'Shared'])
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const navigate = useNavigate()

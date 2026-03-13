@@ -6,18 +6,17 @@ export interface RegionConfig {
 }
 
 /**
- * Regions per environment — matches terraform/environments/{staging|production}/
- * staging: us-east-2 only
- * production: EU regions only (eu-central-1, eu-west-2, eu-west-3)
+ * Regions per environment — Wavelength zones only
+ * staging: us-east-1 (N. Virginia)
+ * production: eu-central-1 (Frankfurt), eu-west-2 (London)
  */
 export const ENVIRONMENT_REGIONS: Record<string, RegionConfig[]> = {
   staging: [
-    { id: 'us-east-2', city: 'Columbus', country: 'USA (Ohio)' },
+    { id: 'us-east-1', city: 'N. Virginia', country: 'USA' },
   ],
   production: [
     { id: 'eu-central-1', city: 'Frankfurt', country: 'Germany' },
     { id: 'eu-west-2', city: 'London', country: 'UK' },
-    { id: 'eu-west-3', city: 'Paris', country: 'France' },
   ],
 }
 
