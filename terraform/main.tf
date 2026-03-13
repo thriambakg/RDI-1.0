@@ -26,6 +26,20 @@ provider "aws" {
   }
 }
 
+# Required by s3-bucket module for optional cross-region replication (not used when replication disabled)
+provider "aws" {
+  alias  = "replica"
+  region = var.region
+
+  default_tags {
+    tags = {
+      Project     = "rdi-application"
+      Environment = var.environment
+      ManagedBy   = "terraform"
+    }
+  }
+}
+
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
@@ -65,6 +79,10 @@ module "kms" {
 # S3 bucket for Lambda layer artifacts (per-region; same-region upload required for Lambda layers)
 module "layer_artifacts_bucket" {
   source = "./modules/s3-bucket"
+
+  providers = {
+    aws.replica = aws.replica
+  }
 
   bucket_name   = "${var.project_name}-lambda-layers-${var.environment}-${local.region}"
   environment   = var.environment
