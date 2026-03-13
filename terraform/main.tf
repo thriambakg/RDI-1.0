@@ -68,9 +68,12 @@ output "regions" {
   value       = var.regions
 }
 
-# Use Base Infra's main KMS key for layer artifacts (Base Infra creates it; we reference by alias)
-data "aws_kms_alias" "base_infra_main" {
-  name = "alias/${var.project_name}-main-${var.environment}"
+# KMS keys - owned by RDI-1.0 (per-region; Base Infra uses default encryption, no customer keys)
+module "kms" {
+  source = "./modules/kms"
+
+  project_name = var.project_name
+  environment  = var.environment
 }
 
 # S3 bucket for Lambda layer artifacts (per-region; same-region upload required for Lambda layers)
@@ -84,7 +87,7 @@ module "layer_artifacts_bucket" {
   bucket_name   = "${var.project_name}-lambda-layers-${var.environment}-${local.region}"
   environment   = var.environment
   purpose       = "lambda-layer-artifacts"
-  kms_key_arn   = data.aws_kms_alias.base_infra_main.target_key_arn
+  kms_key_arn   = module.kms.main_key_arn
   force_destroy = false
 
   tags = {
