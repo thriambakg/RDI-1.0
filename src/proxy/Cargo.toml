@@ -1,0 +1,12 @@
+[package]
+name = "rdi-proxy"
+version = "0.1.0"
+edition = "2021"
+description = "Low-latency MAVLink/UDP relay for RDI drone control"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

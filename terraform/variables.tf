@@ -33,3 +33,27 @@ variable "wavelength_zone_id" {
   default     = ""
 }
 
+variable "base_state_bucket" {
+  description = "S3 bucket for base infra state (for reading connection pool, Cognito)"
+  type        = string
+  default     = ""
+}
+
+variable "base_state_key" {
+  description = "S3 key for base infra state"
+  type        = string
+  default     = ""
+}
+
+variable "base_state_region" {
+  description = "Region where base state bucket lives"
+  type        = string
+  default     = "eu-central-1"
+}
+
+variable "skip_proxy_build" {
+  description = "Skip building and uploading the proxy binary (EC2 will use Python fallback). Set true when Rust is not available (e.g. terraform plan only)."
+  type        = bool
+  default     = false
+}
+
