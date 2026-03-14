@@ -28,9 +28,15 @@ variable "project_name" {
 }
 
 variable "wavelength_zone_id" {
-  description = "Wavelength Zone ID for EC2 (e.g. use1-wl1-atl-wlz1). Empty = skip Wavelength deployment"
+  description = "Wavelength Zone ID for EC2 (e.g. use1-wl1-chi-wlz1). Empty = skip Wavelength deployment"
   type        = string
   default     = ""
+}
+
+variable "edge_zone_ids" {
+  description = "List of Wavelength Zone IDs available in this environment (for UI, docs). Maps to frontend Edge Location selector."
+  type        = list(string)
+  default     = []
 }
 
 variable "base_state_bucket" {
@@ -61,5 +67,23 @@ variable "proxy_subnet_cidr" {
   description = "CIDR for proxy EC2 subnet (within 10.200.0.0/16). Change if orphaned subnets conflict."
   type        = string
   default     = "10.200.10.0/24"
+}
+
+variable "alb_subnet_cidr" {
+  description = "CIDR for second proxy subnet (for ALB multi-AZ). Empty = no ALB, use direct proxy IP."
+  type        = string
+  default     = "10.200.11.0/24"
+}
+
+variable "enable_alb_wss" {
+  description = "Enable ALB for WSS (TLS). Requires alb_subnet_cidr and certificate."
+  type        = bool
+  default     = true
+}
+
+variable "certificate_arn" {
+  description = "ACM certificate ARN for ALB HTTPS/WSS. Empty = use ssl-certificate module (self-signed for staging)."
+  type        = string
+  default     = ""
 }
 

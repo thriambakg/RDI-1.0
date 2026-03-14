@@ -5,19 +5,23 @@ import { signOut } from 'aws-amplify/auth'
 import { getEnvironmentRegions } from '../../config'
 import './Console.css'
 
-const { regions: REGIONS } = getEnvironmentRegions()
+const { regions: EDGE_ZONES } = getEnvironmentRegions()
 
 const MOCK_DRONES: Record<string, { id: string; name: string; status: string }[]> = {
-  'us-east-1': [{ id: 'drone-1', name: 'Virginia-Test', status: 'idle' }],
-  'eu-central-1': [
+  'use1-wl1-chi-wlz1': [{ id: 'drone-1', name: 'Chicago-Test', status: 'idle' }],
+  'euc1-wl1-ber-wlz1': [
     { id: 'drone-2', name: 'FPV-Racer-01', status: 'connected' },
     { id: 'drone-3', name: 'Survey-Pro', status: 'idle' },
   ],
-  'eu-west-2': [{ id: 'drone-4', name: 'Cine-UK-01', status: 'connected' }],
+  'euc1-wl1-dtm-wlz1': [],
+  'euc1-wl1-muc-wlz1': [],
+  'euw2-wl1-lon-wlz1': [{ id: 'drone-4', name: 'Cine-UK-01', status: 'connected' }],
+  'euw2-wl1-man-wlz1': [],
+  'euw2-wl2-man-wlz1': [],
 }
 
 export default function Console() {
-  const [selectedRegion, setSelectedRegion] = useState(REGIONS[0] ?? { id: 'us-east-1', city: 'N. Virginia', country: 'USA' })
+  const [selectedZone, setSelectedZone] = useState(EDGE_ZONES[0] ?? { id: 'use1-wl1-chi-wlz1', city: 'Chicago', country: 'USA', carrier: 'Verizon' })
   const [folders] = useState<string[]>(['My Drones', 'Shared'])
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const navigate = useNavigate()
@@ -32,11 +36,11 @@ export default function Console() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const { environment, regions } = getEnvironmentRegions()
-      console.log('[RDI Console] Environment', environment, '| Regions', regions.map((r) => r.id).join(', '))
+      console.log('[RDI Console] Environment', environment, '| Edge zones', regions.map((r) => r.id).join(', '))
     }
   }, [])
 
-  const drones = MOCK_DRONES[selectedRegion.id] || []
+  const drones = MOCK_DRONES[selectedZone.id] || []
 
   const handleSignOut = async () => {
     await signOut()
@@ -59,16 +63,16 @@ export default function Console() {
 
       <div className="console-body">
         <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-          <h3>Region</h3>
+          <h3>Edge Location</h3>
           <select
-            value={selectedRegion.id}
+            value={selectedZone.id}
             onChange={(e) => {
-              const r = REGIONS.find((x) => x.id === e.target.value)
-              if (r) setSelectedRegion(r)
+              const z = EDGE_ZONES.find((x) => x.id === e.target.value)
+              if (z) setSelectedZone(z)
             }}
           >
-            {REGIONS.map((r) => (
-              <option key={r.id} value={r.id}>{r.city} ({r.country})</option>
+            {EDGE_ZONES.map((z) => (
+              <option key={z.id} value={z.id}>{z.city} ({z.carrier})</option>
             ))}
           </select>
           <h3>Folders</h3>
@@ -83,8 +87,8 @@ export default function Console() {
         <main className="main">
           <div className="main-top-bar">
             <div className="region-header">
-              <h2>{selectedRegion.city}</h2>
-              <span className="region-id">{selectedRegion.id}</span>
+              <h2>{selectedZone.city}</h2>
+              <span className="region-id">{selectedZone.carrier} · {selectedZone.id}</span>
             </div>
             <button className="link-btn new-connection-btn">+ New connection</button>
           </div>

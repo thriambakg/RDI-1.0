@@ -4,11 +4,13 @@
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, RwLock};
 use tokio_tungstenite::accept_async;
 use tracing::{error, info, warn};
 
 const DEFAULT_WS_PORT: u16 = 8765;
+const DEFAULT_HEALTH_PORT: u16 = 8766;
 
 #[derive(Clone)]
 struct Peer {
@@ -37,8 +39,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     info!("Starting RDI proxy on port {}", ws_port);
 
+    let health_port: u16 = std::env::var("RDI_PROXY_HEALTH_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_HEALTH_PORT);
+
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", ws_port)).await?;
+    let health_listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", health_port)).await?;
+    info!("Health check on port {}", health_port);
+
     let sessions: Arc<RwLock<Sessions>> = Arc::new(RwLock::new(Sessions::default()));
+
+    tokio::spawn(async move {
+        loop {
+            if let Ok((stream, _)) = health_listener.accept().await {
+                tokio::spawn(async move {
+                    let _ = serve_health(stream).await;
+                });
+            }
+        }
+    });
 
     loop {
         let (stream, addr) = listener.accept().await?;
@@ -49,6 +69,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         });
     }
+}
+
+async fn serve_health(mut stream: tokio::net::TcpStream) -> std::io::Result<()> {
+    let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    stream.write_all(response.as_bytes()).await
 }
 
 async fn handle_ws(

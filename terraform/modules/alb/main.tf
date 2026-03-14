@@ -86,11 +86,11 @@ resource "aws_security_group_rule" "alb_https_ingress" {
 
 resource "aws_security_group_rule" "alb_egress_to_targets" {
   type              = "egress"
-  from_port         = 3000
-  to_port           = 3000
+  from_port         = var.target_group_config.port
+  to_port           = var.target_group_config.port
   protocol          = "tcp"
   cidr_blocks       = [data.aws_vpc.main.cidr_block]
-  description       = "Allow ALB to communicate with ECS targets on port 3000"
+  description       = "Allow ALB to communicate with targets on port ${var.target_group_config.port}"
   security_group_id = local.security_group_id
 
   lifecycle {
@@ -142,27 +142,27 @@ resource "aws_lb" "main" {
   })
 }
 
-# Target Group for Frontend
-resource "aws_lb_target_group" "frontend" {
-  name        = "${var.project_name}-frontend-tg-v2-${var.environment}"
-  port        = 3000
+# Target Group - configurable for frontend (ECS) or WebSocket proxy (EC2)
+# Note: ALB target groups require HTTP/HTTPS protocol; WebSocket uses HTTP upgrade
+resource "aws_lb_target_group" "main" {
+  name        = "${var.project_name}-tg-v2-${var.environment}"
+  port        = var.target_group_config.port
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
-  target_type = "ip"
+  target_type = var.target_group_config.target_type
 
   health_check {
     enabled             = true
-    healthy_threshold   = 2             # Need 2 consecutive successes
-    interval            = 30            # Check every 30 seconds (more time between checks)
-    matcher             = "200"         # Only accept 200 (remove 404 to catch real issues)
-    path                = "/api/health" # Use dedicated health endpoint
-    port                = "traffic-port"
+    healthy_threshold   = var.target_group_config.healthy_threshold
+    interval            = var.target_group_config.interval
+    port                = var.target_group_config.health_check_port
     protocol            = "HTTP"
-    timeout             = 20 # 20 second timeout per check (more time for Next.js)
-    unhealthy_threshold = 3  # 3 failures before marking unhealthy (faster detection but more tolerant)
+    path                = var.target_group_config.health_check_path
+    matcher             = "200"
+    timeout             = var.target_group_config.timeout
+    unhealthy_threshold = var.target_group_config.unhealthy_threshold
   }
 
-  # Deregistration delay
   deregistration_delay = 30
 
   lifecycle {
@@ -170,8 +170,17 @@ resource "aws_lb_target_group" "frontend" {
   }
 
   tags = merge(var.tags, {
-    Name = "${var.project_name}-frontend-tg-${var.environment}"
+    Name = "${var.project_name}-tg-${var.environment}"
   })
+}
+
+# Attach EC2 instances to target group when target_type=instance
+resource "aws_lb_target_group_attachment" "instances" {
+  for_each = toset(var.target_group_config.target_type == "instance" ? var.target_instance_ids : [])
+
+  target_group_arn = aws_lb_target_group.main.arn
+  target_id        = each.value
+  port             = var.target_group_config.port
 }
 
 # Development warning for missing certificate
@@ -201,7 +210,7 @@ resource "aws_lb_listener" "https" {
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.frontend.arn
+    target_group_arn = aws_lb_target_group.main.arn
   }
 }
 
@@ -222,7 +231,7 @@ resource "aws_lb_listener" "http" {
     for_each = [1]
     content {
       type             = var.certificate_arn != "" ? "redirect" : "forward"
-      target_group_arn = var.certificate_arn == "" ? aws_lb_target_group.frontend.arn : null
+      target_group_arn = var.certificate_arn == "" ? aws_lb_target_group.main.arn : null
 
       # Redirect to HTTPS when certificate is available
       dynamic "redirect" {
@@ -237,8 +246,9 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# WAF Web ACL for DDoS and SQL Injection Protection
+# WAF Web ACL for DDoS and SQL Injection Protection (optional)
 resource "aws_wafv2_web_acl" "main" {
+  count = var.enable_waf ? 1 : 0
   name  = "${var.project_name}-waf-${var.environment}"
   scope = "REGIONAL"
 
@@ -400,8 +410,10 @@ resource "aws_wafv2_web_acl" "main" {
 
 # Associate WAF with ALB
 resource "aws_wafv2_web_acl_association" "main" {
+  count = var.enable_waf ? 1 : 0
+
   resource_arn = aws_lb.main.arn
-  web_acl_arn  = aws_wafv2_web_acl.main.arn
+  web_acl_arn  = aws_wafv2_web_acl.main[0].arn
 }
 
 # Null resource to ensure ALB is fully ready before ECS service creation
@@ -410,9 +422,9 @@ resource "null_resource" "alb_ready_with_https" {
 
   depends_on = [
     aws_lb.main,
-    aws_lb_target_group.frontend,
+    aws_lb_target_group.main,
     aws_lb_listener.http[0],
-    aws_lb_listener.https # HTTPS listener only if certificate exists
+    aws_lb_listener.https
   ]
 }
 
@@ -457,31 +469,14 @@ resource "aws_cloudwatch_log_resource_policy" "waf" {
   })
 }
 
-# WAF Logging Configuration
-resource "aws_wafv2_web_acl_logging_configuration" "main" {
-  count        = 0 # Disabled - logging configuration can cause ARN issues
-  resource_arn = aws_wafv2_web_acl.main.arn
-  log_destination_configs = [
-    "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/wafv2/${var.project_name}-${var.environment}:*"
-  ]
-
-  depends_on = [
-    aws_cloudwatch_log_group.waf,
-    aws_cloudwatch_log_resource_policy.waf
-  ]
-
-  redacted_fields {
-    single_header {
-      name = "authorization"
-    }
-  }
-
-  redacted_fields {
-    single_header {
-      name = "cookie"
-    }
-  }
-}
+# WAF Logging Configuration - only when WAF enabled (currently disabled; set to 1 to enable)
+# resource "aws_wafv2_web_acl_logging_configuration" "main" {
+#   count = var.enable_waf && var.enable_waf_logging ? 1 : 0
+#   resource_arn = aws_wafv2_web_acl.main[0].arn
+#   log_destination_configs = [...]
+#   depends_on = [aws_cloudwatch_log_group.waf, aws_cloudwatch_log_resource_policy.waf]
+#   redacted_fields { single_header { name = "authorization" } }
+# }
 
 output "waf_log_group_arn" {
   value = length(aws_cloudwatch_log_group.waf) > 0 ? aws_cloudwatch_log_group.waf[0].arn : null

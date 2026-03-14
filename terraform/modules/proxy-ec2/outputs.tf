@@ -22,3 +22,8 @@ output "subnet_id" {
   description = "Proxy subnet ID"
   value       = aws_subnet.proxy.id
 }
+
+output "alb_subnet_ids" {
+  description = "Subnet IDs for ALB (proxy subnet + optional second). Use when alb_subnet_cidr is set."
+  value       = var.alb_subnet_cidr != "" ? [aws_subnet.proxy.id, aws_subnet.alb[0].id] : [aws_subnet.proxy.id]
+}

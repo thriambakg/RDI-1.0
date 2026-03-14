@@ -13,7 +13,7 @@ resource "tls_self_signed_cert" "main" {
   private_key_pem = tls_private_key.main.private_key_pem
 
   subject {
-    common_name  = "*.us-east-1.elb.amazonaws.com"
+    common_name  = "*.${var.aws_region}.elb.amazonaws.com"
     organization = "${var.project_name} Staging"
   }
 
@@ -27,7 +27,7 @@ resource "tls_self_signed_cert" "main" {
 
   # Add ALB-compatible DNS names
   dns_names = [
-    "*.us-east-1.elb.amazonaws.com",
+    "*.${var.aws_region}.elb.amazonaws.com",
     "*.elb.amazonaws.com",
     "staging.${var.project_name}.internal"
   ]

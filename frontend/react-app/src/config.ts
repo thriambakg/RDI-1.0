@@ -1,4 +1,4 @@
-import { getRegionsForEnvironment } from './config/environment-regions'
+import { getEdgeZonesForEnvironment } from './config/environment-regions'
 
 function getDefaultEnvironment(): string {
   if (import.meta.env.VITE_ENVIRONMENT) return import.meta.env.VITE_ENVIRONMENT
@@ -24,9 +24,9 @@ export function getConfig(): RDIConfig {
   return cfg;
 }
 
-export function getEnvironmentRegions(): { environment: string; regions: ReturnType<typeof getRegionsForEnvironment> } {
+export function getEnvironmentRegions(): { environment: string; regions: ReturnType<typeof getEdgeZonesForEnvironment> } {
   const config = getConfig()
   const environment = config.ENVIRONMENT || getDefaultEnvironment()
-  const regions = getRegionsForEnvironment(environment)
+  const regions = getEdgeZonesForEnvironment(environment)
   return { environment, regions }
 }

@@ -60,6 +60,27 @@ resource "aws_route_table_association" "proxy" {
   route_table_id = aws_route_table.proxy.id
 }
 
+# Optional second subnet for ALB (requires 2+ AZs)
+resource "aws_subnet" "alb" {
+  count = var.alb_subnet_cidr != "" ? 1 : 0
+
+  vpc_id                  = aws_vpc.proxy.id
+  cidr_block              = var.alb_subnet_cidr
+  availability_zone       = data.aws_availability_zones.available.names[1]
+  map_public_ip_on_launch = false
+
+  tags = merge(var.tags, {
+    Name = "${var.project_name}-proxy-alb-subnet-${var.environment}"
+  })
+}
+
+resource "aws_route_table_association" "alb" {
+  count = var.alb_subnet_cidr != "" ? 1 : 0
+
+  subnet_id      = aws_subnet.alb[0].id
+  route_table_id = aws_route_table.proxy.id
+}
+
 resource "aws_security_group" "proxy" {
   name_prefix = "${var.project_name}-proxy-"
   description = "Security group for proxy EC2 - WebSocket, UDP MAVLink"
@@ -71,6 +92,14 @@ resource "aws_security_group" "proxy" {
     to_port     = var.proxy_websocket_port
     protocol    = "tcp"
     cidr_blocks = var.allowed_cidrs
+  }
+
+  ingress {
+    description = "Health check (ALB)"
+    from_port   = var.proxy_health_port
+    to_port     = var.proxy_health_port
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
   }
 
   ingress {

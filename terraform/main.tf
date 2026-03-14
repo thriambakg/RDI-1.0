@@ -12,6 +12,10 @@ terraform {
       source  = "hashicorp/null"
       version = "~> 3.0"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
   backend "s3" {
     # Values from backend-configs/{env}-{region}.tfbackend
@@ -228,7 +232,7 @@ module "session_api_lambda" {
 
   environment_variables = {
     CONNECTION_POOL_TABLE = local.connection_pool_tbl
-    PROXY_ENDPOINT        = module.proxy_ec2.websocket_endpoint
+    PROXY_ENDPOINT        = length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2.websocket_endpoint
   }
 
   additional_policy_arns = [aws_iam_policy.session_api_dynamodb[0].arn]
@@ -283,14 +287,25 @@ module "session_api" {
   stage_name            = "production"
   cognito_user_pool_arn = local.cognito_pool_arn
 
+  # Extensible: add new resources here (e.g. connections, folders) and corresponding methods
   resources = {
     sessions = { path_part = "sessions" }
+    # Future: connections = { path_part = "connections" }
+    # Future: folders    = { path_part = "folders" }
   }
 
   methods = {
     post_sessions = {
       resource_key            = "sessions"
       http_method             = "POST"
+      integration_type        = "AWS_PROXY"
+      integration_http_method = "POST"
+      lambda_arn              = module.session_api_lambda[0].function_arn
+      authorization_type      = "COGNITO_USER_POOLS"
+    }
+    get_sessions = {
+      resource_key            = "sessions"
+      http_method             = "GET"
       integration_type        = "AWS_PROXY"
       integration_http_method = "POST"
       lambda_arn              = module.session_api_lambda[0].function_arn
@@ -308,6 +323,7 @@ module "session_api" {
 
   lambda_permissions = {
     post   = { function_arn = module.session_api_lambda[0].function_arn, http_method = "POST", resource_path = "sessions" }
+    get    = { function_arn = module.session_api_lambda[0].function_arn, http_method = "GET", resource_path = "sessions" }
     delete = { function_arn = module.session_api_lambda[0].function_arn, http_method = "DELETE", resource_path = "sessions" }
   }
 
@@ -322,10 +338,12 @@ module "proxy_ec2" {
   environment                   = var.environment
   kms_key_arn                   = module.kms.main_key_arn
   proxy_websocket_port          = 8765
+  proxy_health_port             = 8766
   proxy_binary_s3_bucket        = module.proxy_artifacts_bucket.bucket_id
   proxy_binary_s3_key           = "proxy/rdi-proxy"
   enable_s3_proxy_binary_access = true
   proxy_subnet_cidr             = var.proxy_subnet_cidr
+  alb_subnet_cidr               = var.enable_alb_wss ? var.alb_subnet_cidr : ""
 
   user_data = base64encode(templatefile("${path.module}/../src/proxy/user_data.sh", {
     s3_bucket = module.proxy_artifacts_bucket.bucket_id
@@ -338,6 +356,48 @@ module "proxy_ec2" {
   tags = {}
 }
 
+# SSL certificate for ALB WSS (self-signed for staging when no cert provided)
+module "ssl_certificate" {
+  count  = var.enable_alb_wss && var.certificate_arn == "" ? 1 : 0
+  source = "./modules/ssl-certificate"
+
+  project_name = var.project_name
+  environment  = var.environment
+  aws_region   = local.region
+  tags         = {}
+}
+
+# ALB for WSS (TLS termination) - targets Proxy EC2
+module "alb_websocket" {
+  count  = var.enable_alb_wss && var.alb_subnet_cidr != "" ? 1 : 0
+  source = "./modules/alb"
+
+  project_name       = var.project_name
+  environment        = var.environment
+  vpc_id             = module.proxy_ec2.vpc_id
+  public_subnet_ids  = module.proxy_ec2.alb_subnet_ids
+  certificate_arn    = var.certificate_arn != "" ? var.certificate_arn : module.ssl_certificate[0].certificate_arn
+  kms_key_arn        = module.kms.main_key_arn
+  enable_waf         = false # WebSocket: skip WAF for lower latency and cost
+  access_logs_bucket = ""
+  enable_access_logs = false
+
+  target_group_config = {
+    port                = 8765
+    target_type         = "instance"
+    health_check_path   = "/"
+    health_check_port   = "8766"
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    interval            = 30
+    timeout             = 5
+  }
+  target_instance_ids = [module.proxy_ec2.instance_id]
+
+  depends_on = [module.proxy_ec2]
+  tags       = {}
+}
+
 output "session_api_url" {
   value = length(module.session_api) > 0 ? "${module.session_api[0].stage_url}sessions" : null
 }
@@ -347,6 +407,17 @@ output "proxy_public_ip" {
 }
 
 output "proxy_websocket_endpoint" {
-  value = module.proxy_ec2.websocket_endpoint
+  description = "WebSocket endpoint (wss when ALB enabled, ws otherwise)"
+  value       = length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2.websocket_endpoint
+}
+
+output "alb_dns_name" {
+  description = "ALB DNS name (when ALB enabled)"
+  value       = length(module.alb_websocket) > 0 ? module.alb_websocket[0].alb_dns_name : null
+}
+
+output "edge_zone_ids" {
+  description = "Wavelength zone IDs available in this environment (for UI Edge Location selector)"
+  value       = var.edge_zone_ids
 }
 

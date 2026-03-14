@@ -48,6 +48,12 @@ variable "proxy_websocket_port" {
   default     = 8765
 }
 
+variable "proxy_health_port" {
+  description = "Port for HTTP health check (ALB)"
+  type        = number
+  default     = 8766
+}
+
 variable "allowed_cidrs" {
   description = "CIDR blocks allowed for proxy traffic"
   type        = list(string)
@@ -88,4 +94,10 @@ variable "tags" {
   description = "Tags to apply to resources"
   type        = map(string)
   default     = {}
+}
+
+variable "alb_subnet_cidr" {
+  description = "CIDR for optional second subnet (for ALB multi-AZ). When set, creates subnet in AZ[1] and outputs alb_subnet_ids."
+  type        = string
+  default     = ""
 }
