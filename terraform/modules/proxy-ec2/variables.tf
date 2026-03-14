@@ -27,9 +27,9 @@ variable "instance_type" {
 }
 
 variable "root_volume_size" {
-  description = "Root EBS volume size in GB"
+  description = "Root EBS volume size in GB (AL2023 AMI requires >= 30)"
   type        = number
-  default     = 20
+  default     = 30
 }
 
 variable "key_name" {
