@@ -326,7 +326,7 @@ resource "aws_api_gateway_method_settings" "protected_endpoints" {
     throttling_burst_limit = var.throttle_burst_limit
     throttling_rate_limit  = var.throttle_rate_limit
 
-    # Logging
+    # Logging (requires API Gateway CloudWatch role from base infra)
     logging_level      = "ERROR"
     data_trace_enabled = false
     metrics_enabled    = true

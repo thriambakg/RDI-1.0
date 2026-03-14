@@ -57,3 +57,9 @@ variable "skip_proxy_build" {
   default     = false
 }
 
+variable "proxy_subnet_cidr" {
+  description = "CIDR for proxy EC2 subnet (within 10.200.0.0/16). Change if orphaned subnets conflict."
+  type        = string
+  default     = "10.200.10.0/24"
+}
+

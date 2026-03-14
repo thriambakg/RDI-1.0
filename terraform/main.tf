@@ -48,11 +48,12 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 locals {
-  is_primary_region   = var.primary_region != "" && var.region == var.primary_region
-  region              = data.aws_region.current.name
-  base_state_key      = var.base_state_key != "" ? var.base_state_key : "base-infra/${var.environment}/${var.region}/terraform.tfstate"
-  connection_pool_tbl = var.base_state_bucket != "" ? data.terraform_remote_state.base[0].outputs.connection_pool_table_name : "rdi-connection-pool-${var.environment}"
-  cognito_pool_arn    = var.base_state_bucket != "" ? "arn:aws:cognito-idp:${var.region}:${data.aws_caller_identity.current.account_id}:userpool/${data.terraform_remote_state.base[0].outputs.cognito_user_pool_id}" : ""
+  is_primary_region               = var.primary_region != "" && var.region == var.primary_region
+  region                          = data.aws_region.current.name
+  base_state_key                  = var.base_state_key != "" ? var.base_state_key : "base-infra/${var.environment}/${var.region}/terraform.tfstate"
+  connection_pool_tbl             = var.base_state_bucket != "" ? data.terraform_remote_state.base[0].outputs.connection_pool_table_name : "rdi-connection-pool-${var.environment}"
+  cognito_pool_arn                = var.base_state_bucket != "" ? "arn:aws:cognito-idp:${var.region}:${data.aws_caller_identity.current.account_id}:userpool/${data.terraform_remote_state.base[0].outputs.cognito_user_pool_id}" : ""
+  api_gateway_cloudwatch_role_arn = var.base_state_bucket != "" ? data.terraform_remote_state.base[0].outputs.api_gateway_cloudwatch_role_arn : null
 }
 
 data "terraform_remote_state" "base" {
@@ -263,10 +264,19 @@ resource "aws_iam_policy" "session_api_dynamodb" {
   })
 }
 
+# API Gateway account settings - CloudWatch execution logging (per-region; uses role from base infra)
+resource "aws_api_gateway_account" "this" {
+  count = var.base_state_bucket != "" && local.api_gateway_cloudwatch_role_arn != null ? 1 : 0
+
+  cloudwatch_role_arn = local.api_gateway_cloudwatch_role_arn
+}
+
 # Session API Gateway
 module "session_api" {
   count  = var.base_state_bucket != "" ? 1 : 0
   source = "./modules/api-gateway"
+
+  depends_on = [aws_api_gateway_account.this]
 
   api_name              = "${var.project_name}-session-api-${var.environment}"
   api_description       = "RDI Session API for connection pool"
@@ -315,6 +325,7 @@ module "proxy_ec2" {
   proxy_binary_s3_bucket        = module.proxy_artifacts_bucket.bucket_id
   proxy_binary_s3_key           = "proxy/rdi-proxy"
   enable_s3_proxy_binary_access = true
+  proxy_subnet_cidr             = var.proxy_subnet_cidr
 
   user_data = base64encode(templatefile("${path.module}/../src/proxy/user_data.sh", {
     s3_bucket = module.proxy_artifacts_bucket.bucket_id

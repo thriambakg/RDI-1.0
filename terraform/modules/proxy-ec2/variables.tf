@@ -15,9 +15,8 @@ variable "vpc_cidr" {
 }
 
 variable "proxy_subnet_cidr" {
-  description = "CIDR for proxy subnet (change if orphaned subnets exist from prior deployments)"
+  description = "CIDR for proxy subnet (passed from root; change via tfvars if orphaned subnets conflict)"
   type        = string
-  default     = "10.200.10.0/24"
 }
 
 variable "instance_type" {
