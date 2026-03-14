@@ -227,7 +227,6 @@ module "session_api_lambda" {
 
   environment_variables = {
     CONNECTION_POOL_TABLE = local.connection_pool_tbl
-    AWS_REGION            = local.region
     PROXY_ENDPOINT        = module.proxy_ec2.websocket_endpoint
   }
 
