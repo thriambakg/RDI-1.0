@@ -66,13 +66,13 @@ variable "skip_proxy_build" {
 variable "proxy_subnet_cidr" {
   description = "CIDR for proxy EC2 subnet (within 10.200.0.0/16). Change if orphaned subnets conflict."
   type        = string
-  default     = "10.200.10.0/24"
+  default     = "10.200.20.0/24"
 }
 
 variable "alb_subnet_cidr" {
   description = "CIDR for second proxy subnet (for ALB multi-AZ). Empty = no ALB, use direct proxy IP."
   type        = string
-  default     = "10.200.11.0/24"
+  default     = "10.200.21.0/24"
 }
 
 variable "enable_alb_wss" {

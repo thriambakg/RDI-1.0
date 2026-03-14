@@ -6,9 +6,10 @@ primary_region = "us-east-1"
 base_state_bucket = "rdi-terraform-state-470900128247"
 base_state_region = "eu-central-1"
 
-# Wavelength Zone: Chicago (Verizon) - single zone for staging
-wavelength_zone_id = "use1-wl1-chi-wlz1"
-edge_zone_ids      = ["use1-wl1-chi-wlz1"]
+# Wavelength Zone: Chicago (Verizon) - use Zone Name for subnet (not Zone ID)
+# Zone ID use1-wl1-chi-wlz1; Zone Name us-east-1-wl1-chi-wlz-1
+wavelength_zone_id = "us-east-1-wl1-chi-wlz-1"
+edge_zone_ids      = ["use1-wl1-chi-wlz1"] # Zone ID for UI display
 
-# Proxy subnet CIDR (change if conflicts with orphaned subnets)
-proxy_subnet_cidr = "10.200.10.0/24"
+# Proxy subnet CIDR (use unique range if 10.200.10.0/24 conflicts with orphaned subnet)
+proxy_subnet_cidr = "10.200.20.0/24"
