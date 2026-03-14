@@ -26,10 +26,11 @@ resource "aws_internet_gateway" "proxy" {
 }
 
 resource "aws_subnet" "proxy" {
-  vpc_id                  = aws_vpc.proxy.id
-  cidr_block              = var.proxy_subnet_cidr
-  availability_zone       = data.aws_availability_zones.available.names[0]
-  map_public_ip_on_launch = true
+  vpc_id            = aws_vpc.proxy.id
+  cidr_block        = var.proxy_subnet_cidr
+  availability_zone = data.aws_availability_zones.available.names[0]
+  # false: proxy uses EIP for public IP; true can fail in Wavelength/local zones
+  map_public_ip_on_launch = false
 
   tags = merge(var.tags, {
     Name = "${var.project_name}-proxy-subnet-${var.environment}"
