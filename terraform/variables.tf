@@ -87,9 +87,4 @@ variable "certificate_arn" {
   default     = ""
 }
 
-variable "session_api_deployment_trigger" {
-  description = "Increment to force API Gateway redeployment (e.g. after CORS or config changes). Combined with Lambda source hash."
-  type        = string
-  default     = "1"
-}
 
