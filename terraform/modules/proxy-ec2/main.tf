@@ -5,6 +5,11 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 data "aws_availability_zones" "available" {
   state = "available"
+  # Exclude Wavelength/Local zones - proxy belongs in standard regional AZ (gp3, IGW, etc.)
+  filter {
+    name   = "opt-in-status"
+    values = ["opt-in-not-required"]
+  }
 }
 
 resource "aws_vpc" "proxy" {
