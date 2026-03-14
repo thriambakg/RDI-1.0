@@ -73,6 +73,12 @@ variable "proxy_binary_s3_bucket" {
   default     = ""
 }
 
+variable "enable_s3_proxy_binary_access" {
+  description = "Enable IAM policy for EC2 to download proxy binary from S3. Set true when using proxy_binary_s3_bucket (avoids count depending on computed values)."
+  type        = bool
+  default     = false
+}
+
 variable "proxy_binary_s3_key" {
   description = "S3 key for proxy binary"
   type        = string

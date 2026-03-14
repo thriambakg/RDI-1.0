@@ -309,12 +309,13 @@ module "session_api" {
 module "proxy_ec2" {
   source = "./modules/proxy-ec2"
 
-  project_name           = var.project_name
-  environment            = var.environment
-  kms_key_arn            = module.kms.main_key_arn
-  proxy_websocket_port   = 8765
-  proxy_binary_s3_bucket = module.proxy_artifacts_bucket.bucket_id
-  proxy_binary_s3_key    = "proxy/rdi-proxy"
+  project_name                  = var.project_name
+  environment                   = var.environment
+  kms_key_arn                   = module.kms.main_key_arn
+  proxy_websocket_port          = 8765
+  proxy_binary_s3_bucket        = module.proxy_artifacts_bucket.bucket_id
+  proxy_binary_s3_key           = "proxy/rdi-proxy"
+  enable_s3_proxy_binary_access = true
 
   user_data = base64encode(templatefile("${path.module}/../src/proxy/user_data.sh", {
     s3_bucket = module.proxy_artifacts_bucket.bucket_id

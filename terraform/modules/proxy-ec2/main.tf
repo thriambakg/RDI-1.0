@@ -124,7 +124,7 @@ resource "aws_iam_role_policy_attachment" "ssm" {
 }
 
 resource "aws_iam_role_policy" "s3_proxy_binary" {
-  count = var.proxy_binary_s3_bucket != "" ? 1 : 0
+  count = var.enable_s3_proxy_binary_access ? 1 : 0
 
   name = "${var.project_name}-proxy-s3"
   role = aws_iam_role.proxy.id
