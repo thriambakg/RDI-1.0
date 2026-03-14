@@ -15,9 +15,9 @@ variable "vpc_cidr" {
 }
 
 variable "proxy_subnet_cidr" {
-  description = "CIDR for proxy subnet"
+  description = "CIDR for proxy subnet (avoid 10.200.1.0/24 if orphaned from prior deployment)"
   type        = string
-  default     = "10.200.1.0/24"
+  default     = "10.200.2.0/24"
 }
 
 variable "instance_type" {
