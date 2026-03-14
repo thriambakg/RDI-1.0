@@ -327,7 +327,8 @@ module "session_api" {
     delete = { function_arn = module.session_api_lambda[0].function_arn, http_method = "DELETE", resource_path = "sessions" }
   }
 
-  deployment_trigger = module.session_api_lambda[0].source_code_hash
+  # Combine Lambda hash (auto) with manual trigger (bump to force redeploy for CORS/config changes)
+  deployment_trigger = "${module.session_api_lambda[0].source_code_hash}-${var.session_api_deployment_trigger}"
 }
 
 # Proxy EC2 - depends on binary in S3 so user_data can fetch it at boot

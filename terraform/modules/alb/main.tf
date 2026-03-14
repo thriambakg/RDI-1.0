@@ -175,11 +175,12 @@ resource "aws_lb_target_group" "main" {
 }
 
 # Attach EC2 instances to target group when target_type=instance
+# Use count (not for_each) because target_instance_ids may contain apply-time values (e.g. from module outputs)
 resource "aws_lb_target_group_attachment" "instances" {
-  for_each = toset(var.target_group_config.target_type == "instance" ? var.target_instance_ids : [])
+  count = var.target_group_config.target_type == "instance" ? length(var.target_instance_ids) : 0
 
   target_group_arn = aws_lb_target_group.main.arn
-  target_id        = each.value
+  target_id        = var.target_instance_ids[count.index]
   port             = var.target_group_config.port
 }
 
