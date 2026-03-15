@@ -14,6 +14,10 @@ export interface RDIEnvironmentConfig {
   cognitoUserPoolId: string;
   cognitoClientId: string;
   cognitoDomain: string;
+  /** Default callback URL for Cognito Hosted UI (email/pass and Google). Override with VITE_REDIRECT_SIGN_IN. */
+  redirectSignIn?: string;
+  /** Default sign-out redirect. Override with VITE_REDIRECT_SIGN_OUT. */
+  redirectSignOut?: string;
 }
 
 const ENV_CONFIGS: Record<RDIEnvironment, RDIEnvironmentConfig> = {
@@ -90,6 +94,22 @@ export function getCognitoDomain(): string {
   return import.meta.env.VITE_COGNITO_DOMAIN ?? '';
 }
 
+/** Default Cognito callback URL for this environment (e.g. https://rdistaging.com/auth/callback for staging). */
+export function getDefaultRedirectSignIn(): string {
+  const env = getCurrentEnvironment();
+  const fromEnv = ENV_CONFIGS[env].redirectSignIn;
+  if (fromEnv) return fromEnv;
+  return 'http://localhost:5173/auth/callback';
+}
+
+/** Default Cognito sign-out URL for this environment. */
+export function getDefaultRedirectSignOut(): string {
+  const env = getCurrentEnvironment();
+  const fromEnv = ENV_CONFIGS[env].redirectSignOut;
+  if (fromEnv) return fromEnv;
+  return 'http://localhost:5173';
+}
+
 export function getEnvironmentConfig(): RDIEnvironmentConfig {
   const environment = getCurrentEnvironment();
   return {
@@ -99,5 +119,7 @@ export function getEnvironmentConfig(): RDIEnvironmentConfig {
     cognitoUserPoolId: getCognitoUserPoolId(),
     cognitoClientId: getCognitoClientId(),
     cognitoDomain: getCognitoDomain(),
+    redirectSignIn: ENV_CONFIGS[environment].redirectSignIn,
+    redirectSignOut: ENV_CONFIGS[environment].redirectSignOut,
   };
 }

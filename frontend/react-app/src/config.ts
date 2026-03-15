@@ -6,6 +6,8 @@ import {
   getCognitoUserPoolId,
   getCognitoClientId,
   getCognitoDomain,
+  getDefaultRedirectSignIn,
+  getDefaultRedirectSignOut,
 } from './config/environment'
 
 export function getConfig(): RDIConfig {
@@ -16,8 +18,8 @@ export function getConfig(): RDIConfig {
     COGNITO_USER_POOL_ID: getCognitoUserPoolId(),
     COGNITO_CLIENT_ID: getCognitoClientId(),
     COGNITO_DOMAIN: getCognitoDomain(),
-    REDIRECT_SIGN_IN: runtime?.REDIRECT_SIGN_IN ?? import.meta.env.VITE_REDIRECT_SIGN_IN ?? 'http://localhost:5173/auth/callback',
-    REDIRECT_SIGN_OUT: runtime?.REDIRECT_SIGN_OUT ?? import.meta.env.VITE_REDIRECT_SIGN_OUT ?? 'http://localhost:5173',
+    REDIRECT_SIGN_IN: runtime?.REDIRECT_SIGN_IN ?? import.meta.env.VITE_REDIRECT_SIGN_IN ?? getDefaultRedirectSignIn(),
+    REDIRECT_SIGN_OUT: runtime?.REDIRECT_SIGN_OUT ?? import.meta.env.VITE_REDIRECT_SIGN_OUT ?? getDefaultRedirectSignOut(),
     API_GATEWAY_URL: getApiGatewayUrl(),
     WEBSOCKET_URL: '', // Not used; WebSocket endpoint is per-session from POST /sessions (ALB/Proxy)
     ENVIRONMENT: envConfig.environment,

@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
+  Alert,
   Box,
   Button,
   Typography,
@@ -18,6 +19,7 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  Snackbar,
 } from '@mui/material'
 import type { SelectChangeEvent } from '@mui/material'
 import { Delete as DeleteIcon, ExpandLess, ExpandMore, Folder, FolderOpen, MoreVert, PauseCircleOutline, PlayArrow } from '@mui/icons-material'
@@ -207,7 +209,25 @@ export default function Console() {
   const [confirmDeleteFolderPath, setConfirmDeleteFolderPath] = useState<string[] | null>(null)
   const [detailSessionId, setDetailSessionId] = useState<string | null>(null)
   const [detailDialogOpen, setDetailDialogOpen] = useState(false)
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
+    open: false,
+    message: '',
+    severity: 'error',
+  })
   const navigate = useNavigate()
+
+  function showSessionError(message: string) {
+    setSnackbar({ open: true, message, severity: 'error' })
+  }
+
+  function getSessionErrorMessage(err: unknown, action: 'activate' | 'pause' | 'delete'): string {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (/not found|session not found/i.test(msg)) return 'This session does not exist.'
+    if (action === 'activate') return 'Unable to activate connection.'
+    if (action === 'pause') return 'Unable to pause connection.'
+    if (action === 'delete') return 'Delete failed.'
+    return msg || 'Something went wrong.'
+  }
   const { logout } = useAuth()
 
   const connections = collectSessions(hierarchy, selectedFolderPath)
@@ -250,7 +270,7 @@ export default function Console() {
       // Cache live update only; no refresh so UI stays in sync with optimistic remove
     } catch (err) {
       console.error('[RDI Console] Delete failed', err)
-      await fetchProfile()
+      showSessionError(getSessionErrorMessage(err, 'delete'))
     } finally {
       setDeleteLoading(null)
     }
@@ -262,10 +282,15 @@ export default function Console() {
     updateHierarchy((h) => updateSessionStatusInHierarchy(h, sessionId, 'idle'))
     try {
       await releaseSession(sessionId)
-      await fetchProfile({ silent: true })
     } catch (err) {
       console.error('[RDI Console] Pause failed', err)
-      await fetchProfile()
+      const isNotFound = err instanceof Error && /not found/i.test(err.message)
+      if (isNotFound) {
+        updateHierarchy((h) => removeSessionFromHierarchy(h, sessionId))
+      } else {
+        updateHierarchy((h) => updateSessionStatusInHierarchy(h, sessionId, 'active'))
+      }
+      showSessionError(getSessionErrorMessage(err, 'pause'))
     } finally {
       setDeleteLoading(null)
     }
@@ -277,10 +302,15 @@ export default function Console() {
     updateHierarchy((h) => updateSessionStatusInHierarchy(h, sessionId, 'active'))
     try {
       await activateSession(sessionId)
-      await fetchProfile({ silent: true })
     } catch (err) {
       console.error('[RDI Console] Activate failed', err)
-      await fetchProfile()
+      const isNotFound = err instanceof Error && /not found/i.test(err.message)
+      if (isNotFound) {
+        updateHierarchy((h) => removeSessionFromHierarchy(h, sessionId))
+      } else {
+        updateHierarchy((h) => updateSessionStatusInHierarchy(h, sessionId, 'idle'))
+      }
+      showSessionError(getSessionErrorMessage(err, 'activate'))
     } finally {
       setDeleteLoading(null)
     }
@@ -605,6 +635,24 @@ export default function Console() {
           </div>
         </main>
       </div>
+
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={5000}
+        onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert
+          onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
+          severity={snackbar.severity}
+          sx={{
+            backgroundColor: snackbar.severity === 'error' ? '#ef4444' : '#10b981',
+            color: '#ffffff',
+          }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </div>
   )
 }
