@@ -3,6 +3,7 @@ User Profile API - Returns user profile including connection hierarchy (folders)
 Separate Lambda from Session API for clear separation of concerns.
 """
 
+import copy
 import json
 import os
 from typing import Any
@@ -12,10 +13,54 @@ from botocore.exceptions import ClientError
 
 TABLE_NAME = os.environ["USER_PROFILES_TABLE"]
 
+# Shared folder has nested "Shared with me" and "Shared with others"
+SHARED_DEFAULT = {
+    "sessions": [],
+    "subfolders": {
+        "Shared with me": {"sessions": [], "subfolders": {}},
+        "Shared with others": {"sessions": [], "subfolders": {}},
+    },
+}
+
 DEFAULT_HIERARCHY = {
     "My Drones": {"sessions": [], "subfolders": {}},
-    "Shared": {"sessions": [], "subfolders": {}},
+    "Shared": dict(SHARED_DEFAULT),
 }
+
+
+def _ensure_shared_folder(hierarchy: dict) -> None:
+    """Ensure 'Shared' exists at root with nested 'Shared with me' and 'Shared with others'. Skip if already present."""
+    if not isinstance(hierarchy, dict):
+        return
+    if "Shared" not in hierarchy:
+        hierarchy["Shared"] = {
+            "sessions": [],
+            "subfolders": {
+                "Shared with me": {"sessions": [], "subfolders": {}},
+                "Shared with others": {"sessions": [], "subfolders": {}},
+            },
+        }
+        return
+    node = hierarchy["Shared"]
+    if not isinstance(node, dict):
+        hierarchy["Shared"] = {
+            "sessions": [],
+            "subfolders": {
+                "Shared with me": {"sessions": [], "subfolders": {}},
+                "Shared with others": {"sessions": [], "subfolders": {}},
+            },
+        }
+        return
+    node.setdefault("sessions", [])
+    if not isinstance(node.get("subfolders"), dict):
+        node["subfolders"] = {}
+    sub = node["subfolders"]
+    for key in ("Shared with me", "Shared with others"):
+        if key not in sub or not isinstance(sub.get(key), dict):
+            sub[key] = {"sessions": [], "subfolders": {}}
+        else:
+            sub[key].setdefault("sessions", [])
+            sub[key].setdefault("subfolders", {})
 
 
 def _response(status_code: int, body: dict, headers: dict) -> dict:
@@ -74,10 +119,14 @@ def _get_profile(user_id: str, headers: dict) -> dict:
         raise
 
     item = resp.get("Item")
-    connection_hierarchy = DEFAULT_HIERARCHY
-
     if item and "connection_hierarchy" in item:
         connection_hierarchy = _from_dynamo_value(item["connection_hierarchy"])
+        if not isinstance(connection_hierarchy, dict):
+            connection_hierarchy = copy.deepcopy(DEFAULT_HIERARCHY)
+    else:
+        connection_hierarchy = copy.deepcopy(DEFAULT_HIERARCHY)
+
+    _ensure_shared_folder(connection_hierarchy)
 
     return _response(
         200,
@@ -119,9 +168,9 @@ def _create_folder(user_id: str, parent_path: list[str], folder_name: str, heade
     except ClientError:
         raise
     item = resp.get("Item")
-    hierarchy = dict(DEFAULT_HIERARCHY)
+    hierarchy = copy.deepcopy(DEFAULT_HIERARCHY)
     if item and "connection_hierarchy" in item:
-        hierarchy = _from_dynamo_value(item["connection_hierarchy"]) or dict(DEFAULT_HIERARCHY)
+        hierarchy = _from_dynamo_value(item["connection_hierarchy"]) or copy.deepcopy(DEFAULT_HIERARCHY)
     parent = hierarchy
     for part in parent_path:
         if part not in parent:
@@ -155,7 +204,7 @@ def _delete_folder(user_id: str, folder_path: list[str], headers: dict) -> dict:
     item = resp.get("Item")
     if not item or "connection_hierarchy" not in item:
         return _response(200, {"message": "Folder deleted"}, headers)
-    hierarchy = _from_dynamo_value(item["connection_hierarchy"]) or dict(DEFAULT_HIERARCHY)
+    hierarchy = _from_dynamo_value(item["connection_hierarchy"]) or copy.deepcopy(DEFAULT_HIERARCHY)
     last = folder_path[-1]
     if len(folder_path) == 1:
         if last in hierarchy:
