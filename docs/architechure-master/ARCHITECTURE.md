@@ -32,9 +32,10 @@ RDI exposes two distinct APIs:
             │    │  REST API  ·  API Gateway + Lambda (Cognito auth)                                                            │
             │    │  ┌─────────────────────┐         ┌─────────────────────────────────────────────────────────────────────┐    │
             │    │  │ Session API Lambda  │────────►│  DynamoDB · Connection Pool Table                                    │    │
-            │    │  │ Returns:            │  put    │  PK: region | SK: session_id                                         │    │
-            │    │  │ {session_id,        │         │  Attributes: user_id, status, endpoint, expires_at                   │    │
-            │    │  │  endpoint, expires} │         └─────────────────────────────────────────────────────────────────────┘    │
+            │    │  │ Returns:            │  put    │  PK: user_id | SK: session_id                                        │    │
+            │    │  │ {session_id,        │         │  Attributes: region, wavelength_zone_id, drone_id, status, endpoint,  │    │
+            │    │  │  drone_id, endpoint}│         │  expires_at, created_at, updated_at, released_at, metadata           │    │
+            │    │  │                     │         └─────────────────────────────────────────────────────────────────────┘    │
             │    │  └─────────────────────┘                                                                                    │
             │    └─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
             │
@@ -103,7 +104,7 @@ RDI uses two APIs with different protocols and responsibilities:
 
 | Purpose | Endpoints | Auth |
 |---------|-----------|------|
-| Create session, get proxy endpoint | `POST /sessions` | Cognito |
+| Create session, get proxy endpoint | `POST /sessions` (body: `{ ttl_seconds?, drone_name?, wavelength_zone_id?, metadata? }`) | Cognito |
 | Get session info | `GET /sessions?session_id=...` | Cognito |
 | Release session | `DELETE /sessions` (body: `{ session_id }`) | Cognito |
 
@@ -134,25 +135,43 @@ RDI uses two APIs with different protocols and responsibilities:
 **The Lambda does not create WebSocket connections.** It allocates a session ID and records it in the connection pool table. Clients create the WebSocket.
 
 ```
-1. Frontend calls POST /sessions (Cognito auth)
+1. Frontend calls POST /sessions (Cognito auth; body: { drone_name?, wavelength_zone_id?, ttl_seconds? })
        ↓
-2. Lambda: generate session_id (UUID), put in DynamoDB (region, session_id, user_id, status=active, endpoint)
+2. Lambda: generate session_id (UUID), drone_id = "{drone_name}-{uuid}", put in DynamoDB (user_id, session_id, …)
        ↓
-3. Lambda returns { session_id, endpoint, expires_at }
+3. Lambda returns { session_id, drone_id, endpoint, expires_at }
        ↓
 4. Frontend opens WebSocket to endpoint, sends first message: "frontend:{session_id}"
        ↓
-5. Agent (with same session_id, e.g. from Session API or env) opens WebSocket to endpoint, sends "agent:{session_id}"
+5. Agent (with same session_id) opens WebSocket to endpoint, sends "agent:{session_id}"
        ↓
 6. Proxy pairs frontend and agent by session_id, bridges bytes between them
 ```
 
 **Connection pool (DynamoDB):**
-- **Key:** region + session_id
-- **Role:** Track which sessions exist, who owns them, status (active/idle). Ensures no session_id overlap (conditional put).
-- **Does not:** Create or hold WebSocket connections. Those are created by the proxy when clients connect.
+- **Key:** user_id (PK) + session_id (SK) — user-centric access
+- **Attributes:** region, wavelength_zone_id, user_zone_sk, status, drone_id, endpoint, expires_at, created_at, updated_at, released_at, metadata
+- **GSIs:** UserZoneIndex (user_id + user_zone_sk), SessionIdIndex (session_id)
+- **Drone ID:** `{drone_name}-{uuid}` — user sets friendly name (e.g. `survey-alpha`); unique suffix for deduplication
+- **Role:** Track sessions, who owns them, status (active/idle). Does not create WebSocket connections.
 
-**Overlap avoidance:** Each POST /sessions generates a new UUID. Conditional put (`attribute_not_exists(session_id)`) retries on collision. Session IDs are unique per region.
+---
+
+## Flight Logs (S3)
+
+**Flow:** EC2 logs activity/telemetry during active sessions in parallel (no latency impact) → on session close, writes log file to S3.
+
+| Aspect | Detail |
+|--------|--------|
+| **Bucket** | `rdi-flight-logs-{env}-{account}` (Base Infra) |
+| **Replication** | Prod: primary + replica (e.g. eu-central-1 → eu-west-2); Staging: single region |
+| **Path** | `{user_id}/{wavelength_zone_id}/{drone_id}-{session_id}.log` |
+| **Write** | Proxy EC2 on session close — EC2 gets close signal, flushes buffer, uploads to S3 |
+| **Access** | Users browse logs by user_id; frontend can list by prefix |
+
+**Drone ID format:** `{user-set-name}-{uuid}` — e.g. `survey-alpha-a1b2c3d4-...` for easy identification in logs.
+
+**Implementation status:** Bucket and path structure are in place. The Proxy EC2 logic (log buffering, session-close detection, S3 upload) is to be implemented once initial flight controls are tested and validated.
 
 ---
 
@@ -268,7 +287,7 @@ Approximate AWS costs for a single region (e.g. us-east-1 or eu-central-1). Assu
 | **Session API Lambda** | ~1K–10K invocations | <$1 |
 | **API Gateway** | REST, ~1K–10K requests | $0.50–2 |
 | **DynamoDB** | On-demand, connection pool table | $1–5 |
-| **S3** | Lambda layers, proxy binary | <$1 |
+| **S3** | Lambda layers, proxy binary, flight logs | <$1–5 |
 | **KMS** | 1 key, low usage | $1 |
 | **EIP** | Not needed with ALB (Proxy is target); $0 | $0 |
 | **Data transfer** | Internet egress, inter-AZ | varies |

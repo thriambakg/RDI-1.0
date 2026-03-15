@@ -34,7 +34,8 @@ def lambda_handler(event: dict, context: Any) -> dict:
             return _response(401, {"error": "Unauthorized"}, headers)
 
         if http_method == "POST" and "sessions" in path:
-            return _create_session(user_id, headers)
+            body = json.loads(event.get("body") or "{}")
+            return _create_session(user_id, body, headers)
         if http_method == "DELETE" and "sessions" in path:
             body = json.loads(event.get("body") or "{}")
             session_id = body.get("session_id")
@@ -55,21 +56,43 @@ def _get_user_id(event: dict) -> str | None:
     return claims.get("sub")
 
 
-def _create_session(user_id: str, headers: dict) -> dict:
+# TTL bounds: default 4h for idle sessions, max 7 days
+DEFAULT_TTL_SECONDS = 14400  # 4 hours
+MAX_TTL_SECONDS = 604800  # 7 days
+
+
+def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     """Create or get existing session, return proxy endpoint."""
     session_id = str(uuid.uuid4())
     now = int(time.time())
-    expires_at = now + 3600  # 1 hour TTL
+    ttl_seconds = body.get("ttl_seconds")
+    if ttl_seconds is not None:
+        ttl_seconds = max(60, min(int(ttl_seconds), MAX_TTL_SECONDS))
+    else:
+        ttl_seconds = DEFAULT_TTL_SECONDS
+    expires_at = now + ttl_seconds
+
+    # Drone ID: {user-set name}-{uuid} for easy identification
+    drone_name = (body.get("drone_name") or "").strip() or "drone"
+    drone_id = f"{drone_name}-{uuid.uuid4()}"
+    wavelength_zone_id = body.get("wavelength_zone_id") or REGION
+    user_zone_sk = f"{wavelength_zone_id}#{session_id}"
 
     item = {
-        "region": {"S": REGION},
-        "session_id": {"S": session_id},
-        "status": {"S": "active"},
         "user_id": {"S": user_id},
-        "created_at": {"N": str(now)},
-        "expires_at": {"N": str(expires_at)},
+        "session_id": {"S": session_id},
+        "region": {"S": REGION},
+        "wavelength_zone_id": {"S": wavelength_zone_id},
+        "user_zone_sk": {"S": user_zone_sk},
+        "status": {"S": "active"},
+        "drone_id": {"S": drone_id},
         "endpoint": {"S": PROXY_ENDPOINT},
+        "created_at": {"N": str(now)},
+        "updated_at": {"N": str(now)},
+        "expires_at": {"N": str(expires_at)},
     }
+    if body.get("metadata") and isinstance(body["metadata"], dict):
+        item["metadata"] = {"S": json.dumps(body["metadata"])}
 
     dynamodb = boto3.client("dynamodb")
     try:
@@ -81,13 +104,14 @@ def _create_session(user_id: str, headers: dict) -> dict:
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
             pass  # Retry with new session_id
-            return _create_session(user_id, headers)
+            return _create_session(user_id, body, headers)
         raise
 
     return _response(
         200,
         {
             "session_id": session_id,
+            "drone_id": drone_id,
             "endpoint": PROXY_ENDPOINT,
             "expires_at": expires_at,
         },
@@ -100,18 +124,22 @@ def _release_session(user_id: str, session_id: str | None, headers: dict) -> dic
     if not session_id:
         return _response(400, {"error": "session_id required"}, headers)
 
+    now = int(time.time())
     dynamodb = boto3.client("dynamodb")
     try:
         dynamodb.update_item(
             TableName=TABLE_NAME,
             Key={
-                "region": {"S": REGION},
+                "user_id": {"S": user_id},
                 "session_id": {"S": session_id},
             },
-            UpdateExpression="SET #status = :idle",
-            ConditionExpression="user_id = :uid",
+            UpdateExpression="SET #status = :idle, updated_at = :now, released_at = :now",
+            ConditionExpression="attribute_exists(session_id)",
             ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={":idle": {"S": "idle"}, ":uid": {"S": user_id}},
+            ExpressionAttributeValues={
+                ":idle": {"S": "idle"},
+                ":now": {"N": str(now)},
+            },
         )
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
@@ -134,7 +162,7 @@ def _get_session(
         resp = dynamodb.get_item(
             TableName=TABLE_NAME,
             Key={
-                "region": {"S": REGION},
+                "user_id": {"S": user_id},
                 "session_id": {"S": session_id},
             },
         )
@@ -142,13 +170,14 @@ def _get_session(
         raise
 
     item = resp.get("Item")
-    if not item or item.get("user_id", {}).get("S") != user_id:
+    if not item:
         return _response(404, {"error": "Session not found"}, headers)
 
     return _response(
         200,
         {
             "session_id": session_id,
+            "drone_id": item.get("drone_id", {}).get("S"),
             "endpoint": item.get("endpoint", {}).get("S"),
             "status": item.get("status", {}).get("S"),
         },
