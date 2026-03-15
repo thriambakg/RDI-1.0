@@ -484,7 +484,13 @@ module "alb_websocket" {
 }
 
 output "session_api_url" {
-  value = length(module.session_api) > 0 ? "${module.session_api[0].stage_url}sessions" : null
+  description = "Full URL to the sessions resource (for testing)"
+  value       = length(module.session_api) > 0 ? "${module.session_api[0].stage_url}sessions" : null
+}
+
+output "api_gateway_base_url" {
+  description = "Base URL for Session API and User Profile API (use as API_GATEWAY_URL / VITE_API_GATEWAY_URL in frontend)"
+  value       = length(module.session_api) > 0 ? module.session_api[0].stage_url : null
 }
 
 output "proxy_public_ip" {
