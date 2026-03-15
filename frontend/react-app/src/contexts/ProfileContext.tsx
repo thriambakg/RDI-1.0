@@ -12,7 +12,9 @@ export interface ProfileContextType {
   hierarchy: ConnectionHierarchy
   isLoading: boolean
   error: string | null
-  refetch: () => Promise<void>
+  refetch: (opts?: { silent?: boolean }) => Promise<void>
+  /** Apply an optimistic update to hierarchy; then refetch with silent to sync with backend. */
+  updateHierarchy: (updater: (h: ConnectionHierarchy) => ConnectionHierarchy) => void
 }
 
 const ProfileContext = createContext<ProfileContextType | undefined>(undefined)
@@ -25,20 +27,30 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
   const hierarchy = profile?.connection_hierarchy ?? {}
 
-  const fetchProfile = useCallback(async () => {
+  const fetchProfile = useCallback(async (opts?: { silent?: boolean }) => {
     if (!isAuthenticated) return
-    setIsLoading(true)
-    setError(null)
+    if (!opts?.silent) {
+      setIsLoading(true)
+      setError(null)
+    }
     try {
       const p = await getProfile()
       setProfile(p)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load profile')
-      setProfile(null)
+      if (!opts?.silent) {
+        setError(err instanceof Error ? err.message : 'Failed to load profile')
+        setProfile(null)
+      }
     } finally {
-      setIsLoading(false)
+      if (!opts?.silent) setIsLoading(false)
     }
   }, [isAuthenticated])
+
+  const updateHierarchy = useCallback((updater: (h: ConnectionHierarchy) => ConnectionHierarchy) => {
+    setProfile((prev) =>
+      prev ? { ...prev, connection_hierarchy: updater(prev.connection_hierarchy) } : null
+    )
+  }, [])
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -55,6 +67,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     isLoading,
     error,
     refetch: fetchProfile,
+    updateHierarchy,
   }
 
   return (

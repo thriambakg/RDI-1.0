@@ -20,7 +20,15 @@ import { useAuth } from '../../contexts/AuthContext'
 import { getEnvironmentRegions } from '../../config'
 import { CreateConnectionDialog, CreateFolderDialog, ConnectionDetailDialog } from '../../components/dialogues'
 import { useProfile } from '../../contexts/ProfileContext'
-import { deleteFolder, type FolderNode, type SessionRef, type ConnectionHierarchy } from '../../services/profileApi'
+import {
+  deleteFolder,
+  removeFolderAtPath,
+  removeSessionFromHierarchy,
+  addFolderAtPath,
+  type FolderNode,
+  type SessionRef,
+  type ConnectionHierarchy,
+} from '../../services/profileApi'
 import { deleteSession } from '../../services/sessionApi'
 import type { CreateSessionResponse } from '../../services/sessionApi'
 import './Console.css'
@@ -132,7 +140,7 @@ export default function Console() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false)
-  const { hierarchy, isLoading: profileLoading, refetch: fetchProfile } = useProfile()
+  const { hierarchy, isLoading: profileLoading, refetch: fetchProfile, updateHierarchy } = useProfile()
   const [selectedFolderPath, setSelectedFolderPath] = useState<string[]>([])
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null)
   const [detailSessionId, setDetailSessionId] = useState<string | null>(null)
@@ -142,33 +150,55 @@ export default function Console() {
 
   const connections = collectSessions(hierarchy, selectedFolderPath)
 
-  const handleConnectionCreated = useCallback((res: CreateSessionResponse) => {
-    console.log('[RDI Console] Session created', res)
-    fetchProfile()
-  }, [fetchProfile])
+  const handleConnectionCreated = useCallback(
+    (res: CreateSessionResponse) => {
+      console.log('[RDI Console] Session created', res)
+      fetchProfile()
+    },
+    [fetchProfile]
+  )
+
+  const handleFolderCreated = useCallback(
+    (folderName?: string) => {
+      if (folderName) {
+        updateHierarchy((h) => addFolderAtPath(h, selectedFolderPath, folderName))
+      }
+      return fetchProfile({ silent: true })
+    },
+    [selectedFolderPath, updateHierarchy, fetchProfile]
+  )
 
   const handleDeleteConnection = async (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation()
     setDeleteLoading(sessionId)
+    if (detailSessionId === sessionId) {
+      setDetailSessionId(null)
+      setDetailDialogOpen(false)
+    }
+    updateHierarchy((h) => removeSessionFromHierarchy(h, sessionId))
     try {
       await deleteSession(sessionId, true)
-      fetchProfile()
+      await fetchProfile({ silent: true })
     } catch (err) {
       console.error('[RDI Console] Delete failed', err)
+      await fetchProfile()
     } finally {
       setDeleteLoading(null)
     }
   }
 
   const handleDeleteFolder = async (path: string[]) => {
+    const wasSelected =
+      selectedFolderPath.length >= path.length &&
+      selectedFolderPath.slice(0, path.length).every((p, i) => p === path[i])
+    if (wasSelected) setSelectedFolderPath([])
+    updateHierarchy((h) => removeFolderAtPath(h, path))
     try {
       await deleteFolder(path)
-      if (selectedFolderPath.length >= path.length && selectedFolderPath.slice(0, path.length).every((p, i) => p === path[i])) {
-        setSelectedFolderPath([])
-      }
-      fetchProfile()
+      await fetchProfile({ silent: true })
     } catch (err) {
       console.error('[RDI Console] Delete folder failed', err)
+      await fetchProfile()
     }
   }
 
@@ -268,7 +298,7 @@ export default function Console() {
             open={createFolderDialogOpen}
             onClose={() => setCreateFolderDialogOpen(false)}
             parentPath={selectedFolderPath}
-            onSuccess={fetchProfile}
+            onSuccess={handleFolderCreated}
           />
         </aside>
 

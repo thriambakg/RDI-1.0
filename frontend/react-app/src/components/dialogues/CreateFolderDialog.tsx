@@ -26,7 +26,8 @@ export interface CreateFolderDialogProps {
   open: boolean
   onClose: () => void
   parentPath: string[]
-  onSuccess: () => void
+  /** Called with the new folder name after create; can be async. */
+  onSuccess: (folderName?: string) => void | Promise<void>
 }
 
 export function CreateFolderDialog({ open, onClose, parentPath, onSuccess }: CreateFolderDialogProps) {
@@ -46,7 +47,7 @@ export function CreateFolderDialog({ open, onClose, parentPath, onSuccess }: Cre
     try {
       await createFolder(parentPath, name)
       setFolderName('')
-      onSuccess()
+      await onSuccess(name)
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create folder')

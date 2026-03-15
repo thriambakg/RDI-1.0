@@ -45,12 +45,13 @@ def update_session_status(hierarchy: dict, session_id: str, status: str) -> dict
         for sub in folder.get("subfolders", {}).values():
             _update(sub)
 
-    _update(h)
+    for folder in h.values():
+        _update(folder)
     return h
 
 
 def remove_session(hierarchy: dict, session_id: str) -> dict:
-    """Remove session_id from hierarchy."""
+    """Remove session_id from hierarchy. Top-level keys are folder names (e.g. My Drones, Shared)."""
     h = _ensure_hierarchy(hierarchy)
 
     def _remove(folder: dict) -> None:
@@ -58,7 +59,8 @@ def remove_session(hierarchy: dict, session_id: str) -> dict:
         for sub in folder.get("subfolders", {}).values():
             _remove(sub)
 
-    _remove(h)
+    for folder in h.values():
+        _remove(folder)
     return h
 
 

@@ -67,7 +67,7 @@ export async function getProfile(): Promise<UserProfile> {
   const url = `${getApiBaseUrl()}/user-profile`
   const headers = await getAuthHeaders()
   logProfileRequest('GET', url, headers)
-  const res = await fetch(url, { method: 'GET', headers })
+  const res = await fetch(url, { method: 'GET', headers, cache: 'no-store' })
   const errBody = !res.ok ? await res.json().catch(() => ({})) : undefined
   logProfileResponse('GET', url, res.status, res.ok, errBody)
   if (!res.ok) {
@@ -111,4 +111,46 @@ export async function deleteFolder(folderPath: string[]): Promise<void> {
     const err = errBody as { error?: string }
     throw new Error(err?.error || `Delete folder failed: ${res.status}`)
   }
+}
+
+/** Immutable: remove a folder at path from hierarchy. */
+export function removeFolderAtPath(h: ConnectionHierarchy, path: string[]): ConnectionHierarchy {
+  if (path.length === 0) return h
+  if (path.length === 1) {
+    const { [path[0]]: _, ...rest } = h
+    return rest
+  }
+  const [first, ...rest] = path
+  const node = h[first]
+  if (!node) return h
+  if (rest.length === 1) {
+    const sub = node.subfolders ?? {}
+    const { [rest[0]]: _, ...subRest } = sub
+    return { ...h, [first]: { ...node, subfolders: subRest } }
+  }
+  const updatedSub = removeFolderAtPath(node.subfolders ?? {}, rest)
+  return { ...h, [first]: { ...node, subfolders: updatedSub } }
+}
+
+/** Immutable: remove one session from all folders. */
+export function removeSessionFromHierarchy(h: ConnectionHierarchy, sessionId: string): ConnectionHierarchy {
+  const out: ConnectionHierarchy = {}
+  for (const [name, node] of Object.entries(h)) {
+    const sessions = (node.sessions ?? []).filter((s) => s.session_id !== sessionId)
+    const subfolders = removeSessionFromHierarchy(node.subfolders ?? {}, sessionId)
+    out[name] = { ...node, sessions, subfolders }
+  }
+  return out
+}
+
+/** Immutable: add a folder at parentPath with given name. */
+export function addFolderAtPath(h: ConnectionHierarchy, parentPath: string[], folderName: string): ConnectionHierarchy {
+  const newFolder: FolderNode = { sessions: [], subfolders: {} }
+  if (parentPath.length === 0) {
+    return { ...h, [folderName]: newFolder }
+  }
+  const [first, ...rest] = parentPath
+  const node = h[first] ?? { sessions: [], subfolders: {} }
+  const updatedSub = addFolderAtPath(node.subfolders ?? {}, rest, folderName)
+  return { ...h, [first]: { ...node, subfolders: updatedSub } }
 }
