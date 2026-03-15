@@ -20,7 +20,7 @@ import {
   DialogActions,
 } from '@mui/material'
 import type { SelectChangeEvent } from '@mui/material'
-import { Delete as DeleteIcon, ExpandLess, ExpandMore, Folder, FolderOpen, MoreVert, PauseCircleOutline } from '@mui/icons-material'
+import { Delete as DeleteIcon, ExpandLess, ExpandMore, Folder, FolderOpen, MoreVert, PauseCircleOutline, PlayArrow } from '@mui/icons-material'
 import { useAuth } from '../../contexts/AuthContext'
 import { getEnvironmentRegions } from '../../config'
 import { CreateConnectionDialog, CreateFolderDialog, ConnectionDetailDialog } from '../../components/dialogues'
