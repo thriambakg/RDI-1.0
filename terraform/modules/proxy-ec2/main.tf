@@ -103,7 +103,7 @@ resource "aws_security_group" "proxy" {
   }
 
   ingress {
-    description = "Session status API (Lambda -> proxy instructions)"
+    description = "Session status API Lambda to proxy instructions"
     from_port   = var.proxy_status_port
     to_port     = var.proxy_status_port
     protocol    = "tcp"
