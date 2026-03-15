@@ -27,7 +27,7 @@ export function getConfig(): RDIConfig {
 
 export function getEnvironmentRegions(): { environment: string; regions: ReturnType<typeof getEdgeZonesForEnvironment> } {
   const config = getConfig()
-  const environment = config.ENVIRONMENT || getDefaultEnvironment()
+  const environment = config.ENVIRONMENT || getEnvironmentConfig().environment
   const regions = getEdgeZonesForEnvironment(environment)
   return { environment, regions }
 }
