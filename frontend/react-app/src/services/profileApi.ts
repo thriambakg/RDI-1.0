@@ -143,6 +143,19 @@ export function removeSessionFromHierarchy(h: ConnectionHierarchy, sessionId: st
   return out
 }
 
+/** Immutable: set status of a session (e.g. to 'idle') everywhere in hierarchy. */
+export function updateSessionStatusInHierarchy(h: ConnectionHierarchy, sessionId: string, status: string): ConnectionHierarchy {
+  const out: ConnectionHierarchy = {}
+  for (const [name, node] of Object.entries(h)) {
+    const sessions = (node.sessions ?? []).map((s) =>
+      s.session_id === sessionId ? { ...s, status } : s
+    )
+    const subfolders = updateSessionStatusInHierarchy(node.subfolders ?? {}, sessionId, status)
+    out[name] = { ...node, sessions, subfolders }
+  }
+  return out
+}
+
 /** Immutable: add a folder at parentPath with given name. */
 export function addFolderAtPath(h: ConnectionHierarchy, parentPath: string[], folderName: string): ConnectionHierarchy {
   const newFolder: FolderNode = { sessions: [], subfolders: {} }

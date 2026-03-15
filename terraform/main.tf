@@ -385,6 +385,14 @@ module "session_api" {
       lambda_arn              = module.session_api_lambda[0].function_arn
       authorization_type      = "COGNITO_USER_POOLS"
     }
+    patch_sessions = {
+      resource_key            = "sessions"
+      http_method             = "PATCH"
+      integration_type        = "AWS_PROXY"
+      integration_http_method = "POST"
+      lambda_arn              = module.session_api_lambda[0].function_arn
+      authorization_type      = "COGNITO_USER_POOLS"
+    }
     get_user_profile = {
       resource_key            = "user_profile"
       http_method             = "GET"
@@ -407,6 +415,7 @@ module "session_api" {
     post               = { function_arn = module.session_api_lambda[0].function_arn, http_method = "POST", resource_path = "sessions" }
     get                = { function_arn = module.session_api_lambda[0].function_arn, http_method = "GET", resource_path = "sessions" }
     delete             = { function_arn = module.session_api_lambda[0].function_arn, http_method = "DELETE", resource_path = "sessions" }
+    patch              = { function_arn = module.session_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "sessions" }
     get_user_profile   = { function_arn = module.user_profile_api_lambda[0].function_arn, http_method = "GET", resource_path = "user-profile" }
     patch_user_profile = { function_arn = module.user_profile_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "user-profile" }
   }

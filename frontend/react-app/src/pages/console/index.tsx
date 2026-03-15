@@ -7,15 +7,20 @@ import {
   FormControl,
   Select,
   MenuItem,
+  Menu,
   IconButton,
   Collapse,
   List,
   ListItemButton,
   ListItemText,
   ListItemSecondaryAction,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from '@mui/material'
 import type { SelectChangeEvent } from '@mui/material'
-import { Delete as DeleteIcon, ExpandLess, ExpandMore, Folder, FolderOpen } from '@mui/icons-material'
+import { Delete as DeleteIcon, ExpandLess, ExpandMore, Folder, FolderOpen, MoreVert, PauseCircleOutline } from '@mui/icons-material'
 import { useAuth } from '../../contexts/AuthContext'
 import { getEnvironmentRegions } from '../../config'
 import { CreateConnectionDialog, CreateFolderDialog, ConnectionDetailDialog } from '../../components/dialogues'
@@ -25,11 +30,12 @@ import {
   removeFolderAtPath,
   removeSessionFromHierarchy,
   addFolderAtPath,
+  updateSessionStatusInHierarchy,
   type FolderNode,
   type SessionRef,
   type ConnectionHierarchy,
 } from '../../services/profileApi'
-import { deleteSession } from '../../services/sessionApi'
+import { deleteSession, releaseSession, activateSession } from '../../services/sessionApi'
 import type { CreateSessionResponse } from '../../services/sessionApi'
 import './Console.css'
 
@@ -71,19 +77,20 @@ function FolderTree({
   hierarchy,
   selectedPath,
   onSelect,
-  onDelete,
+  onDeleteRequest,
   pathPrefix,
   depth = 0,
 }: {
   hierarchy: ConnectionHierarchy
   selectedPath: string[]
   onSelect: (path: string[]) => void
-  onDelete: (path: string[]) => void
+  onDeleteRequest: (path: string[]) => void
   pathPrefix?: string[]
   depth?: number
 }) {
   const prefix = pathPrefix ?? []
   const [open, setOpen] = useState<Record<string, boolean>>(depth === 0 ? { Shared: true } : {})
+  const [menuAnchor, setMenuAnchor] = useState<{ path: string[]; el: HTMLElement } | null>(null)
   const indentPx = 20
 
   return (
@@ -94,6 +101,7 @@ function FolderTree({
         const hasSubfolders = node.subfolders && Object.keys(node.subfolders).length > 0
         const isOpen = open[name] ?? false
         const nonDeletable = isSharedOrUnderShared(fullPath)
+        const isMenuOpen = menuAnchor !== null && menuAnchor.path.length === fullPath.length && menuAnchor.path.every((p, i) => p === fullPath[i])
         return (
           <Box key={name} className="folder-tree-item" sx={{ pl: depth * indentPx }}>
             <ListItemButton
@@ -134,22 +142,46 @@ function FolderTree({
                   <IconButton
                     size="small"
                     edge="end"
-                    onClick={(e) => { e.stopPropagation(); onDelete(fullPath) }}
-                    sx={{ color: '#ef4444', '&:hover': { color: '#f87171' } }}
-                    aria-label={`Delete folder ${name}`}
+                    onClick={(e) => { e.stopPropagation(); setMenuAnchor({ path: fullPath, el: e.currentTarget }) }}
+                    sx={{ color: '#94a3b8' }}
+                    aria-label="Folder options"
                   >
-                    <DeleteIcon sx={{ fontSize: 16 }} />
+                    <MoreVert sx={{ fontSize: 18 }} />
                   </IconButton>
                 </ListItemSecondaryAction>
               )}
             </ListItemButton>
+            <Menu
+              open={isMenuOpen}
+              anchorEl={isMenuOpen ? menuAnchor!.el : null}
+              onClose={() => setMenuAnchor(null)}
+              anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+              transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+              PaperProps={{
+                sx: {
+                  backgroundColor: '#1e293b',
+                  border: '1px solid #334155',
+                  '& .MuiMenuItem-root': { color: '#e2e8f0' },
+                },
+              }}
+            >
+              <MenuItem
+                onClick={() => {
+                  onDeleteRequest(fullPath)
+                  setMenuAnchor(null)
+                }}
+                sx={{ color: '#f87171' }}
+              >
+                <DeleteIcon sx={{ fontSize: 18, mr: 1 }} /> Delete
+              </MenuItem>
+            </Menu>
             {hasSubfolders && (
               <Collapse in={isOpen} unmountOnExit>
                 <FolderTree
                   hierarchy={node.subfolders ?? {}}
                   selectedPath={selectedPath}
                   onSelect={onSelect}
-                  onDelete={onDelete}
+                  onDeleteRequest={onDeleteRequest}
                   pathPrefix={fullPath}
                   depth={depth + 1}
                 />
@@ -170,6 +202,9 @@ export default function Console() {
   const { hierarchy, isLoading: profileLoading, refetch: fetchProfile, updateHierarchy } = useProfile()
   const [selectedFolderPath, setSelectedFolderPath] = useState<string[]>([])
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null)
+  const [connectionMenuAnchor, setConnectionMenuAnchor] = useState<{ sessionId: string; el: HTMLElement } | null>(null)
+  const [confirmDeleteConnection, setConfirmDeleteConnection] = useState<string | null>(null)
+  const [confirmDeleteFolderPath, setConfirmDeleteFolderPath] = useState<string[] | null>(null)
   const [detailSessionId, setDetailSessionId] = useState<string | null>(null)
   const [detailDialogOpen, setDetailDialogOpen] = useState(false)
   const navigate = useNavigate()
@@ -198,8 +233,10 @@ export default function Console() {
     [effectiveParentForNewFolder, updateHierarchy, fetchProfile]
   )
 
-  const handleDeleteConnection = async (sessionId: string, e: React.MouseEvent) => {
-    e.stopPropagation()
+  const handleDeleteConnection = async (sessionId: string, e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    setConfirmDeleteConnection(null)
+    setConnectionMenuAnchor(null)
     setDeleteLoading(sessionId)
     if (detailSessionId === sessionId) {
       setDetailSessionId(null)
@@ -217,7 +254,40 @@ export default function Console() {
     }
   }
 
-  const handleDeleteFolder = async (path: string[]) => {
+  const handlePauseConnection = async (sessionId: string) => {
+    setConnectionMenuAnchor(null)
+    setDeleteLoading(sessionId)
+    updateHierarchy((h) => updateSessionStatusInHierarchy(h, sessionId, 'idle'))
+    try {
+      await releaseSession(sessionId)
+      await fetchProfile({ silent: true })
+    } catch (err) {
+      console.error('[RDI Console] Pause failed', err)
+      await fetchProfile()
+    } finally {
+      setDeleteLoading(null)
+    }
+  }
+
+  const handleActivateConnection = async (sessionId: string) => {
+    setConnectionMenuAnchor(null)
+    setDeleteLoading(sessionId)
+    updateHierarchy((h) => updateSessionStatusInHierarchy(h, sessionId, 'active'))
+    try {
+      await activateSession(sessionId)
+      await fetchProfile({ silent: true })
+    } catch (err) {
+      console.error('[RDI Console] Activate failed', err)
+      await fetchProfile()
+    } finally {
+      setDeleteLoading(null)
+    }
+  }
+
+  const handleConfirmDeleteFolder = async () => {
+    if (!confirmDeleteFolderPath) return
+    const path = confirmDeleteFolderPath
+    setConfirmDeleteFolderPath(null)
     const wasSelected =
       selectedFolderPath.length >= path.length &&
       selectedFolderPath.slice(0, path.length).every((p, i) => p === path[i])
@@ -313,7 +383,7 @@ export default function Console() {
                 hierarchy={hierarchy}
                 selectedPath={selectedFolderPath}
                 onSelect={setSelectedFolderPath}
-                onDelete={handleDeleteFolder}
+                onDeleteRequest={setConfirmDeleteFolderPath}
               />
             </List>
           )}
@@ -390,6 +460,104 @@ export default function Console() {
             open={detailDialogOpen}
             onClose={() => { setDetailDialogOpen(false); setDetailSessionId(null) }}
           />
+
+          <Menu
+            open={connectionMenuAnchor !== null}
+            anchorEl={connectionMenuAnchor?.el ?? null}
+            onClose={() => setConnectionMenuAnchor(null)}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+            PaperProps={{
+              sx: {
+                backgroundColor: '#1e293b',
+                border: '1px solid #334155',
+                '& .MuiMenuItem-root': { color: '#e2e8f0' },
+              },
+            }}
+          >
+            <MenuItem
+              onClick={() => connectionMenuAnchor && handlePauseConnection(connectionMenuAnchor.sessionId)}
+              disabled={connectionMenuAnchor ? connections.find((x) => x.session_id === connectionMenuAnchor.sessionId)?.status === 'idle' : false}
+            >
+              <PauseCircleOutline sx={{ fontSize: 18, mr: 1 }} /> Pause (set idle)
+            </MenuItem>
+            <MenuItem
+              onClick={() => connectionMenuAnchor && handleActivateConnection(connectionMenuAnchor.sessionId)}
+              disabled={connectionMenuAnchor ? connections.find((x) => x.session_id === connectionMenuAnchor.sessionId)?.status === 'active' : false}
+            >
+              <PlayArrow sx={{ fontSize: 18, mr: 1 }} /> Reactivate
+            </MenuItem>
+            <MenuItem
+              onClick={() => {
+                if (connectionMenuAnchor) {
+                  setConfirmDeleteConnection(connectionMenuAnchor.sessionId)
+                  setConnectionMenuAnchor(null)
+                }
+              }}
+              sx={{ color: '#f87171' }}
+            >
+              <DeleteIcon sx={{ fontSize: 18, mr: 1 }} /> Delete
+            </MenuItem>
+          </Menu>
+
+          <Dialog
+            open={confirmDeleteConnection !== null}
+            onClose={() => setConfirmDeleteConnection(null)}
+            PaperProps={{
+              sx: {
+                backgroundColor: '#1e293b',
+                border: '1px solid #334155',
+                color: '#f8fafc',
+              },
+            }}
+          >
+            <DialogTitle>Delete connection</DialogTitle>
+            <DialogContent>
+              <Typography>Are you sure you want to delete this connection? This cannot be undone.</Typography>
+            </DialogContent>
+            <DialogActions sx={{ borderTop: '1px solid #334155', p: 2 }}>
+              <Button onClick={() => setConfirmDeleteConnection(null)} sx={{ color: '#94a3b8' }} disableRipple>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => confirmDeleteConnection && handleDeleteConnection(confirmDeleteConnection)}
+                sx={{ color: '#f87171' }}
+                disableRipple
+                disabled={deleteLoading === confirmDeleteConnection}
+              >
+                Delete
+              </Button>
+            </DialogActions>
+          </Dialog>
+
+          <Dialog
+            open={confirmDeleteFolderPath !== null && confirmDeleteFolderPath.length > 0}
+            onClose={() => setConfirmDeleteFolderPath(null)}
+            PaperProps={{
+              sx: {
+                backgroundColor: '#1e293b',
+                border: '1px solid #334155',
+                color: '#f8fafc',
+              },
+            }}
+          >
+            <DialogTitle>Delete folder</DialogTitle>
+            <DialogContent>
+              <Typography>
+                Are you sure you want to delete the folder &quot;{confirmDeleteFolderPath?.[confirmDeleteFolderPath.length - 1] ?? ''}&quot;?
+                Sessions in it will become uncategorized.
+              </Typography>
+            </DialogContent>
+            <DialogActions sx={{ borderTop: '1px solid #334155', p: 2 }}>
+              <Button onClick={() => setConfirmDeleteFolderPath(null)} sx={{ color: '#94a3b8' }} disableRipple>
+                Cancel
+              </Button>
+              <Button onClick={handleConfirmDeleteFolder} sx={{ color: '#f87171' }} disableRipple>
+                Delete
+              </Button>
+            </DialogActions>
+          </Dialog>
+
           <Typography component="h2" variant="subtitle2" sx={{ color: '#64748b', mb: 1, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             Connections
           </Typography>
@@ -407,24 +575,26 @@ export default function Console() {
                   onClick={() => handleConnectionClick(c.session_id)}
                 >
                   <IconButton
-                    aria-label="Delete connection"
-                    onClick={(e) => handleDeleteConnection(c.session_id, e)}
+                    aria-label="Connection options"
+                    onClick={(e) => { e.stopPropagation(); setConnectionMenuAnchor({ sessionId: c.session_id, el: e.currentTarget }) }}
                     disabled={deleteLoading === c.session_id}
                     sx={{
                       position: 'absolute',
                       top: 4,
                       right: 4,
-                      color: '#ef4444',
+                      color: '#94a3b8',
                       p: 0.5,
-                      '&:hover': { color: '#f87171', backgroundColor: 'rgba(239, 68, 68, 0.1)' },
+                      '&:hover': { color: '#e2e8f0', backgroundColor: 'rgba(148, 163, 184, 0.1)' },
                     }}
                     size="small"
                   >
-                    <DeleteIcon sx={{ fontSize: 18 }} />
+                    <MoreVert sx={{ fontSize: 18 }} />
                   </IconButton>
                   <div className={`status-dot ${c.status === 'active' ? 'connected' : c.status === 'idle' ? 'idle' : 'offline'}`} />
                   <Typography variant="subtitle1" sx={{ m: '0.5rem 0 0.25rem', color: '#f8fafc', pr: 3 }}>{c.name}</Typography>
-                  <Typography component="span" sx={{ fontSize: '0.8rem', color: '#94a3b8' }}>{c.status}</Typography>
+                  <Typography component="span" sx={{ fontSize: '0.8rem', color: c.status === 'idle' ? '#eab308' : '#94a3b8' }}>
+                    {c.status === 'active' ? 'Active' : c.status === 'idle' ? 'Idle' : c.status}
+                  </Typography>
                 </Box>
               ))
             )}

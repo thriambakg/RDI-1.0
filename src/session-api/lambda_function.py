@@ -40,6 +40,9 @@ def lambda_handler(event: dict, context: Any) -> dict:
         if http_method == "POST" and "sessions" in path:
             body = json.loads(event.get("body") or "{}")
             return _create_session(user_id, body, headers)
+        if http_method == "PATCH" and "sessions" in path:
+            body = json.loads(event.get("body") or "{}")
+            return _patch_session(user_id, body, headers)
         if http_method == "DELETE" and "sessions" in path:
             body = json.loads(event.get("body") or "{}")
             session_id = body.get("session_id")
@@ -192,6 +195,43 @@ def _release_session(user_id: str, session_id: str | None, headers: dict, *, per
         _upsert_profile_update_status(dynamodb, user_id, session_id, "idle")
 
     return _response(200, {"message": "Session released"}, headers)
+
+
+def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
+    """Set session status (e.g. active). Body: session_id, status."""
+    session_id = body.get("session_id")
+    status = (body.get("status") or "").strip().lower()
+    if not session_id:
+        return _response(400, {"error": "session_id required"}, headers)
+    if status not in ("active", "idle"):
+        return _response(400, {"error": "status must be 'active' or 'idle'"}, headers)
+
+    dynamodb = boto3.client("dynamodb")
+    now = int(time.time())
+    try:
+        dynamodb.update_item(
+            TableName=TABLE_NAME,
+            Key={
+                "user_id": {"S": user_id},
+                "session_id": {"S": session_id},
+            },
+            UpdateExpression="SET #status = :status, updated_at = :now",
+            ConditionExpression="attribute_exists(session_id)",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={
+                ":status": {"S": status},
+                ":now": {"N": str(now)},
+            },
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return _response(404, {"error": "Session not found"}, headers)
+        raise
+
+    if USER_PROFILES_TABLE:
+        _upsert_profile_update_status(dynamodb, user_id, session_id, status)
+
+    return _response(200, {"message": f"Session set to {status}"}, headers)
 
 
 def _get_session(

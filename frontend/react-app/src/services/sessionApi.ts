@@ -109,6 +109,21 @@ export async function releaseSession(session_id: string): Promise<void> {
   console.log('✅ [RDI Session API] Session released:', { session_id })
 }
 
+export async function activateSession(session_id: string): Promise<void> {
+  const url = `${getApiBaseUrl()}/sessions`
+  const body = { session_id, status: 'active' }
+  const headers = await getAuthHeaders()
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as { error?: string }).error || `Activate session failed: ${res.status}`)
+  }
+}
+
 export async function listSessions(wavelengthZoneId?: string): Promise<ListSessionsResponse> {
   const params = wavelengthZoneId ? `?wavelength_zone_id=${encodeURIComponent(wavelengthZoneId)}` : ''
   const url = `${getApiBaseUrl()}/sessions${params}`
