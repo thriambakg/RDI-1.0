@@ -1,14 +1,21 @@
 import { getEdgeZonesForEnvironment } from './config/environment-regions'
-import { getApiGatewayUrl, getAwsRegion, getEnvironmentConfig } from './config/environment'
+import {
+  getApiGatewayUrl,
+  getAwsRegion,
+  getEnvironmentConfig,
+  getCognitoUserPoolId,
+  getCognitoClientId,
+  getCognitoDomain,
+} from './config/environment'
 
 export function getConfig(): RDIConfig {
   const envConfig = getEnvironmentConfig();
   const runtime = typeof window !== 'undefined' ? window.__RDI_CONFIG__ : undefined;
   return {
     AWS_REGION: getAwsRegion(),
-    COGNITO_USER_POOL_ID: runtime?.COGNITO_USER_POOL_ID ?? import.meta.env.VITE_COGNITO_USER_POOL_ID ?? '',
-    COGNITO_CLIENT_ID: runtime?.COGNITO_CLIENT_ID ?? import.meta.env.VITE_COGNITO_USER_POOL_CLIENT_ID ?? '',
-    COGNITO_DOMAIN: runtime?.COGNITO_DOMAIN ?? import.meta.env.VITE_COGNITO_DOMAIN ?? '',
+    COGNITO_USER_POOL_ID: getCognitoUserPoolId(),
+    COGNITO_CLIENT_ID: getCognitoClientId(),
+    COGNITO_DOMAIN: getCognitoDomain(),
     REDIRECT_SIGN_IN: runtime?.REDIRECT_SIGN_IN ?? import.meta.env.VITE_REDIRECT_SIGN_IN ?? 'http://localhost:5173/auth/callback',
     REDIRECT_SIGN_OUT: runtime?.REDIRECT_SIGN_OUT ?? import.meta.env.VITE_REDIRECT_SIGN_OUT ?? 'http://localhost:5173',
     API_GATEWAY_URL: getApiGatewayUrl(),

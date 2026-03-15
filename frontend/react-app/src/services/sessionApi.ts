@@ -1,8 +1,8 @@
 /**
  * Session API client - create/release sessions with Cognito Bearer token
  */
-import { fetchAuthSession } from 'aws-amplify/auth'
 import { getConfig } from '../config'
+import { getAuthHeaders } from './authHeaders'
 
 const getApiBaseUrl = (): string => {
   const cfg = getConfig()
@@ -16,30 +16,6 @@ if (typeof window !== 'undefined') {
     baseUrl: baseUrl || '(not set)',
     isConfigured: !!baseUrl,
   })
-}
-
-async function getAuthHeaders(): Promise<Record<string, string>> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  }
-  try {
-    const session = await fetchAuthSession()
-    const token = session.tokens?.idToken || session.tokens?.accessToken
-    if (token && typeof token.toString === 'function') {
-      const bearer = token.toString()
-      headers['Authorization'] = `Bearer ${bearer}`
-      console.log('🔒 [RDI Session API] Auth token attached:', {
-        tokenLength: bearer.length,
-        tokenPrefix: bearer.substring(0, 20) + '...',
-        type: session.tokens?.idToken ? 'idToken' : 'accessToken',
-      })
-    } else {
-      console.warn('🔒 [RDI Session API] No auth token - request may fail with 401')
-    }
-  } catch (e) {
-    console.warn('🔒 [RDI Session API] Failed to fetch auth session:', e)
-  }
-  return headers
 }
 
 export interface CreateSessionParams {

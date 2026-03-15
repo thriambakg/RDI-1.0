@@ -1,8 +1,8 @@
 /**
  * User Profile API - fetches connection hierarchy (folders)
  */
-import { fetchAuthSession } from 'aws-amplify/auth'
 import { getConfig } from '../config'
+import { getAuthHeaders } from './authHeaders'
 
 const getApiBaseUrl = (): string => {
   const cfg = getConfig()
@@ -10,14 +10,31 @@ const getApiBaseUrl = (): string => {
   return url.endsWith('/') ? url.slice(0, -1) : url
 }
 
-function logProfileRequest(method: string, url: string, body?: unknown) {
+function logProfileRequest(
+  method: string,
+  url: string,
+  headers: Record<string, string>,
+  body?: unknown
+) {
   if (typeof window === 'undefined') return
   const base = getApiBaseUrl()
+  const authValue = headers['Authorization']
+  const tokenPart = authValue?.replace(/^Bearer\s+/i, '') ?? ''
   console.log('[RDI Profile API]', method, url, {
     resolvedUrl: url,
     apiBaseUrl: base || '(empty – requests will go to same origin)',
     ...(body !== undefined && { body }),
   })
+  if (authValue && tokenPart) {
+    console.log('🔒 [RDI Profile API] Authorization header present:', {
+      hasToken: true,
+      tokenLength: tokenPart.length,
+      tokenPrefix: tokenPart.substring(0, 30) + '...',
+      fullHeaderPrefix: authValue.substring(0, 50) + '...',
+    })
+  } else {
+    console.warn('⚠️ [RDI Profile API] No Authorization header – request will likely fail with 401')
+  }
 }
 
 function logProfileResponse(method: string, url: string, status: number, ok: boolean, errBody?: unknown) {
@@ -26,20 +43,6 @@ function logProfileResponse(method: string, url: string, status: number, ok: boo
   if (!ok && errBody !== undefined) {
     console.error('[RDI Profile API] Error response body:', errBody)
   }
-}
-
-async function getAuthHeaders(): Promise<Record<string, string>> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  try {
-    const session = await fetchAuthSession()
-    const token = session.tokens?.idToken || session.tokens?.accessToken
-    if (token && typeof token.toString === 'function') {
-      headers['Authorization'] = `Bearer ${token.toString()}`
-    }
-  } catch {
-    /* ignore */
-  }
-  return headers
 }
 
 export interface SessionRef {
@@ -62,8 +65,8 @@ export interface UserProfile {
 
 export async function getProfile(): Promise<UserProfile> {
   const url = `${getApiBaseUrl()}/user-profile`
-  logProfileRequest('GET', url)
   const headers = await getAuthHeaders()
+  logProfileRequest('GET', url, headers)
   const res = await fetch(url, { method: 'GET', headers })
   const errBody = !res.ok ? await res.json().catch(() => ({})) : undefined
   logProfileResponse('GET', url, res.status, res.ok, errBody)
@@ -77,8 +80,8 @@ export async function getProfile(): Promise<UserProfile> {
 export async function createFolder(parentPath: string[], folderName: string): Promise<void> {
   const url = `${getApiBaseUrl()}/user-profile`
   const body = { action: 'create_folder', parent_path: parentPath, folder_name: folderName }
-  logProfileRequest('PATCH', url, body)
   const headers = await getAuthHeaders()
+  logProfileRequest('PATCH', url, headers, body)
   const res = await fetch(url, {
     method: 'PATCH',
     headers,
@@ -95,8 +98,8 @@ export async function createFolder(parentPath: string[], folderName: string): Pr
 export async function deleteFolder(folderPath: string[]): Promise<void> {
   const url = `${getApiBaseUrl()}/user-profile`
   const body = { action: 'delete_folder', folder_path: folderPath }
-  logProfileRequest('PATCH', url, body)
   const headers = await getAuthHeaders()
+  logProfileRequest('PATCH', url, headers, body)
   const res = await fetch(url, {
     method: 'PATCH',
     headers,

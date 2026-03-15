@@ -18,6 +18,15 @@ DEFAULT_HIERARCHY = {
 }
 
 
+def _response(status_code: int, body: dict, headers: dict) -> dict:
+    """Return API Gateway Lambda proxy response."""
+    return {
+        "statusCode": status_code,
+        "headers": headers,
+        "body": json.dumps(body),
+    }
+
+
 def lambda_handler(event: dict, context: Any) -> dict:
     """Handle API Gateway GET /user-profile."""
     http_method = event.get("httpMethod", "GET")

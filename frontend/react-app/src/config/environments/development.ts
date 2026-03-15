@@ -4,6 +4,9 @@ export const DEVELOPMENT_CONFIG = {
   environment: 'development' as const,
   apiGatewayUrl: 'https://your-api-id.execute-api.us-east-1.amazonaws.com/development',
   awsRegion: 'us-east-1',
+  cognitoUserPoolId: '' as string,
+  cognitoClientId: '' as string,
+  cognitoDomain: '' as string,
 };
 
 export default DEVELOPMENT_CONFIG;

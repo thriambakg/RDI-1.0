@@ -11,6 +11,9 @@ export interface RDIEnvironmentConfig {
   environment: RDIEnvironment;
   apiGatewayUrl: string;
   awsRegion: string;
+  cognitoUserPoolId: string;
+  cognitoClientId: string;
+  cognitoDomain: string;
 }
 
 const ENV_CONFIGS: Record<RDIEnvironment, RDIEnvironmentConfig> = {
@@ -59,11 +62,42 @@ export function getAwsRegion(): string {
   return ENV_CONFIGS[getCurrentEnvironment()].awsRegion;
 }
 
+/** Cognito User Pool ID for this environment. Env file overrides runtime when set (so staging can use us-east-1 pool). */
+export function getCognitoUserPoolId(): string {
+  const env = getCurrentEnvironment();
+  const fromEnv = ENV_CONFIGS[env].cognitoUserPoolId;
+  if (fromEnv) return fromEnv;
+  const runtime = typeof window !== 'undefined' ? window.__RDI_CONFIG__?.COGNITO_USER_POOL_ID : undefined;
+  if (runtime) return runtime;
+  return import.meta.env.VITE_COGNITO_USER_POOL_ID ?? '';
+}
+
+export function getCognitoClientId(): string {
+  const env = getCurrentEnvironment();
+  const fromEnv = ENV_CONFIGS[env].cognitoClientId;
+  if (fromEnv) return fromEnv;
+  const runtime = typeof window !== 'undefined' ? window.__RDI_CONFIG__?.COGNITO_CLIENT_ID : undefined;
+  if (runtime) return runtime;
+  return import.meta.env.VITE_COGNITO_USER_POOL_CLIENT_ID ?? '';
+}
+
+export function getCognitoDomain(): string {
+  const env = getCurrentEnvironment();
+  const fromEnv = ENV_CONFIGS[env].cognitoDomain;
+  if (fromEnv) return fromEnv;
+  const runtime = typeof window !== 'undefined' ? window.__RDI_CONFIG__?.COGNITO_DOMAIN : undefined;
+  if (runtime) return runtime;
+  return import.meta.env.VITE_COGNITO_DOMAIN ?? '';
+}
+
 export function getEnvironmentConfig(): RDIEnvironmentConfig {
   const environment = getCurrentEnvironment();
   return {
     environment,
     apiGatewayUrl: getApiGatewayUrl(),
     awsRegion: getAwsRegion(),
+    cognitoUserPoolId: getCognitoUserPoolId(),
+    cognitoClientId: getCognitoClientId(),
+    cognitoDomain: getCognitoDomain(),
   };
 }
