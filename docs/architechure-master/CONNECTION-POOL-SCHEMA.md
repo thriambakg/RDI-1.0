@@ -12,7 +12,8 @@
 | `status` | S | `active` \| `idle` |
 | `drone_id` | S | `{drone_name}-{uuid}` — user-friendly + unique |
 | `endpoint` | S | Proxy WebSocket URL (e.g. `wss://…`) |
-| `expires_at` | N | Unix timestamp — TTL attribute |
+| `expires_at` | N | Set to a far-future value so DynamoDB TTL does not delete; deletion is explicit only. |
+| `idle_after` | N | Optional. Unix timestamp — when to transition to idle (scheduled Lambda). |
 | `created_at` | N | Unix timestamp |
 | `updated_at` | N | Unix timestamp — last modification |
 | `released_at` | N | Unix timestamp — when status went to idle (optional) |
@@ -52,11 +53,11 @@
 
 ---
 
-## TTL
+## TTL and idle vs delete
 
-- `expires_at` is the TTL attribute.
-- `POST /sessions` body accepts `ttl_seconds` (optional). Default 4h, min 60s, max 7 days.
-- `ttl_seconds: 0` means no TTL (indefinite); backend uses a far-future `expires_at`.
+- **Deletion** happens only when the user explicitly deletes (DELETE with `permanent: true`). DynamoDB TTL is not used to delete session rows (that would remove the row from the connection pool but leave the user's list/hierarchy out of sync).
+- **Idle after time:** `POST /sessions` accepts `ttl_seconds` (optional). Default 4h, min 60s, max 7 days. The backend stores `idle_after` = now + ttl_seconds and `expires_at` = far-future. A scheduled job (EventBridge every 5 min) invokes the Session Lambda to mark active sessions as **idle** when `idle_after` has passed (updates status, notifies proxy, updates user hierarchy). The row stays in the table until the user explicitly deletes.
+- `ttl_seconds: 0` means no auto-idle (indefinite); no `idle_after` is set.
 
 ---
 

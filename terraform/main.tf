@@ -276,6 +276,7 @@ resource "aws_iam_policy" "session_api_dynamodb" {
           "dynamodb:UpdateItem",
           "dynamodb:DeleteItem",
           "dynamodb:Query",
+          "dynamodb:Scan",
           "dynamodb:BatchGetItem"
         ]
         Resource = [
@@ -434,6 +435,31 @@ module "session_api" {
 
   # Combine Lambda hash (auto) with manual trigger (bump local.session_api_deployment_trigger to force redeploy)
   deployment_trigger = "${module.session_api_lambda[0].source_code_hash}-${module.user_profile_api_lambda[0].source_code_hash}-${local.session_api_deployment_trigger}"
+}
+
+# Scheduled idle-expiry: mark sessions idle when idle_after has passed (no DynamoDB TTL delete)
+resource "aws_cloudwatch_event_rule" "session_idle_expiry" {
+  count               = var.base_state_bucket != "" ? 1 : 0
+  name                = "${var.project_name}-session-idle-expiry-${var.environment}"
+  description         = "Invoke Session API Lambda to mark TTL-expired sessions as idle (not delete)"
+  schedule_expression = "rate(5 minutes)"
+}
+
+resource "aws_cloudwatch_event_target" "session_idle_expiry" {
+  count     = var.base_state_bucket != "" ? 1 : 0
+  rule      = aws_cloudwatch_event_rule.session_idle_expiry[0].name
+  target_id = "SessionApiIdleExpiry"
+  arn       = module.session_api_lambda[0].function_arn
+  input     = jsonencode({ "source" = "schedule", "action" = "idle_expired_sessions" })
+}
+
+resource "aws_lambda_permission" "session_idle_expiry" {
+  count         = var.base_state_bucket != "" ? 1 : 0
+  statement_id  = "AllowExecutionFromEventBridge"
+  action        = "lambda:InvokeFunction"
+  function_name = module.session_api_lambda[0].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.session_idle_expiry[0].arn
 }
 
 # Proxy EC2 - depends on binary in S3 so user_data can fetch it at boot

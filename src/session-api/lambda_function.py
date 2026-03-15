@@ -52,7 +52,11 @@ def _notify_proxy_session_status(session_id: str, status: str) -> None:
 
 
 def lambda_handler(event: dict, context: Any) -> dict:
-    """Handle API Gateway requests."""
+    """Handle API Gateway requests or scheduled idle-expiry (EventBridge)."""
+    if event.get("source") == "schedule" and event.get("action") == "idle_expired_sessions":
+        _idle_expired_sessions()
+        return {"statusCode": 200, "body": "idle_expired_sessions done"}
+
     http_method = event.get("httpMethod", "GET")
     path = event.get("path", "")
 
@@ -95,6 +99,9 @@ def _get_user_id(event: dict) -> str | None:
 
 
 # TTL bounds: default 4h for idle sessions, max 7 days
+# We do NOT use DynamoDB TTL for deletion: TTL would remove the row and leave the user's list out of sync.
+# Instead we store expires_at = INDEFINITE and idle_after = when to transition to idle; a scheduled Lambda marks idle.
+# Deletion only happens on explicit user DELETE.
 DEFAULT_TTL_SECONDS = 14400  # 4 hours
 MAX_TTL_SECONDS = 604800  # 7 days
 INDEFINITE_EXPIRES_AT = 4102444800  # Year 2100 - no TTL (indefinite)
@@ -113,14 +120,17 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     ttl_seconds = body.get("ttl_seconds")
     if ttl_seconds is None:
         ttl_seconds = DEFAULT_TTL_SECONDS
+    ttl_val = int(ttl_seconds) if ttl_seconds is not None else DEFAULT_TTL_SECONDS
+    if ttl_val <= 0:
+        # No auto-idle; deletion only on explicit user delete
+        idle_after_ts = None
+        display_expires_at = INDEFINITE_EXPIRES_AT
     else:
-        ttl_val = int(ttl_seconds)
-        if ttl_val <= 0:
-            expires_at = INDEFINITE_EXPIRES_AT  # No TTL (indefinite)
-            ttl_seconds = None  # Not used for calculation
-        else:
-            ttl_seconds = max(60, min(ttl_val, MAX_TTL_SECONDS))
-            expires_at = now + ttl_seconds
+        ttl_seconds = max(60, min(ttl_val, MAX_TTL_SECONDS))
+        idle_after_ts = now + ttl_seconds  # When scheduled Lambda will mark idle
+        display_expires_at = idle_after_ts
+    # Never let DynamoDB TTL delete the row (would desync from user list); only explicit DELETE removes.
+    expires_at = INDEFINITE_EXPIRES_AT
 
     # Drone ID: {user-set name}-{uuid} for easy identification
     drone_name = (body.get("drone_name") or "").strip() or "drone"
@@ -141,6 +151,8 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
         "updated_at": {"N": str(now)},
         "expires_at": {"N": str(expires_at)},
     }
+    if idle_after_ts is not None:
+        item["idle_after"] = {"N": str(idle_after_ts)}
     if body.get("metadata") and isinstance(body["metadata"], dict):
         item["metadata"] = {"S": json.dumps(body["metadata"])}
 
@@ -172,7 +184,7 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
             "session_id": session_id,
             "drone_id": drone_id,
             "endpoint": PROXY_ENDPOINT,
-            "expires_at": expires_at,
+            "expires_at": display_expires_at,
         },
         headers,
     )
@@ -186,6 +198,7 @@ def _release_session(user_id: str, session_id: str | None, headers: dict, *, per
     dynamodb = boto3.client("dynamodb")
 
     if permanent:
+        session_existed = True
         try:
             dynamodb.delete_item(
                 TableName=TABLE_NAME,
@@ -197,11 +210,16 @@ def _release_session(user_id: str, session_id: str | None, headers: dict, *, per
             )
         except ClientError as e:
             if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-                return _response(404, {"error": "Session not found"}, headers)
-            raise
+                session_existed = False  # Session already gone (e.g. TTL or other); still clean hierarchy
+            else:
+                raise
         if USER_PROFILES_TABLE:
             _upsert_profile_remove_session(dynamodb, user_id, session_id)
-        return _response(200, {"message": "Session deleted"}, headers)
+        return _response(
+            200,
+            {"message": "Session deleted" if session_existed else "Session removed from list"},
+            headers,
+        )
 
     now = int(time.time())
     try:
@@ -229,6 +247,45 @@ def _release_session(user_id: str, session_id: str | None, headers: dict, *, per
     _notify_proxy_session_status(session_id, "idle")
 
     return _response(200, {"message": "Session released"}, headers)
+
+
+def _idle_expired_sessions() -> None:
+    """Scheduled job: mark active sessions as idle when idle_after has passed. Does not delete."""
+    dynamodb = boto3.client("dynamodb")
+    now = int(time.time())
+    paginator = dynamodb.get_paginator("scan")
+    page_iterator = paginator.paginate(
+        TableName=TABLE_NAME,
+        FilterExpression="(#status = :active) AND attribute_exists(idle_after) AND (idle_after < :now)",
+        ExpressionAttributeNames={"#status": "status"},
+        ExpressionAttributeValues={":active": {"S": "active"}, ":now": {"N": str(now)}},
+    )
+    for page in page_iterator:
+        for item in page.get("Items", []):
+            user_id = (item.get("user_id") or {}).get("S")
+            session_id = (item.get("session_id") or {}).get("S")
+            if not user_id or not session_id:
+                continue
+            try:
+                dynamodb.update_item(
+                    TableName=TABLE_NAME,
+                    Key={"user_id": {"S": user_id}, "session_id": {"S": session_id}},
+                    UpdateExpression="SET #status = :idle, updated_at = :now, released_at = :now",
+                    ConditionExpression="(#status = :active) AND idle_after < :now",
+                    ExpressionAttributeNames={"#status": "status"},
+                    ExpressionAttributeValues={
+                        ":idle": {"S": "idle"},
+                        ":active": {"S": "active"},
+                        ":now": {"N": str(now)},
+                    },
+                )
+            except ClientError as e:
+                if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                    continue  # Already idle or race
+                raise
+            if USER_PROFILES_TABLE:
+                _upsert_profile_update_status(dynamodb, user_id, session_id, "idle")
+            _notify_proxy_session_status(session_id, "idle")
 
 
 def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
@@ -338,6 +395,9 @@ def _get_session(
         # Extract display name from drone_id (format: name-uuid)
         drone_id = item.get("drone_id", {}).get("S") or "drone"
         name = drone_id.rsplit("-", 1)[0] if "-" in drone_id else drone_id
+        # Prefer idle_after for "when session goes idle"; else expires_at (both N)
+        exp_n = (item.get("idle_after") or item.get("expires_at")) or {}
+        expires_at_val = int(exp_n.get("N", "0") or "0")
         sessions.append({
             "session_id": sid,
             "drone_id": drone_id,
@@ -345,7 +405,7 @@ def _get_session(
             "status": item.get("status", {}).get("S") or "idle",
             "wavelength_zone_id": item.get("wavelength_zone_id", {}).get("S"),
             "endpoint": item.get("endpoint", {}).get("S"),
-            "expires_at": int(item.get("expires_at", {}).get("N", "0")),
+            "expires_at": expires_at_val,
         })
 
     return _response(200, {"sessions": sessions}, headers)

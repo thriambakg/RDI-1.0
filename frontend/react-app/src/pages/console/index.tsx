@@ -247,7 +247,7 @@ export default function Console() {
     updateHierarchy((h) => removeSessionFromHierarchy(h, sessionId))
     try {
       await deleteSession(sessionId, true)
-      await fetchProfile({ silent: true })
+      // Cache live update only; no refresh so UI stays in sync with optimistic remove
     } catch (err) {
       console.error('[RDI Console] Delete failed', err)
       await fetchProfile()
