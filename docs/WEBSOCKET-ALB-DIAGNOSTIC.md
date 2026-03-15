@@ -51,7 +51,7 @@ When the frontend fails to establish a WebSocket to the ALB (`wss://rdi-alb-v2-s
 **If the listener is HTTPS:443:** The ALB uses a certificate. The client connects to `wss://rdi-alb-v2-staging-....elb.amazonaws.com`.
 
 - **Possible issue:** Certificate is for a different hostname (e.g. custom domain). Browsers may reject or the connection can fail. Check the certificate’s CN/SAN in the console.
-- **Self-signed:** Browsers may block; usually you’d only use for testing or with a custom domain and trust.
+- **Self-signed:** Browsers and phones do **not** trust the ALB’s self-signed cert, so WSS can fail with 1006. For a **permanent, secure** setup that works in all browsers and on phones, use the **custom domain** option below.
 
 ---
 
@@ -165,3 +165,25 @@ In the console you should see `[RDI Ping] Starting { wsUrl: 'wss://...', ... }`.
 - **ws://** and port 80 → ALB must have HTTP listener forwarding to the target group.
 
 Restarting the React dev server does not change the endpoint (it comes from the session API) and will not fix ALB/listener/cert issues.
+
+---
+
+## 11. Permanent WSS solution (trusted cert, all browsers and phones)
+
+To use **WSS only** with a certificate that every browser and phone trusts (no self-signed, no manual trust):
+
+1. **Use a domain you control** (e.g. `rdi.example.com`).
+2. **Set Terraform variables** (e.g. in `environments/staging.auto.tfvars` or your workspace):
+   - `enable_custom_domain = true`
+   - `domain_name = "rdi.example.com"`  (your root domain)
+   - `subdomain = "wss.staging"`  (optional; gives `wss.staging.rdi.example.com`; leave empty to use `rdi.example.com`)
+3. **Delegate the domain to Route53:** Terraform will create a Route53 hosted zone for `domain_name`. Copy the zone’s **name servers** (e.g. from `terraform output` or AWS Console → Route53 → Hosted zones). At your domain registrar, set the **NS** records for `rdi.example.com` to those name servers so DNS and ACM validation can complete.
+4. **Apply:** Run `terraform apply`. The domain module will:
+   - Create the hosted zone (if new).
+   - Request an ACM certificate for `*.rdi.example.com` (and your subdomain is covered).
+   - Create DNS validation records and wait for validation.
+   - Create an **A record** (alias) pointing your WebSocket host (e.g. `wss.staging.rdi.example.com`) at the ALB.
+   The ALB will use this ACM cert, and the session API will return `wss://wss.staging.rdi.example.com` (or your chosen host).
+5. **Result:** Clients connect to `wss://<your-host>` with a **trusted** certificate, so WSS works in all browsers and on phones without any manual cert steps.
+
+**Security:** TLS is terminated at the ALB with a publicly trusted certificate; traffic from the ALB to the proxy remains inside AWS.

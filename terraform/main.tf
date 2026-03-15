@@ -248,7 +248,7 @@ module "session_api_lambda" {
   environment_variables = {
     CONNECTION_POOL_TABLE = local.connection_pool_tbl
     USER_PROFILES_TABLE   = local.user_profiles_tbl
-    PROXY_ENDPOINT        = length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2.websocket_endpoint
+    PROXY_ENDPOINT        = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2.websocket_endpoint)
     PROXY_STATUS_URL      = "http://${module.proxy_ec2.public_ip}:8767/session-status"
     PROXY_STATUS_SECRET   = random_password.proxy_status_secret.result
   }
@@ -465,9 +465,22 @@ module "proxy_ec2" {
   tags = {}
 }
 
-# SSL certificate for ALB WSS (self-signed for staging when no cert provided)
+# Custom domain: Route53 hosted zone + ACM DNS-validated cert (trusted in all browsers and on phones)
+module "domain" {
+  count  = var.enable_custom_domain && var.domain_name != "" ? 1 : 0
+  source = "./modules/domain"
+
+  enable_custom_domain = true
+  domain_name          = var.domain_name
+  subdomain            = var.subdomain
+  project_name         = var.project_name
+  environment          = var.environment
+  common_tags          = {}
+}
+
+# SSL certificate for ALB WSS (self-signed for staging when no custom domain and no cert provided)
 module "ssl_certificate" {
-  count  = var.enable_alb_wss && var.certificate_arn == "" ? 1 : 0
+  count  = var.enable_alb_wss && var.certificate_arn == "" && !(var.enable_custom_domain && var.domain_name != "") ? 1 : 0
   source = "./modules/ssl-certificate"
 
   project_name = var.project_name
@@ -485,7 +498,7 @@ module "alb_websocket" {
   environment        = var.environment
   vpc_id             = module.proxy_ec2.vpc_id
   public_subnet_ids  = module.proxy_ec2.alb_subnet_ids
-  certificate_arn    = var.certificate_arn != "" ? var.certificate_arn : module.ssl_certificate[0].certificate_arn
+  certificate_arn    = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? module.domain[0].certificate_arn : (var.certificate_arn != "" ? var.certificate_arn : module.ssl_certificate[0].certificate_arn)
   kms_key_arn        = module.kms.main_key_arn
   enable_waf         = false # WebSocket: skip WAF for lower latency and cost
   access_logs_bucket = ""
@@ -507,6 +520,20 @@ module "alb_websocket" {
   tags       = {}
 }
 
+# Point custom domain at the ALB so WSS is reachable at wss://<full_domain_name> with a trusted cert
+resource "aws_route53_record" "alb_wss" {
+  count   = var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0 && length(module.alb_websocket) > 0 ? 1 : 0
+  zone_id = module.domain[0].hosted_zone_id
+  name    = var.subdomain != "" ? "${var.subdomain}.${var.domain_name}" : var.domain_name
+  type    = "A"
+
+  alias {
+    name                   = module.alb_websocket[0].alb_dns_name
+    zone_id                = module.alb_websocket[0].alb_zone_id
+    evaluate_target_health = true
+  }
+}
+
 output "session_api_url" {
   description = "Full URL to the sessions resource (for testing)"
   value       = length(module.session_api) > 0 ? "${module.session_api[0].stage_url}sessions" : null
@@ -522,8 +549,13 @@ output "proxy_public_ip" {
 }
 
 output "proxy_websocket_endpoint" {
-  description = "WebSocket endpoint (wss when ALB enabled, ws otherwise)"
-  value       = length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2.websocket_endpoint
+  description = "WebSocket endpoint (wss when ALB enabled; use custom domain when enable_custom_domain is set)"
+  value       = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2.websocket_endpoint)
+}
+
+output "wss_custom_domain_name_servers" {
+  description = "Route53 name servers for domain_name; set these as NS at your registrar when enable_custom_domain is true"
+  value       = var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0 ? module.domain[0].hosted_zone_name_servers : null
 }
 
 output "alb_dns_name" {

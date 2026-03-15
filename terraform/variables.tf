@@ -88,7 +88,26 @@ variable "enable_alb_wss" {
 }
 
 variable "certificate_arn" {
-  description = "ACM certificate ARN for ALB HTTPS/WSS. Empty = use ssl-certificate module (self-signed for staging)."
+  description = "ACM certificate ARN for ALB HTTPS/WSS. Empty = use ssl-certificate module (self-signed for staging). Ignored when enable_custom_domain is true."
+  type        = string
+  default     = ""
+}
+
+# Custom domain for WSS (trusted cert, works in all browsers and on phones)
+variable "enable_custom_domain" {
+  description = "Use custom domain + ACM DNS-validated cert for WSS so connections are trusted in all browsers and on phones. Requires domain_name; optionally set subdomain (e.g. wss.staging for wss.staging.rdi.example.com)."
+  type        = bool
+  default     = false
+}
+
+variable "domain_name" {
+  description = "Root domain you control for custom domain (e.g. rdi.example.com). Required when enable_custom_domain is true; delegate this domain to the created Route53 hosted zone."
+  type        = string
+  default     = ""
+}
+
+variable "subdomain" {
+  description = "Subdomain for the WebSocket host (e.g. wss.staging for wss.staging.rdi.example.com). Leave empty to use domain_name as the host."
   type        = string
   default     = ""
 }
