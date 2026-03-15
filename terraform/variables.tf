@@ -39,6 +39,12 @@ variable "edge_zone_ids" {
   default     = []
 }
 
+variable "mavlink_port" {
+  description = "MAVLink UDP port for PX4 (14540 legacy, 18570 v1.13+). Passed to Wavelength EC2 and session metadata default."
+  type        = number
+  default     = 18570
+}
+
 variable "base_state_bucket" {
   description = "S3 bucket for base infra state (for reading connection pool, Cognito)"
   type        = string

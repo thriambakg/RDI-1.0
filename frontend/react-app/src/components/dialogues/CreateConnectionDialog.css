@@ -1,0 +1,53 @@
+/* Create Connection Dialog - force dark theme (#0f172a, #1e293b, #334155) */
+/* Overrides Amplify and other global styles that may affect MUI components */
+
+.rdi-create-connection-dialog .MuiDialog-paper {
+  background-color: #1e293b !important;
+  color: #f8fafc !important;
+  border: 1px solid #334155 !important;
+}
+
+.rdi-create-connection-dialog .MuiDialogContent-root {
+  background-color: #1e293b !important;
+  color: #f8fafc !important;
+}
+
+.rdi-create-connection-dialog .MuiDialogTitle-root {
+  color: #ffffff !important;
+  background-color: #1e293b !important;
+}
+
+.rdi-create-connection-dialog .MuiDialogActions-root {
+  background-color: #1e293b !important;
+  border-color: #334155 !important;
+}
+
+.rdi-create-connection-dialog .MuiOutlinedInput-root {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+}
+
+.rdi-create-connection-dialog .MuiOutlinedInput-root input,
+.rdi-create-connection-dialog .MuiOutlinedInput-root .MuiSelect-select {
+  color: #f8fafc !important;
+}
+
+.rdi-create-connection-dialog .MuiOutlinedInput-root input::placeholder {
+  color: #64748b !important;
+}
+
+.rdi-create-connection-dialog .MuiOutlinedInput-root fieldset {
+  border-color: #334155 !important;
+}
+
+.rdi-create-connection-dialog .MuiOutlinedInput-root:hover fieldset {
+  border-color: #475569 !important;
+}
+
+.rdi-create-connection-dialog .MuiOutlinedInput-root.Mui-focused fieldset {
+  border-color: #3b82f6 !important;
+}
+
+.rdi-create-connection-dialog .MuiInputLabel-root {
+  color: #94a3b8 !important;
+}

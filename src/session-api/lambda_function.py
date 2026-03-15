@@ -1,6 +1,7 @@
 """
 Session API - Connection pool management for RDI drone control.
 Assigns proxy endpoints to users, manages session lifecycle.
+Updates user profile connection_hierarchy on create, release, delete.
 """
 
 import json
@@ -12,9 +13,12 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
+from hierarchy import add_session_to_folder, update_session_status, remove_session
+
 TABLE_NAME = os.environ["CONNECTION_POOL_TABLE"]
 REGION = os.environ["AWS_REGION"]
 PROXY_ENDPOINT = os.environ["PROXY_ENDPOINT"]
+USER_PROFILES_TABLE = os.environ.get("USER_PROFILES_TABLE", "")
 
 
 def lambda_handler(event: dict, context: Any) -> dict:
@@ -39,7 +43,8 @@ def lambda_handler(event: dict, context: Any) -> dict:
         if http_method == "DELETE" and "sessions" in path:
             body = json.loads(event.get("body") or "{}")
             session_id = body.get("session_id")
-            return _release_session(user_id, session_id, headers)
+            permanent = body.get("permanent", False)
+            return _release_session(user_id, session_id, headers, permanent=permanent)
         if http_method == "GET" and "sessions" in path:
             return _get_session(user_id, event.get("queryStringParameters"), headers)
 
@@ -59,6 +64,7 @@ def _get_user_id(event: dict) -> str | None:
 # TTL bounds: default 4h for idle sessions, max 7 days
 DEFAULT_TTL_SECONDS = 14400  # 4 hours
 MAX_TTL_SECONDS = 604800  # 7 days
+INDEFINITE_EXPIRES_AT = 4102444800  # Year 2100 - no TTL (indefinite)
 
 
 def _create_session(user_id: str, body: dict, headers: dict) -> dict:
@@ -66,11 +72,16 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     session_id = str(uuid.uuid4())
     now = int(time.time())
     ttl_seconds = body.get("ttl_seconds")
-    if ttl_seconds is not None:
-        ttl_seconds = max(60, min(int(ttl_seconds), MAX_TTL_SECONDS))
-    else:
+    if ttl_seconds is None:
         ttl_seconds = DEFAULT_TTL_SECONDS
-    expires_at = now + ttl_seconds
+    else:
+        ttl_val = int(ttl_seconds)
+        if ttl_val <= 0:
+            expires_at = INDEFINITE_EXPIRES_AT  # No TTL (indefinite)
+            ttl_seconds = None  # Not used for calculation
+        else:
+            ttl_seconds = max(60, min(ttl_val, MAX_TTL_SECONDS))
+            expires_at = now + ttl_seconds
 
     # Drone ID: {user-set name}-{uuid} for easy identification
     drone_name = (body.get("drone_name") or "").strip() or "drone"
@@ -107,6 +118,18 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
             return _create_session(user_id, body, headers)
         raise
 
+    if USER_PROFILES_TABLE:
+        folder_path = body.get("folder_path")
+        if not isinstance(folder_path, list):
+            folder_path = ["My Drones"]
+        _upsert_profile_add_session(
+            dynamodb, user_id,
+            session_id=session_id,
+            name=drone_name,
+            status="active",
+            folder_path=folder_path,
+        )
+
     return _response(
         200,
         {
@@ -119,13 +142,32 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     )
 
 
-def _release_session(user_id: str, session_id: str | None, headers: dict) -> dict:
-    """Release session, mark as idle."""
+def _release_session(user_id: str, session_id: str | None, headers: dict, *, permanent: bool = False) -> dict:
+    """Release session (mark idle) or permanently delete."""
     if not session_id:
         return _response(400, {"error": "session_id required"}, headers)
 
-    now = int(time.time())
     dynamodb = boto3.client("dynamodb")
+
+    if permanent:
+        try:
+            dynamodb.delete_item(
+                TableName=TABLE_NAME,
+                Key={
+                    "user_id": {"S": user_id},
+                    "session_id": {"S": session_id},
+                },
+                ConditionExpression="attribute_exists(session_id)",
+            )
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return _response(404, {"error": "Session not found"}, headers)
+            raise
+        if USER_PROFILES_TABLE:
+            _upsert_profile_remove_session(dynamodb, user_id, session_id)
+        return _response(200, {"message": "Session deleted"}, headers)
+
+    now = int(time.time())
     try:
         dynamodb.update_item(
             TableName=TABLE_NAME,
@@ -146,42 +188,171 @@ def _release_session(user_id: str, session_id: str | None, headers: dict) -> dic
             return _response(404, {"error": "Session not found"}, headers)
         raise
 
+    if USER_PROFILES_TABLE:
+        _upsert_profile_update_status(dynamodb, user_id, session_id, "idle")
+
     return _response(200, {"message": "Session released"}, headers)
 
 
 def _get_session(
     user_id: str, query_params: dict | None, headers: dict
 ) -> dict:
-    """Get session info by session_id."""
-    session_id = (query_params or {}).get("session_id") if query_params else None
-    if not session_id:
-        return _response(400, {"error": "session_id required"}, headers)
+    """Get session(s): single by session_id, or list all for user (optionally by zone)."""
+    params = query_params or {}
+    session_id = params.get("session_id")
+    wavelength_zone_id = params.get("wavelength_zone_id")
 
     dynamodb = boto3.client("dynamodb")
-    try:
-        resp = dynamodb.get_item(
-            TableName=TABLE_NAME,
-            Key={
-                "user_id": {"S": user_id},
-                "session_id": {"S": session_id},
+
+    if session_id:
+        # Single session lookup
+        try:
+            resp = dynamodb.get_item(
+                TableName=TABLE_NAME,
+                Key={
+                    "user_id": {"S": user_id},
+                    "session_id": {"S": session_id},
+                },
+            )
+        except ClientError:
+            raise
+
+        item = resp.get("Item")
+        if not item:
+            return _response(404, {"error": "Session not found"}, headers)
+
+        return _response(
+            200,
+            {
+                "session_id": session_id,
+                "drone_id": item.get("drone_id", {}).get("S"),
+                "endpoint": item.get("endpoint", {}).get("S"),
+                "status": item.get("status", {}).get("S"),
             },
+            headers,
         )
+
+    # List sessions for user
+    try:
+        if wavelength_zone_id:
+            # Use UserZoneIndex GSI
+            resp = dynamodb.query(
+                TableName=TABLE_NAME,
+                IndexName="UserZoneIndex",
+                KeyConditionExpression="user_id = :uid AND begins_with(user_zone_sk, :prefix)",
+                ExpressionAttributeValues={
+                    ":uid": {"S": user_id},
+                    ":prefix": {"S": f"{wavelength_zone_id}#"},
+                },
+            )
+        else:
+            resp = dynamodb.query(
+                TableName=TABLE_NAME,
+                KeyConditionExpression="user_id = :uid",
+                ExpressionAttributeValues={":uid": {"S": user_id}},
+            )
     except ClientError:
         raise
 
-    item = resp.get("Item")
-    if not item:
-        return _response(404, {"error": "Session not found"}, headers)
-
-    return _response(
-        200,
-        {
-            "session_id": session_id,
-            "drone_id": item.get("drone_id", {}).get("S"),
+    items = resp.get("Items", [])
+    sessions = []
+    for item in items:
+        sid = item.get("session_id", {}).get("S")
+        if not sid:
+            continue
+        # Extract display name from drone_id (format: name-uuid)
+        drone_id = item.get("drone_id", {}).get("S") or "drone"
+        name = drone_id.rsplit("-", 1)[0] if "-" in drone_id else drone_id
+        sessions.append({
+            "session_id": sid,
+            "drone_id": drone_id,
+            "name": name,
+            "status": item.get("status", {}).get("S") or "idle",
+            "wavelength_zone_id": item.get("wavelength_zone_id", {}).get("S"),
             "endpoint": item.get("endpoint", {}).get("S"),
-            "status": item.get("status", {}).get("S"),
-        },
-        headers,
+            "expires_at": int(item.get("expires_at", {}).get("N", "0")),
+        })
+
+    return _response(200, {"sessions": sessions}, headers)
+
+
+def _to_dynamo(obj: Any) -> dict:
+    """Convert Python obj to DynamoDB format."""
+    from boto3.dynamodb.types import TypeSerializer
+    return TypeSerializer().serialize(obj)
+
+
+def _from_dynamo(val: dict | None) -> Any:
+    """Convert DynamoDB format to Python."""
+    if not val:
+        return None
+    from boto3.dynamodb.types import TypeDeserializer
+    return TypeDeserializer().deserialize(val)
+
+
+def _upsert_profile_add_session(dynamodb, user_id: str, *, session_id: str, name: str, status: str, folder_path: list) -> None:
+    """Get or create profile, add session to folder, save."""
+    try:
+        resp = dynamodb.get_item(
+            TableName=USER_PROFILES_TABLE,
+            Key={"user_id": {"S": user_id}},
+        )
+    except ClientError:
+        return
+    item = resp.get("Item")
+    hierarchy = {}
+    if item and "connection_hierarchy" in item:
+        hierarchy = _from_dynamo(item["connection_hierarchy"]) or {}
+    hierarchy = add_session_to_folder(hierarchy, folder_path, session_id, name, status)
+    dynamodb.update_item(
+        TableName=USER_PROFILES_TABLE,
+        Key={"user_id": {"S": user_id}},
+        UpdateExpression="SET connection_hierarchy = :h",
+        ExpressionAttributeValues={":h": _to_dynamo(hierarchy)},
+    )
+
+
+def _upsert_profile_update_status(dynamodb, user_id: str, session_id: str, status: str) -> None:
+    """Update session status in hierarchy."""
+    try:
+        resp = dynamodb.get_item(
+            TableName=USER_PROFILES_TABLE,
+            Key={"user_id": {"S": user_id}},
+        )
+    except ClientError:
+        return
+    item = resp.get("Item")
+    if not item or "connection_hierarchy" not in item:
+        return
+    hierarchy = _from_dynamo(item["connection_hierarchy"]) or {}
+    hierarchy = update_session_status(hierarchy, session_id, status)
+    dynamodb.update_item(
+        TableName=USER_PROFILES_TABLE,
+        Key={"user_id": {"S": user_id}},
+        UpdateExpression="SET connection_hierarchy = :h",
+        ExpressionAttributeValues={":h": _to_dynamo(hierarchy)},
+    )
+
+
+def _upsert_profile_remove_session(dynamodb, user_id: str, session_id: str) -> None:
+    """Remove session from hierarchy."""
+    try:
+        resp = dynamodb.get_item(
+            TableName=USER_PROFILES_TABLE,
+            Key={"user_id": {"S": user_id}},
+        )
+    except ClientError:
+        return
+    item = resp.get("Item")
+    if not item or "connection_hierarchy" not in item:
+        return
+    hierarchy = _from_dynamo(item["connection_hierarchy"]) or {}
+    hierarchy = remove_session(hierarchy, session_id)
+    dynamodb.update_item(
+        TableName=USER_PROFILES_TABLE,
+        Key={"user_id": {"S": user_id}},
+        UpdateExpression="SET connection_hierarchy = :h",
+        ExpressionAttributeValues={":h": _to_dynamo(hierarchy)},
     )
 
 

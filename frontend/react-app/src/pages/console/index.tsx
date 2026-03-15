@@ -1,50 +1,190 @@
-import { useState, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Heading } from '@aws-amplify/ui-react'
-import { signOut } from 'aws-amplify/auth'
+import {
+  Box,
+  Button,
+  Typography,
+  FormControl,
+  Select,
+  MenuItem,
+  IconButton,
+  Collapse,
+  List,
+  ListItemButton,
+  ListItemText,
+  ListItemSecondaryAction,
+} from '@mui/material'
+import type { SelectChangeEvent } from '@mui/material'
+import { Delete as DeleteIcon, ExpandLess, ExpandMore, Folder, FolderOpen } from '@mui/icons-material'
+import { useAuth } from '../../contexts/AuthContext'
 import { getEnvironmentRegions } from '../../config'
+import { CreateConnectionDialog, CreateFolderDialog, ConnectionDetailDialog } from '../../components/dialogues'
+import { useProfile } from '../../contexts/ProfileContext'
+import { deleteFolder, type FolderNode, type SessionRef, type ConnectionHierarchy } from '../../services/profileApi'
+import { deleteSession } from '../../services/sessionApi'
+import type { CreateSessionResponse } from '../../services/sessionApi'
 import './Console.css'
 
 const { regions: EDGE_ZONES } = getEnvironmentRegions()
 
-const MOCK_DRONES: Record<string, { id: string; name: string; status: string }[]> = {
-  'use1-wl1-chi-wlz1': [{ id: 'drone-1', name: 'Chicago-Test', status: 'idle' }],
-  'euc1-wl1-ber-wlz1': [
-    { id: 'drone-2', name: 'FPV-Racer-01', status: 'connected' },
-    { id: 'drone-3', name: 'Survey-Pro', status: 'idle' },
-  ],
-  'euc1-wl1-dtm-wlz1': [],
-  'euc1-wl1-muc-wlz1': [],
-  'euw2-wl1-lon-wlz1': [{ id: 'drone-4', name: 'Cine-UK-01', status: 'connected' }],
-  'euw2-wl1-man-wlz1': [],
-  'euw2-wl2-man-wlz1': [],
+const selectSx = {
+  '& .MuiOutlinedInput-root': {
+    backgroundColor: '#1e293b',
+    color: '#f8fafc',
+    '& fieldset': { borderColor: '#334155' },
+    '&:hover fieldset': { borderColor: '#475569' },
+  },
+  '& .MuiSelect-select': { color: '#f8fafc' },
+}
+
+function collectSessions(hierarchy: ConnectionHierarchy, folderPath: string[]): SessionRef[] {
+  if (folderPath.length === 0) {
+    const all: SessionRef[] = []
+    const walk = (node: FolderNode) => {
+      all.push(...(node.sessions || []))
+      Object.values(node.subfolders || {}).forEach(walk)
+    }
+    Object.values(hierarchy).forEach(walk)
+    return all
+  }
+  let node: FolderNode | undefined = hierarchy[folderPath[0]]
+  for (let i = 1; i < folderPath.length && node; i++) {
+    node = node.subfolders?.[folderPath[i]]
+  }
+  return node?.sessions ?? []
+}
+
+function FolderTree({
+  hierarchy,
+  selectedPath,
+  onSelect,
+  onDelete,
+  pathPrefix,
+}: {
+  hierarchy: ConnectionHierarchy
+  selectedPath: string[]
+  onSelect: (path: string[]) => void
+  onDelete: (path: string[]) => void
+  pathPrefix?: string[]
+}) {
+  const prefix = pathPrefix ?? []
+  const [open, setOpen] = useState<Record<string, boolean>>({})
+
+  return (
+    <>
+      {Object.entries(hierarchy).map(([name, node]) => {
+        const fullPath = [...prefix, name]
+        const isSelected = selectedPath.length === fullPath.length && selectedPath.every((p, i) => p === fullPath[i])
+        const hasSubfolders = node.subfolders && Object.keys(node.subfolders).length > 0
+        const isOpen = open[name] ?? false
+        return (
+          <Box key={name} sx={{ pl: prefix.length * 1.5 }}>
+            <ListItemButton
+              selected={isSelected}
+              onClick={() => onSelect(fullPath)}
+              sx={{
+                py: 0.5,
+                borderRadius: '0.25rem',
+                '&.Mui-selected': { backgroundColor: 'rgba(59, 130, 246, 0.2)' },
+              }}
+            >
+              {hasSubfolders ? (
+                <IconButton size="small" onClick={(e) => { e.stopPropagation(); setOpen((o) => ({ ...o, [name]: !o[name] })) }} sx={{ mr: 0.5, color: '#94a3b8' }}>
+                  {isOpen ? <ExpandLess /> : <ExpandMore />}
+                </IconButton>
+              ) : (
+                <Box component="span" sx={{ width: 28, display: 'inline-block' }} />
+              )}
+              {isOpen ? <FolderOpen sx={{ mr: 0.5, fontSize: 18, color: '#94a3b8' }} /> : <Folder sx={{ mr: 0.5, fontSize: 18, color: '#94a3b8' }} />}
+              <ListItemText primary={name} primaryTypographyProps={{ fontSize: '0.875rem', color: '#e2e8f0' }} />
+              <ListItemSecondaryAction>
+                <IconButton
+                  size="small"
+                  edge="end"
+                  onClick={(e) => { e.stopPropagation(); onDelete(fullPath) }}
+                  sx={{ color: '#ef4444', '&:hover': { color: '#f87171' } }}
+                  aria-label={`Delete folder ${name}`}
+                >
+                  <DeleteIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </ListItemSecondaryAction>
+            </ListItemButton>
+            {hasSubfolders && (
+              <Collapse in={isOpen} unmountOnExit>
+                <FolderTree
+                  hierarchy={node.subfolders ?? {}}
+                  selectedPath={selectedPath}
+                  onSelect={onSelect}
+                  onDelete={onDelete}
+                  pathPrefix={fullPath}
+                />
+              </Collapse>
+            )}
+          </Box>
+        )
+      })}
+    </>
+  )
 }
 
 export default function Console() {
-  const [selectedZone, setSelectedZone] = useState(EDGE_ZONES[0] ?? { id: 'use1-wl1-chi-wlz1', city: 'Chicago', country: 'USA', carrier: 'Verizon' })
-  const [folders] = useState<string[]>(['My Drones', 'Shared'])
+  const [selectedZone] = useState(EDGE_ZONES[0] ?? { id: 'use1-wl1-chi-wlz1', city: 'Chicago', country: 'USA', carrier: 'Verizon' })
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false)
+  const { hierarchy, isLoading: profileLoading, refetch: fetchProfile } = useProfile()
+  const [selectedFolderPath, setSelectedFolderPath] = useState<string[]>([])
+  const [deleteLoading, setDeleteLoading] = useState<string | null>(null)
+  const [detailSessionId, setDetailSessionId] = useState<string | null>(null)
+  const [detailDialogOpen, setDetailDialogOpen] = useState(false)
   const navigate = useNavigate()
+  const { logout } = useAuth()
 
-  useEffect(() => {
-    const mq = window.matchMedia('(min-width: 768px)')
-    const handler = () => { if (mq.matches) setSidebarOpen(false) }
-    mq.addEventListener('change', handler)
-    return () => mq.removeEventListener('change', handler)
-  }, [])
+  const connections = collectSessions(hierarchy, selectedFolderPath)
 
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const { environment, regions } = getEnvironmentRegions()
-      console.log('[RDI Console] Environment', environment, '| Edge zones', regions.map((r) => r.id).join(', '))
+  const handleConnectionCreated = useCallback((res: CreateSessionResponse) => {
+    console.log('[RDI Console] Session created', res)
+    fetchProfile()
+  }, [fetchProfile])
+
+  const handleDeleteConnection = async (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setDeleteLoading(sessionId)
+    try {
+      await deleteSession(sessionId, true)
+      fetchProfile()
+    } catch (err) {
+      console.error('[RDI Console] Delete failed', err)
+    } finally {
+      setDeleteLoading(null)
     }
-  }, [])
+  }
 
-  const drones = MOCK_DRONES[selectedZone.id] || []
+  const handleDeleteFolder = async (path: string[]) => {
+    try {
+      await deleteFolder(path)
+      if (selectedFolderPath.length >= path.length && selectedFolderPath.slice(0, path.length).every((p, i) => p === path[i])) {
+        setSelectedFolderPath([])
+      }
+      fetchProfile()
+    } catch (err) {
+      console.error('[RDI Console] Delete folder failed', err)
+    }
+  }
+
+  const handleConnectionClick = (sessionId: string) => {
+    setDetailSessionId(sessionId)
+    setDetailDialogOpen(true)
+  }
 
   const handleSignOut = async () => {
-    await signOut()
+    await logout()
     navigate('/')
+  }
+
+  const handleZoneChange = (e: SelectChangeEvent<string>) => {
+    const z = EDGE_ZONES.find((x) => x.id === e.target.value)
+    if (z) return // keep selectedZone for now
   }
 
   return (
@@ -55,53 +195,160 @@ export default function Console() {
           <span className="hamburger" />
           <span className="hamburger" />
         </button>
-        <Heading level={4}>RDI Console</Heading>
-        <Button variation="link" onClick={handleSignOut}>Sign Out</Button>
+        <Typography variant="h6" component="h1" sx={{ flex: 1, margin: 0, color: '#f8fafc' }}>
+          RDI Console
+        </Typography>
+        <Button onClick={handleSignOut} disableRipple sx={{ color: '#3b82f6', textTransform: 'none' }}>
+          Sign Out
+        </Button>
       </header>
 
       <div className={`sidebar-backdrop ${sidebarOpen ? 'open' : ''}`} onClick={() => setSidebarOpen(false)} aria-hidden="true" />
 
       <div className="console-body">
         <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-          <h3>Edge Location</h3>
-          <select
-            value={selectedZone.id}
-            onChange={(e) => {
-              const z = EDGE_ZONES.find((x) => x.id === e.target.value)
-              if (z) setSelectedZone(z)
-            }}
+          <Typography variant="overline" sx={{ color: '#64748b', display: 'block', mb: 1 }}>
+            Edge Location
+          </Typography>
+          <FormControl fullWidth size="small" sx={selectSx}>
+            <Select
+              value={selectedZone.id}
+              onChange={handleZoneChange}
+              MenuProps={{
+                PaperProps: {
+                  sx: {
+                    backgroundColor: '#1e293b',
+                    border: '1px solid #334155',
+                    '& .MuiMenuItem-root': { color: '#f8fafc' },
+                  },
+                },
+              }}
+            >
+              {EDGE_ZONES.map((z) => (
+                <MenuItem key={z.id} value={z.id} disableRipple>
+                  {z.city} ({z.carrier})
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <Typography variant="overline" sx={{ color: '#64748b', display: 'block', mt: 2, mb: 1 }}>
+            Folders
+          </Typography>
+          {profileLoading ? (
+            <Typography sx={{ color: '#94a3b8', fontSize: '0.875rem' }}>Loading…</Typography>
+          ) : (
+            <List dense disablePadding>
+              <ListItemButton
+                selected={selectedFolderPath.length === 0}
+                onClick={() => setSelectedFolderPath([])}
+                sx={{
+                  py: 0.5,
+                  borderRadius: '0.25rem',
+                  '&.Mui-selected': { backgroundColor: 'rgba(59, 130, 246, 0.2)' },
+                }}
+              >
+                <ListItemText primary="All" primaryTypographyProps={{ fontSize: '0.875rem', color: '#e2e8f0' }} />
+              </ListItemButton>
+              <FolderTree
+                hierarchy={hierarchy}
+                selectedPath={selectedFolderPath}
+                onSelect={setSelectedFolderPath}
+                onDelete={handleDeleteFolder}
+              />
+            </List>
+          )}
+          <Button
+            onClick={() => setCreateFolderDialogOpen(true)}
+            disableRipple
+            sx={{ color: '#3b82f6', textTransform: 'none', p: 0, mt: 0.5, minWidth: 'auto' }}
           >
-            {EDGE_ZONES.map((z) => (
-              <option key={z.id} value={z.id}>{z.city} ({z.carrier})</option>
-            ))}
-          </select>
-          <h3>Folders</h3>
-          <ul>
-            {folders.map((f) => (
-              <li key={f}>{f}</li>
-            ))}
-          </ul>
-          <button className="link-btn">+ New folder</button>
+            + New folder
+          </Button>
+          <CreateFolderDialog
+            open={createFolderDialogOpen}
+            onClose={() => setCreateFolderDialogOpen(false)}
+            parentPath={selectedFolderPath}
+            onSuccess={fetchProfile}
+          />
         </aside>
 
         <main className="main">
           <div className="main-top-bar">
             <div className="region-header">
-              <h2>{selectedZone.city}</h2>
-              <span className="region-id">{selectedZone.carrier} · {selectedZone.id}</span>
+              <Typography variant="h6" sx={{ margin: 0, color: '#f8fafc' }}>{selectedZone.city}</Typography>
+              <Typography component="span" sx={{ fontSize: '0.8rem', color: '#64748b', display: 'block' }}>
+                {selectedZone.carrier} · {selectedZone.id}
+              </Typography>
+              <Typography
+                component="span"
+                sx={{
+                  display: 'block',
+                  mt: 0.5,
+                  fontSize: '0.8rem',
+                  color: '#94a3b8',
+                }}
+              >
+                {selectedFolderPath.length === 0
+                  ? 'All connections'
+                  : selectedFolderPath.join(' › ')}
+              </Typography>
             </div>
-            <button className="link-btn new-connection-btn">+ New connection</button>
+            <Button
+              onClick={() => setCreateDialogOpen(true)}
+              disableRipple
+              sx={{ color: '#3b82f6', textTransform: 'none' }}
+            >
+              + New connection
+            </Button>
           </div>
+          <CreateConnectionDialog
+            isOpen={createDialogOpen}
+            onClose={() => setCreateDialogOpen(false)}
+            wavelengthZoneId={selectedZone.id}
+            folderPath={selectedFolderPath.length > 0 ? selectedFolderPath : ['My Drones']}
+            onSuccess={handleConnectionCreated}
+          />
+          <ConnectionDetailDialog
+            sessionId={detailSessionId}
+            open={detailDialogOpen}
+            onClose={() => { setDetailDialogOpen(false); setDetailSessionId(null) }}
+          />
           <div className="drones-grid">
-            {drones.map((d) => (
-              <div key={d.id} className="drone-card">
-                <div className={`status-dot ${d.status}`} />
-                <h4>{d.name}</h4>
-                <span className="status-text">{d.status}</span>
-              </div>
-            ))}
+            {connections.length === 0 ? (
+              <Typography sx={{ color: '#94a3b8', fontSize: '0.875rem' }}>
+                No connections in this folder
+              </Typography>
+            ) : (
+              connections.map((c) => (
+                <Box
+                  key={c.session_id}
+                  className="drone-card"
+                  sx={{ position: 'relative', cursor: 'pointer' }}
+                  onClick={() => handleConnectionClick(c.session_id)}
+                >
+                  <IconButton
+                    aria-label="Delete connection"
+                    onClick={(e) => handleDeleteConnection(c.session_id, e)}
+                    disabled={deleteLoading === c.session_id}
+                    sx={{
+                      position: 'absolute',
+                      top: 4,
+                      right: 4,
+                      color: '#ef4444',
+                      p: 0.5,
+                      '&:hover': { color: '#f87171', backgroundColor: 'rgba(239, 68, 68, 0.1)' },
+                    }}
+                    size="small"
+                  >
+                    <DeleteIcon sx={{ fontSize: 18 }} />
+                  </IconButton>
+                  <div className={`status-dot ${c.status === 'active' ? 'connected' : c.status === 'idle' ? 'idle' : 'offline'}`} />
+                  <Typography variant="subtitle1" sx={{ m: '0.5rem 0 0.25rem', color: '#f8fafc', pr: 3 }}>{c.name}</Typography>
+                  <Typography component="span" sx={{ fontSize: '0.8rem', color: '#94a3b8' }}>{c.status}</Typography>
+                </Box>
+              ))
+            )}
           </div>
-          <p className="mock-note">Mock connections — Wavelength integration coming soon</p>
         </main>
       </div>
     </div>

@@ -62,6 +62,12 @@ variable "allowed_mavlink_cidrs" {
   default     = ["0.0.0.0/0"]
 }
 
+variable "mavlink_port" {
+  description = "MAVLink UDP port for PX4 (14540 legacy, 18570 v1.13+). Used in user_data / agent env."
+  type        = number
+  default     = 18570
+}
+
 variable "allowed_api_cidrs" {
   description = "CIDR blocks allowed for HTTP API (8080)"
   type        = list(string)

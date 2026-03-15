@@ -56,6 +56,7 @@ locals {
   region                          = data.aws_region.current.name
   base_state_key                  = var.base_state_key != "" ? var.base_state_key : "base-infra/${var.environment}/${var.region}/terraform.tfstate"
   connection_pool_tbl             = var.base_state_bucket != "" ? data.terraform_remote_state.base[0].outputs.connection_pool_table_name : "rdi-connection-pool-${var.environment}"
+  user_profiles_tbl               = var.base_state_bucket != "" ? data.terraform_remote_state.base[0].outputs.user_profiles_table_name : "rdi-user-profiles-${var.environment}"
   cognito_pool_arn                = var.base_state_bucket != "" ? "arn:aws:cognito-idp:${var.region}:${data.aws_caller_identity.current.account_id}:userpool/${data.terraform_remote_state.base[0].outputs.cognito_user_pool_id}" : ""
   api_gateway_cloudwatch_role_arn = var.base_state_bucket != "" ? data.terraform_remote_state.base[0].outputs.api_gateway_cloudwatch_role_arn : null
 
@@ -158,6 +159,7 @@ module "wavelength_ec2" {
   allowed_ssh_cidrs     = ["0.0.0.0/0"]
   allowed_mavlink_cidrs = ["0.0.0.0/0"]
   allowed_api_cidrs     = ["0.0.0.0/0"]
+  mavlink_port          = var.mavlink_port
 }
 
 output "wavelength_instance_id" {
@@ -235,6 +237,7 @@ module "session_api_lambda" {
 
   environment_variables = {
     CONNECTION_POOL_TABLE = local.connection_pool_tbl
+    USER_PROFILES_TABLE   = local.user_profiles_tbl
     PROXY_ENDPOINT        = length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2.websocket_endpoint
   }
 
@@ -248,7 +251,7 @@ module "session_api_lambda" {
 resource "aws_iam_policy" "session_api_dynamodb" {
   count       = var.base_state_bucket != "" ? 1 : 0
   name        = "${var.project_name}-session-api-dynamodb-${var.environment}"
-  description = "DynamoDB access for session API"
+  description = "DynamoDB access for session API (connection pool + user profiles)"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -259,12 +262,73 @@ resource "aws_iam_policy" "session_api_dynamodb" {
           "dynamodb:GetItem",
           "dynamodb:PutItem",
           "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
           "dynamodb:Query",
           "dynamodb:BatchGetItem"
         ]
         Resource = [
           "arn:aws:dynamodb:${local.region}:${data.aws_caller_identity.current.account_id}:table/${local.connection_pool_tbl}",
           "arn:aws:dynamodb:${local.region}:${data.aws_caller_identity.current.account_id}:table/${local.connection_pool_tbl}/index/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:Query"
+        ]
+        Resource = [
+          "arn:aws:dynamodb:${local.region}:${data.aws_caller_identity.current.account_id}:table/${local.user_profiles_tbl}"
+        ]
+      }
+    ]
+  })
+}
+
+# User Profile API Lambda - GET /user-profile (folders/hierarchy)
+module "user_profile_api_lambda" {
+  count  = var.base_state_bucket != "" ? 1 : 0
+  source = "./modules/lambda"
+
+  function_name = "${var.project_name}-user-profile-api-${var.environment}-${local.region}"
+  description   = "User profile API - returns connection hierarchy (folders)"
+  handler       = "lambda_function.lambda_handler"
+  runtime       = "python3.12"
+  timeout       = 10
+  memory_size   = 128
+  source_dir    = "${path.module}/../src/user-profile-api"
+
+  environment_variables = {
+    USER_PROFILES_TABLE = local.user_profiles_tbl
+  }
+
+  additional_policy_arns = [aws_iam_policy.user_profile_api_dynamodb[0].arn]
+  depends_on             = [aws_iam_policy.user_profile_api_dynamodb]
+  layers                 = [module.core_layer.layer_arn]
+
+  tags = {}
+}
+
+resource "aws_iam_policy" "user_profile_api_dynamodb" {
+  count       = var.base_state_bucket != "" ? 1 : 0
+  name        = "${var.project_name}-user-profile-api-dynamodb-${var.environment}"
+  description = "DynamoDB access for user profile API"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:Query"
+        ]
+        Resource = [
+          "arn:aws:dynamodb:${local.region}:${data.aws_caller_identity.current.account_id}:table/${local.user_profiles_tbl}"
         ]
       }
     ]
@@ -292,9 +356,8 @@ module "session_api" {
 
   # Extensible: add new resources here (e.g. connections, folders) and corresponding methods
   resources = {
-    sessions = { path_part = "sessions" }
-    # Future: connections = { path_part = "connections" }
-    # Future: folders    = { path_part = "folders" }
+    sessions     = { path_part = "sessions" }
+    user_profile = { path_part = "user-profile" }
   }
 
   methods = {
@@ -322,16 +385,34 @@ module "session_api" {
       lambda_arn              = module.session_api_lambda[0].function_arn
       authorization_type      = "COGNITO_USER_POOLS"
     }
+    get_user_profile = {
+      resource_key            = "user_profile"
+      http_method             = "GET"
+      integration_type        = "AWS_PROXY"
+      integration_http_method = "POST"
+      lambda_arn              = module.user_profile_api_lambda[0].function_arn
+      authorization_type      = "COGNITO_USER_POOLS"
+    }
+    patch_user_profile = {
+      resource_key            = "user_profile"
+      http_method             = "PATCH"
+      integration_type        = "AWS_PROXY"
+      integration_http_method = "POST"
+      lambda_arn              = module.user_profile_api_lambda[0].function_arn
+      authorization_type      = "COGNITO_USER_POOLS"
+    }
   }
 
   lambda_permissions = {
-    post   = { function_arn = module.session_api_lambda[0].function_arn, http_method = "POST", resource_path = "sessions" }
-    get    = { function_arn = module.session_api_lambda[0].function_arn, http_method = "GET", resource_path = "sessions" }
-    delete = { function_arn = module.session_api_lambda[0].function_arn, http_method = "DELETE", resource_path = "sessions" }
+    post               = { function_arn = module.session_api_lambda[0].function_arn, http_method = "POST", resource_path = "sessions" }
+    get                = { function_arn = module.session_api_lambda[0].function_arn, http_method = "GET", resource_path = "sessions" }
+    delete             = { function_arn = module.session_api_lambda[0].function_arn, http_method = "DELETE", resource_path = "sessions" }
+    get_user_profile   = { function_arn = module.user_profile_api_lambda[0].function_arn, http_method = "GET", resource_path = "user-profile" }
+    patch_user_profile = { function_arn = module.user_profile_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "user-profile" }
   }
 
   # Combine Lambda hash (auto) with manual trigger (bump local.session_api_deployment_trigger to force redeploy)
-  deployment_trigger = "${module.session_api_lambda[0].source_code_hash}-${local.session_api_deployment_trigger}"
+  deployment_trigger = "${module.session_api_lambda[0].source_code_hash}-${module.user_profile_api_lambda[0].source_code_hash}-${local.session_api_deployment_trigger}"
 }
 
 # Proxy EC2 - depends on binary in S3 so user_data can fetch it at boot

@@ -56,6 +56,7 @@
 
 - `expires_at` is the TTL attribute.
 - `POST /sessions` body accepts `ttl_seconds` (optional). Default 4h, min 60s, max 7 days.
+- `ttl_seconds: 0` means no TTL (indefinite); backend uses a far-future `expires_at`.
 
 ---
 
@@ -66,7 +67,16 @@
 | `ttl_seconds` | number | Optional; 60–604800 |
 | `drone_name` | string | Optional; default `"drone"`; becomes `{drone_name}-{uuid}` |
 | `wavelength_zone_id` | string | Optional; default region |
-| `metadata` | object | Optional; stored as JSON string |
+| `folder_path` | array of strings | Optional; e.g. `["My Drones"]` or `["My Drones", "Fleet A"]`; default `["My Drones"]` |
+| `metadata` | object | Optional; stored as JSON string. PX4/local tunnel details: |
+
+### metadata (PX4 / local tunnel)
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `mavlink_port` | number | PX4 MAVLink UDP port; 14540 (legacy) or 18570 (v1.13+) |
+| `mavlink_host` | string | Local tunnel host; default `127.0.0.1` |
+| `px4_version` | string | Hint: `legacy` or `v1.13+` |
 
 ---
 
@@ -77,3 +87,18 @@ When EC2 writes logs on session close:
 ```
 {user_id}/{wavelength_zone_id}/{drone_id}-{session_id}.log
 ```
+
+---
+
+## Connection hierarchy (folders)
+
+Connections are organized into folders per user. The hierarchy is stored in the **user profiles** table, not the connection pool.
+
+| Aspect | Detail |
+|--------|--------|
+| **Storage** | `user_profiles.connection_hierarchy` — see [USER-PROFILES-SCHEMA.md](./USER-PROFILES-SCHEMA.md) |
+| **Structure** | `{ "My Drones": { sessions: [{session_id, name, status}], subfolders: {...} }, "Shared": {...} }` |
+| **Default folders** | "My Drones", "Shared" (created for new users) |
+| **Relationship** | `session_id` values reference items in this (connection pool) table |
+
+When a session is created, it is added to a folder (default: "My Drones"). When a session is released (idle) or deleted, the Session Lambda updates `connection_hierarchy`. Full session details are fetched from this table when the user views a connection.

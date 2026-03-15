@@ -104,9 +104,13 @@ RDI uses two APIs with different protocols and responsibilities:
 
 | Purpose | Endpoints | Auth |
 |---------|-----------|------|
-| Create session, get proxy endpoint | `POST /sessions` (body: `{ ttl_seconds?, drone_name?, wavelength_zone_id?, metadata? }`) | Cognito |
+| Create session, get proxy endpoint | `POST /sessions` (body: `{ ttl_seconds?, drone_name?, wavelength_zone_id?, folder_path?, metadata? }`) | Cognito |
 | Get session info | `GET /sessions?session_id=...` | Cognito |
-| Release session | `DELETE /sessions` (body: `{ session_id }`) | Cognito |
+| List sessions for user | `GET /sessions` or `GET /sessions?wavelength_zone_id=...` | Cognito |
+| Release session (mark idle) | `DELETE /sessions` (body: `{ session_id }`) | Cognito |
+| Delete session permanently | `DELETE /sessions` (body: `{ session_id, permanent: true }`) | Cognito |
+| Get user profile (folders) | `GET /user-profile` | Cognito |
+| Update profile (e.g. delete folder) | `PATCH /user-profile` (body: `{ action, folder_path? }`) | Cognito |
 
 - **Backend:** API Gateway (REST) → Lambda → DynamoDB
 - **Not in real-time path.** Used only for allocation and teardown. Does **not** hold or create WebSocket connections.
@@ -173,6 +177,8 @@ RDI uses two APIs with different protocols and responsibilities:
 
 **Implementation status:** Bucket and path structure are in place. The Proxy EC2 logic (log buffering, session-close detection, S3 upload) is to be implemented once initial flight controls are tested and validated.
 
+**Session deletion logging (to be implemented):** When a session is deleted (via `DELETE /sessions` with `permanent: true`), the system should append an entry to the logfile recording the deletion event (session_id, user_id, drone_id, timestamp, reason). This ensures audit trails remain complete even when sessions are manually removed. Not yet implemented.
+
 ---
 
 ## WebSocket Path (no Lambda in control path)
@@ -205,10 +211,20 @@ The frontend console supports:
 | **New connection** | Create session, get proxy endpoint, connect WebSocket to a drone |
 | **Add drone** | Register a new drone (agent + PX4) into the pool; appears in console |
 | **Remove drone** | Deregister drone; release session; remove from pool |
-| **Drone groups** | Organize drones into folders/groups (e.g. "Fleet A", "Survey team") |
+| **Drone groups** | Organize drones into folders/groups (e.g. "Fleet A", "Survey team") — see Connection hierarchy |
 | **Modify zones** | Add, remove, or reconfigure Wavelength zones where drones can run |
 
-These are backed by Session API, connection pool (DynamoDB), and (future) a control-plane API for drone/zone CRUD.
+These are backed by Session API, connection pool (DynamoDB), user profiles (connection hierarchy), and (future) a control-plane API for drone/zone CRUD.
+
+### Connection hierarchy (folders)
+
+Connections are stored in folders per user. The hierarchy lives in the **user profiles** table (`connection_hierarchy` attribute):
+
+- **Structure:** `{ "My Drones": { sessions: [{session_id, name, status}], subfolders: {...} }, "Shared": {...} }` — supports nesting
+- **Default folders:** "My Drones", "Shared" (created for new users)
+- **Session Lambda** updates hierarchy on create (add to folder), release (update status), delete (remove)
+- **User Profile API** (`GET /user-profile`, `PATCH /user-profile`) — separate Lambda
+- **Schema:** See [USER-PROFILES-SCHEMA.md](./USER-PROFILES-SCHEMA.md)
 
 ---
 
