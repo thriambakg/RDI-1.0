@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, RwLock};
 use tokio_tungstenite::accept_async;
+use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info, warn};
 
 const DEFAULT_WS_PORT: u16 = 8765;
@@ -76,6 +77,14 @@ async fn serve_health(mut stream: tokio::net::TcpStream) -> std::io::Result<()> 
     stream.write_all(response.as_bytes()).await
 }
 
+/// Message to send to the client: either binary from agent or control (e.g. ping hop).
+enum ToClient {
+    Binary(Vec<u8>),
+    Text(String),
+}
+
+const PING_BYTES: &[u8] = b"PING";
+
 async fn handle_ws(
     stream: tokio::net::TcpStream,
     addr: std::net::SocketAddr,
@@ -86,7 +95,7 @@ async fn handle_ws(
 
     let first = ws_rx.next().await;
     let (session_id, role) = match first {
-        Some(Ok(tokio_tungstenite::tungstenite::Message::Text(t))) => {
+        Some(Ok(Message::Text(t))) => {
             let p: Vec<&str> = t.splitn(2, ':').collect();
             (p.get(1).unwrap_or(&"default").to_string(), p.get(0).unwrap_or(&"frontend").to_string())
         }
@@ -94,7 +103,12 @@ async fn handle_ws(
     };
 
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    let peer = Peer { tx: peer_tx };
+    let peer = Peer { tx: peer_tx.clone() };
+
+    let (client_tx, mut client_rx) = mpsc::unbounded_channel::<ToClient>();
+
+    let client_tx_peer = client_tx.clone();
+    let client_tx_pong = client_tx.clone();
 
     let peer_send = {
         let mut s = sessions.write().await;
@@ -103,14 +117,21 @@ async fn handle_ws(
             s.frontends.get(&session_id).map(|p| p.tx.clone())
         } else {
             s.frontends.insert(session_id.clone(), peer);
+            let _ = client_tx.send(ToClient::Text(
+                r#"{"hop":"proxy_ec2","message":"handshake accepted"}"#.to_string(),
+            ));
             s.agents.get(&session_id).map(|p| p.tx.clone())
         };
         target
     };
 
     let to_ws = tokio::spawn(async move {
-        while let Some(data) = peer_rx.recv().await {
-            if ws_tx.send(tokio_tungstenite::tungstenite::Message::Binary(data)).await.is_err() {
+        while let Some(to_client) = client_rx.recv().await {
+            let msg = match to_client {
+                ToClient::Binary(data) => Message::Binary(data),
+                ToClient::Text(s) => Message::Text(s),
+            };
+            if ws_tx.send(msg).await.is_err() {
                 break;
             }
         }
@@ -119,23 +140,55 @@ async fn handle_ws(
     let to_peer = tokio::spawn(async move {
         while let Some(msg) = ws_rx.next().await {
             match msg {
-                Ok(tokio_tungstenite::tungstenite::Message::Binary(data)) => {
-                    if let Some(tx) = &peer_send {
+                Ok(Message::Binary(data)) => {
+                    if data == PING_BYTES {
+                        if let Some(tx) = &peer_send {
+                            let _ = tx.send(data.to_vec());
+                        } else {
+                            let _ = client_tx_peer.send(ToClient::Text(
+                                r#"{"hop":"wavelength","message":"no agent connected"}"#.to_string(),
+                            ));
+                        }
+                    } else if let Some(tx) = &peer_send {
                         let _ = tx.send(data);
                     }
                 }
-                Ok(tokio_tungstenite::tungstenite::Message::Close(_)) => break,
-                Err(e) => { error!("recv: {}", e); break; }
+                Ok(Message::Text(_)) => {}
+                Ok(Message::Close(_)) => break,
+                Err(e) => {
+                    error!("recv: {}", e);
+                    break;
+                }
                 _ => {}
             }
         }
     });
 
-    tokio::select! { _ = to_ws => {} _ = to_peer => {} }
+    let to_pong = tokio::spawn(async move {
+        let mut sent_wavelength = false;
+        while let Some(data) = peer_rx.recv().await {
+            if !sent_wavelength {
+                let _ = client_tx_pong.send(ToClient::Text(
+                    r#"{"hop":"wavelength","message":"instance responded"}"#.to_string(),
+                ));
+                sent_wavelength = true;
+            }
+            let _ = client_tx_pong.send(ToClient::Binary(data));
+        }
+    });
+
+    tokio::select! {
+        _ = to_ws => {}
+        _ = to_peer => {}
+        _ = to_pong => {}
+    }
 
     let mut s = sessions.write().await;
-    if role == "agent" { s.agents.remove(&session_id); }
-    else { s.frontends.remove(&session_id); }
+    if role == "agent" {
+        s.agents.remove(&session_id);
+    } else {
+        s.frontends.remove(&session_id);
+    }
     info!("Disconnected {} {}", addr, session_id);
     Ok(())
 }
