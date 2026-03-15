@@ -167,3 +167,16 @@ export function addFolderAtPath(h: ConnectionHierarchy, parentPath: string[], fo
   const updatedSub = addFolderAtPath(node.subfolders ?? {}, rest, folderName)
   return { ...h, [first]: { ...node, subfolders: updatedSub } }
 }
+
+/** Immutable: add a session to the folder at parentPath. Creates path if missing. */
+export function addSessionAtPath(h: ConnectionHierarchy, parentPath: string[], session: SessionRef): ConnectionHierarchy {
+  if (parentPath.length === 0) return h
+  const [first, ...rest] = parentPath
+  const node = h[first] ?? { sessions: [], subfolders: {} }
+  if (rest.length === 0) {
+    const sessions = [...(node.sessions ?? []), session]
+    return { ...h, [first]: { ...node, sessions } }
+  }
+  const updatedSub = addSessionAtPath(node.subfolders ?? {}, rest, session)
+  return { ...h, [first]: { ...node, subfolders: updatedSub } }
+}

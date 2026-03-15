@@ -64,7 +64,7 @@ export interface CreateConnectionDialogProps {
   onClose: () => void
   wavelengthZoneId: string
   folderPath?: string[]
-  onSuccess?: (result: CreateSessionResponse) => void
+  onSuccess?: (result: CreateSessionResponse, displayName: string) => void
 }
 
 export function CreateConnectionDialog({
@@ -98,7 +98,7 @@ export function CreateConnectionDialog({
         },
       })
       setResult(res)
-      onSuccess?.(res)
+      onSuccess?.(res, droneName.trim() || res.drone_id)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create session')
     } finally {

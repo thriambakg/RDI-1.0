@@ -32,6 +32,7 @@ import {
   removeFolderAtPath,
   removeSessionFromHierarchy,
   addFolderAtPath,
+  addSessionAtPath,
   updateSessionStatusInHierarchy,
   type FolderNode,
   type SessionRef,
@@ -232,27 +233,31 @@ export default function Console() {
 
   const connections = collectSessions(hierarchy, selectedFolderPath)
 
-  const handleConnectionCreated = useCallback(
-    (res: CreateSessionResponse) => {
-      console.log('[RDI Console] Session created', res)
-      fetchProfile()
-    },
-    [fetchProfile]
-  )
-
   const effectiveParentForNewFolder = selectedFolderPath.length > 0 ? selectedFolderPath : ['My Drones']
   const canCreateFolderUnderSelection = effectiveParentForNewFolder[0] !== 'Shared'
   const effectiveParentForNewConnection = selectedFolderPath.length > 0 ? selectedFolderPath : ['My Drones']
   const canCreateConnectionUnderSelection = effectiveParentForNewConnection[0] !== 'Shared'
+
+  const handleConnectionCreated = useCallback(
+    (res: CreateSessionResponse, displayName: string) => {
+      updateHierarchy((h) =>
+        addSessionAtPath(h, effectiveParentForNewConnection, {
+          session_id: res.session_id,
+          name: displayName,
+          status: 'active',
+        })
+      )
+    },
+    [effectiveParentForNewConnection, updateHierarchy]
+  )
 
   const handleFolderCreated = useCallback(
     (folderName?: string) => {
       if (folderName) {
         updateHierarchy((h) => addFolderAtPath(h, effectiveParentForNewFolder, folderName))
       }
-      return fetchProfile({ silent: true })
     },
-    [effectiveParentForNewFolder, updateHierarchy, fetchProfile]
+    [effectiveParentForNewFolder, updateHierarchy]
   )
 
   const handleDeleteConnection = async (sessionId: string, e?: React.MouseEvent) => {
@@ -327,10 +332,9 @@ export default function Console() {
     updateHierarchy((h) => removeFolderAtPath(h, path))
     try {
       await deleteFolder(path)
-      await fetchProfile({ silent: true })
     } catch (err) {
       console.error('[RDI Console] Delete folder failed', err)
-      await fetchProfile()
+      await fetchProfile({ silent: true })
     }
   }
 
