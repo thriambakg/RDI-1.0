@@ -74,13 +74,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if !status_secret.is_empty() {
         let status_listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", status_port)).await?;
         info!("Session status API on port {} (Lambda instructions)", status_port);
+        let sessions_for_status = sessions.clone();
+        let status_map_for_status = status_map.clone();
         tokio::spawn(async move {
-            let sessions = sessions.clone();
-            let status_map = status_map.clone();
             loop {
                 if let Ok((stream, _)) = status_listener.accept().await {
-                    let sessions = sessions.clone();
-                    let status_map = status_map.clone();
+                    let sessions = sessions_for_status.clone();
+                    let status_map = status_map_for_status.clone();
                     let secret = status_secret.clone();
                     tokio::spawn(async move {
                         let _ = serve_status(stream, sessions, status_map, &secret).await;

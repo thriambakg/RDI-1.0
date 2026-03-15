@@ -100,6 +100,28 @@ resource "aws_security_group_rule" "alb_egress_to_targets" {
   depends_on = [aws_security_group.alb]
 }
 
+# When health check uses a different port (e.g. proxy 8766), ALB must be able to reach it
+resource "aws_security_group_rule" "alb_egress_health_check" {
+  count = (
+    var.target_group_config.health_check_port != "traffic-port" &&
+    try(tonumber(var.target_group_config.health_check_port), null) != null
+  ) ? 1 : 0
+
+  type              = "egress"
+  from_port         = tonumber(var.target_group_config.health_check_port)
+  to_port           = tonumber(var.target_group_config.health_check_port)
+  protocol          = "tcp"
+  cidr_blocks       = [data.aws_vpc.main.cidr_block]
+  description       = "Allow ALB to health check targets on port ${var.target_group_config.health_check_port}"
+  security_group_id = local.security_group_id
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  depends_on = [aws_security_group.alb]
+}
+
 # Application Load Balancer
 # tfsec:ignore:aws-elb-alb-not-public - Public ALB is intentional for web frontend
 resource "aws_lb" "main" {
@@ -126,7 +148,8 @@ resource "aws_lb" "main" {
     aws_security_group.alb,
     aws_security_group_rule.alb_http_ingress,
     aws_security_group_rule.alb_https_ingress,
-    aws_security_group_rule.alb_egress_to_targets
+    aws_security_group_rule.alb_egress_to_targets,
+    aws_security_group_rule.alb_egress_health_check,
   ]
 
   lifecycle {

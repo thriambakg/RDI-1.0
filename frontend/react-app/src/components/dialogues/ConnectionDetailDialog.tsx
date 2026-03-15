@@ -72,13 +72,16 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
     })
     add(`T+0ms — Connecting to ${wsUrl.split('/')[2] ?? wsUrl}…`)
 
+    let opened = false
     const finish = (err?: string) => {
       if (closed) return
       closed = true
       setPingRunning(false)
       if (err) setPingError(err)
       try {
-        ws?.close()
+        if (ws && ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close()
+        }
       } catch {
         // ignore
       }
@@ -94,6 +97,7 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
     }
 
     ws.onopen = () => {
+      opened = true
       const ms = elapsed()
       console.log('[RDI Ping] WebSocket open', { ms, readyState: ws?.readyState })
       add(`1. ALB: connection established (T+${ms}ms)`)
@@ -146,18 +150,39 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
         code: event.code,
         reason: event.reason || '(none)',
         wasClean: event.wasClean,
+        neverOpened: !opened,
+        hint:
+          !opened && event.code === 1006
+            ? '1006 = abnormal closure; connection never reached OPEN. Check ALB/proxy/network.'
+            : undefined,
       })
       if (!closed) {
         const reason =
           event.reason || (event.code === 1006 ? 'Connection lost (no close frame)' : `Code ${event.code}`)
-        finish(`Connection closed before completing ping (T+${ms}ms): ${reason}`)
+        finish(
+          opened
+            ? `Connection closed before completing ping (T+${ms}ms): ${reason}`
+            : `Connection never established (T+${ms}ms): ${reason}. Check ALB and proxy.`
+        )
       }
     }
 
     const t = setTimeout(() => {
       if (!closed) {
-        console.warn('[RDI Ping] Timeout', { elapsedMs: elapsed() })
-        finish('Ping timed out (8s).')
+        const ms = elapsed()
+        console.warn('[RDI Ping] Timeout', {
+          elapsedMs: ms,
+          onopenNeverFired: !opened,
+          readyState: ws?.readyState,
+          hint: !opened
+            ? 'Connection never established — check ALB listener, target group health, and proxy reachability.'
+            : undefined,
+        })
+        finish(
+          opened
+            ? 'Ping timed out (8s).'
+            : 'Connection never established (8s). Check ALB, target group health, and proxy.'
+        )
       }
     }, 8000)
     return () => clearTimeout(t)
