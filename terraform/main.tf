@@ -61,7 +61,7 @@ locals {
   api_gateway_cloudwatch_role_arn = var.base_state_bucket != "" ? data.terraform_remote_state.base[0].outputs.api_gateway_cloudwatch_role_arn : null
 
   # Session API deployment trigger - bump to force API Gateway redeploy (CORS, config changes)
-  session_api_deployment_trigger = "1"
+  session_api_deployment_trigger = "2" # Bumped for CORS: allow PATCH (user-profile)
 }
 
 data "terraform_remote_state" "base" {

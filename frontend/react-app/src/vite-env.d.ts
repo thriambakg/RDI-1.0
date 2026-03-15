@@ -8,6 +8,7 @@ interface RDIConfig {
   REDIRECT_SIGN_IN: string;
   REDIRECT_SIGN_OUT: string;
   API_GATEWAY_URL: string;
+  /** Not used; endpoint comes per-session from POST /sessions (ALB/Proxy). */
   WEBSOCKET_URL: string;
   ENVIRONMENT: string;
   ENABLE_GOOGLE_AUTH?: boolean;
