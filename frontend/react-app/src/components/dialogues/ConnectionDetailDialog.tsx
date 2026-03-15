@@ -12,6 +12,19 @@ import { getSession } from '../../services/sessionApi'
 
 const PING_BYTES = new Uint8Array([0x50, 0x49, 0x4e, 0x47]) // "PING"
 
+const WS_CLOSE_REASONS: Record<number, string> = {
+  1000: 'Normal closure',
+  1001: 'Going away',
+  1002: 'Protocol error',
+  1003: 'Unsupported data',
+  1005: 'No status received',
+  1006: 'Abnormal closure (no close frame — check ALB target health, listener, proxy)',
+  1007: 'Invalid frame payload',
+  1008: 'Policy violation',
+  1011: 'Internal server error',
+  1015: 'TLS handshake failed',
+}
+
 interface ConnectionDetailDialogProps {
   sessionId: string | null
   open: boolean
@@ -157,12 +170,12 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
             : undefined,
       })
       if (!closed) {
-        const reason =
-          event.reason || (event.code === 1006 ? 'Connection lost (no close frame)' : `Code ${event.code}`)
+        const codeLabel = WS_CLOSE_REASONS[event.code] ?? `Code ${event.code}`
+        const reason = event.reason || codeLabel
         finish(
           opened
             ? `Connection closed before completing ping (T+${ms}ms): ${reason}`
-            : `Connection never established (T+${ms}ms): ${reason}. Check ALB and proxy.`
+            : `Connection never established (T+${ms}ms): ${reason}. See docs/WEBSOCKET-ALB-DIAGNOSTIC.md`
         )
       }
     }
