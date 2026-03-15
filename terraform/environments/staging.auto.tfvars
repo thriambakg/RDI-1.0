@@ -12,5 +12,5 @@ wavelength_zone_id = "us-east-1-wl1-chi-wlz-1"
 edge_zone_ids      = ["use1-wl1-chi-wlz1"] # Zone ID for UI display
 
 # Proxy subnet CIDRs (use unique ranges if they conflict with existing subnets in the account)
-proxy_subnet_cidr = "10.200.30.0/24"
-alb_subnet_cidr   = "10.200.31.0/24"
+proxy_subnet_cidr = "10.200.40.0/24"
+alb_subnet_cidr   = "10.200.41.0/24"
