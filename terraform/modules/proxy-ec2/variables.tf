@@ -54,6 +54,12 @@ variable "proxy_health_port" {
   default     = 8766
 }
 
+variable "proxy_status_port" {
+  description = "Port for Lambda session-status API (active/idle instructions)"
+  type        = number
+  default     = 8767
+}
+
 variable "allowed_cidrs" {
   description = "CIDR blocks allowed for proxy traffic"
   type        = list(string)

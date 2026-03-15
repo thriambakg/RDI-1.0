@@ -2,6 +2,8 @@
 # RDI Proxy EC2 user_data - install and run proxy binary
 set -e
 export RDI_PROXY_WS_PORT="${ws_port}"
+export RDI_PROXY_STATUS_PORT="${status_port}"
+export RDI_PROXY_STATUS_SECRET="${status_secret}"
 
 yum update -y
 yum install -y aws-cli

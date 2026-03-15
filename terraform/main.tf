@@ -16,6 +16,10 @@ terraform {
       source  = "hashicorp/tls"
       version = "~> 4.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
   }
   backend "s3" {
     # Values from backend-configs/{env}-{region}.tfbackend
@@ -50,6 +54,12 @@ provider "aws" {
 
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
+
+# Secret for Lambda -> proxy session-status API (active/idle instructions)
+resource "random_password" "proxy_status_secret" {
+  length  = 32
+  special = true
+}
 
 locals {
   is_primary_region               = var.primary_region != "" && var.region == var.primary_region
@@ -239,6 +249,8 @@ module "session_api_lambda" {
     CONNECTION_POOL_TABLE = local.connection_pool_tbl
     USER_PROFILES_TABLE   = local.user_profiles_tbl
     PROXY_ENDPOINT        = length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2.websocket_endpoint
+    PROXY_STATUS_URL      = "http://${module.proxy_ec2.public_ip}:8767/session-status"
+    PROXY_STATUS_SECRET   = random_password.proxy_status_secret.result
   }
 
   additional_policy_arns = [aws_iam_policy.session_api_dynamodb[0].arn]
@@ -433,6 +445,7 @@ module "proxy_ec2" {
   kms_key_arn                   = module.kms.main_key_arn
   proxy_websocket_port          = 8765
   proxy_health_port             = 8766
+  proxy_status_port             = 8767
   proxy_binary_s3_bucket        = module.proxy_artifacts_bucket.bucket_id
   proxy_binary_s3_key           = "proxy/rdi-proxy"
   enable_s3_proxy_binary_access = true
@@ -440,9 +453,11 @@ module "proxy_ec2" {
   alb_subnet_cidr               = var.enable_alb_wss ? var.alb_subnet_cidr : ""
 
   user_data = base64encode(templatefile("${path.module}/../src/proxy/user_data.sh", {
-    s3_bucket = module.proxy_artifacts_bucket.bucket_id
-    s3_key    = "proxy/rdi-proxy"
-    ws_port   = 8765
+    s3_bucket     = module.proxy_artifacts_bucket.bucket_id
+    s3_key        = "proxy/rdi-proxy"
+    ws_port       = 8765
+    status_port   = 8767
+    status_secret = random_password.proxy_status_secret.result
   }))
 
   depends_on = [aws_s3_object.proxy_binary]

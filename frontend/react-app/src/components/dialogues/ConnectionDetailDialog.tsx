@@ -53,15 +53,24 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
     setPingError(null)
     setPingLog([])
 
+    const start = performance.now()
     const logs: string[] = []
     const add = (line: string) => {
       logs.push(line)
       setPingLog([...logs])
     }
+    const elapsed = () => Math.round(performance.now() - start)
 
     const wsUrl = data.endpoint.replace(/^http/, 'ws')
     let ws: WebSocket | null = null
     let closed = false
+
+    console.log('[RDI Ping] Starting', {
+      wsUrl,
+      sessionId: data.session_id,
+      status: data.status,
+    })
+    add(`T+0ms — Connecting to ${wsUrl.split('/')[2] ?? wsUrl}…`)
 
     const finish = (err?: string) => {
       if (closed) return
@@ -78,46 +87,81 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
     try {
       ws = new WebSocket(wsUrl)
     } catch (e) {
-      finish(e instanceof Error ? e.message : 'Failed to open WebSocket')
+      const msg = e instanceof Error ? e.message : 'Failed to open WebSocket'
+      console.error('[RDI Ping] WebSocket constructor threw', { error: e, msg })
+      finish(msg)
       return
     }
 
     ws.onopen = () => {
-      add('1. ALB: connection established')
-      ws?.send(`frontend:${data.session_id}`)
+      const ms = elapsed()
+      console.log('[RDI Ping] WebSocket open', { ms, readyState: ws?.readyState })
+      add(`1. ALB: connection established (T+${ms}ms)`)
+      ws?.send(`frontend:${data!.session_id}`)
     }
 
     ws.onmessage = (event) => {
+      const ms = elapsed()
       if (typeof event.data === 'string') {
+        console.log('[RDI Ping] Message (string)', { ms, data: event.data })
         try {
-          const obj = JSON.parse(event.data) as HopLog
+          const obj = JSON.parse(event.data) as HopLog & { error?: string; message?: string }
+          if (obj.error === 'session idle') {
+            add(`Session is idle (T+${ms}ms). Reactivate in console to connect.`)
+            console.warn('[RDI Ping] Session idle — proxy rejected', { ms })
+            finish('Session is idle. Reactivate this connection in the console, then ping again.')
+            return
+          }
           if (obj.hop === 'proxy_ec2') {
-            add(`2. Proxy EC2: ${obj.message}`)
+            add(`2. Proxy EC2: ${obj.message} (T+${ms}ms)`)
             ws?.send(PING_BYTES)
           } else if (obj.hop === 'wavelength') {
-            add(`3. Wavelength: ${obj.message}`)
-            add('Success — all hops reached.')
+            add(`3. Wavelength: ${obj.message} (T+${ms}ms)`)
+            add(`Success — all hops reached (T+${ms}ms).`)
+            console.log('[RDI Ping] Done', { totalMs: ms })
             finish()
+          } else {
+            add(`Hop: ${obj.hop} — ${obj.message ?? ''} (T+${ms}ms)`)
           }
         } catch {
-          // ignore non-JSON
+          if ((event.data as string).trim().length > 0) {
+            add(`Raw: ${(event.data as string).slice(0, 80)} (T+${ms}ms)`)
+          }
         }
+      } else {
+        console.log('[RDI Ping] Message (binary)', { ms })
       }
     }
 
-    ws.onerror = () => {
-      if (!closed) add('WebSocket error')
+    ws.onerror = (event) => {
+      const ms = elapsed()
+      console.warn('[RDI Ping] WebSocket error', { ms, event, readyState: ws?.readyState })
+      if (!closed) add(`WebSocket error (T+${ms}ms)`)
     }
 
-    ws.onclose = () => {
-      if (!closed) finish('Connection closed before completing ping.')
+    ws.onclose = (event) => {
+      const ms = elapsed()
+      console.warn('[RDI Ping] WebSocket close', {
+        ms,
+        code: event.code,
+        reason: event.reason || '(none)',
+        wasClean: event.wasClean,
+      })
+      if (!closed) {
+        const reason =
+          event.reason || (event.code === 1006 ? 'Connection lost (no close frame)' : `Code ${event.code}`)
+        finish(`Connection closed before completing ping (T+${ms}ms): ${reason}`)
+      }
     }
 
     const t = setTimeout(() => {
-      if (!closed) finish('Ping timed out.')
-    }, 15000)
+      if (!closed) {
+        console.warn('[RDI Ping] Timeout', { elapsedMs: elapsed() })
+        finish('Ping timed out (8s).')
+      }
+    }, 8000)
     return () => clearTimeout(t)
-  }, [data?.endpoint, data?.session_id])
+  }, [data?.endpoint, data?.session_id, data?.status])
 
   const name = data?.drone_id ? data.drone_id.split('-').slice(0, -1).join('-') || data.drone_id : ''
 

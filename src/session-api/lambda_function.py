@@ -2,12 +2,16 @@
 Session API - Connection pool management for RDI drone control.
 Assigns proxy endpoints to users, manages session lifecycle.
 Updates user profile connection_hierarchy on create, release, delete.
+Notifies proxy (EC2) on session status change so it only allows active connections
+and clears idle sessions from memory.
 """
 
 import json
 import os
 import uuid
 import time
+import urllib.request
+import urllib.error
 from typing import Any
 
 import boto3
@@ -19,6 +23,32 @@ TABLE_NAME = os.environ["CONNECTION_POOL_TABLE"]
 REGION = os.environ["AWS_REGION"]
 PROXY_ENDPOINT = os.environ["PROXY_ENDPOINT"]
 USER_PROFILES_TABLE = os.environ.get("USER_PROFILES_TABLE", "")
+PROXY_STATUS_URL = os.environ.get("PROXY_STATUS_URL", "")
+PROXY_STATUS_SECRET = os.environ.get("PROXY_STATUS_SECRET", "")
+
+
+def _notify_proxy_session_status(session_id: str, status: str) -> None:
+    """Tell the proxy to set session status (active/idle). Idle => disconnect and clear from memory."""
+    if not PROXY_STATUS_URL or not PROXY_STATUS_SECRET:
+        return
+    body = json.dumps({"session_id": session_id, "status": status}).encode("utf-8")
+    req = urllib.request.Request(
+        PROXY_STATUS_URL,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Proxy-Secret": PROXY_STATUS_SECRET,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.status != 200:
+                print(f"Proxy status API returned {resp.status} for session {session_id}")
+    except urllib.error.URLError as e:
+        print(f"Proxy status notify failed for session {session_id}: {e}")
+    except Exception as e:
+        print(f"Proxy status notify error: {e}")
 
 
 def lambda_handler(event: dict, context: Any) -> dict:
@@ -193,6 +223,7 @@ def _release_session(user_id: str, session_id: str | None, headers: dict, *, per
 
     if USER_PROFILES_TABLE:
         _upsert_profile_update_status(dynamodb, user_id, session_id, "idle")
+    _notify_proxy_session_status(session_id, "idle")
 
     return _response(200, {"message": "Session released"}, headers)
 
@@ -230,6 +261,7 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
 
     if USER_PROFILES_TABLE:
         _upsert_profile_update_status(dynamodb, user_id, session_id, status)
+    _notify_proxy_session_status(session_id, status)
 
     return _response(200, {"message": f"Session set to {status}"}, headers)
 
