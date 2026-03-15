@@ -222,6 +222,8 @@ export default function Console() {
 
   const effectiveParentForNewFolder = selectedFolderPath.length > 0 ? selectedFolderPath : ['My Drones']
   const canCreateFolderUnderSelection = effectiveParentForNewFolder[0] !== 'Shared'
+  const effectiveParentForNewConnection = selectedFolderPath.length > 0 ? selectedFolderPath : ['My Drones']
+  const canCreateConnectionUnderSelection = effectiveParentForNewConnection[0] !== 'Shared'
 
   const handleFolderCreated = useCallback(
     (folderName?: string) => {
@@ -441,8 +443,10 @@ export default function Console() {
               </Button>
               <Button
                 onClick={() => setCreateDialogOpen(true)}
+                disabled={!canCreateConnectionUnderSelection}
                 disableRipple
                 sx={{ color: '#3b82f6', textTransform: 'none' }}
+                title={!canCreateConnectionUnderSelection ? 'Connections cannot be created in Shared' : undefined}
               >
                 + New connection
               </Button>

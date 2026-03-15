@@ -102,6 +102,12 @@ INDEFINITE_EXPIRES_AT = 4102444800  # Year 2100 - no TTL (indefinite)
 
 def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     """Create or get existing session, return proxy endpoint."""
+    folder_path = body.get("folder_path")
+    if not isinstance(folder_path, list):
+        folder_path = ["My Drones"]
+    if folder_path and folder_path[0] == "Shared":
+        return _response(400, {"error": "Cannot create connections in Shared or its subfolders"}, headers)
+
     session_id = str(uuid.uuid4())
     now = int(time.time())
     ttl_seconds = body.get("ttl_seconds")
@@ -152,9 +158,6 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
         raise
 
     if USER_PROFILES_TABLE:
-        folder_path = body.get("folder_path")
-        if not isinstance(folder_path, list):
-            folder_path = ["My Drones"]
         _upsert_profile_add_session(
             dynamodb, user_id,
             session_id=session_id,
