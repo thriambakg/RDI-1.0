@@ -158,7 +158,9 @@ def _patch_profile(user_id: str, body: dict, headers: dict) -> dict:
 
 
 def _create_folder(user_id: str, parent_path: list[str], folder_name: str, headers: dict) -> dict:
-    """Add a new folder at parent_path. E.g. parent_path=['My Drones'], folder_name='Fleet A'."""
+    """Add a new folder at parent_path. E.g. parent_path=['My Drones'], folder_name='Fleet A'. Cannot create under Shared."""
+    if parent_path and parent_path[0] == "Shared":
+        return _response(400, {"error": "Cannot create folders under Shared"}, headers)
     dynamodb = boto3.client("dynamodb")
     try:
         resp = dynamodb.get_item(
@@ -192,7 +194,9 @@ def _create_folder(user_id: str, parent_path: list[str], folder_name: str, heade
 
 
 def _delete_folder(user_id: str, folder_path: list[str], headers: dict) -> dict:
-    """Remove a folder from hierarchy. Sessions in it become uncategorized."""
+    """Remove a folder from hierarchy. Sessions in it become uncategorized. Shared and its fixed subfolders cannot be deleted."""
+    if folder_path and folder_path[0] == "Shared":
+        return _response(400, {"error": "Cannot delete Shared or its subfolders"}, headers)
     dynamodb = boto3.client("dynamodb")
     try:
         resp = dynamodb.get_item(

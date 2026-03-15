@@ -129,6 +129,28 @@
   color: #94a3b8;
 }
 
+/* Folder tree: FMS / Dropbox-style hierarchy */
+.sidebar .folder-tree-item {
+  display: block;
+  margin: 0;
+  padding: 0;
+}
+
+.sidebar .folder-tree-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.sidebar .folder-tree-row .MuiListItemText-root {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar .folder-tree-item + .folder-tree-item {
+  margin-top: 0;
+}
+
 .link-btn {
   background: none;
   border: none;

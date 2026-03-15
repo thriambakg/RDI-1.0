@@ -62,21 +62,29 @@ function collectSessions(hierarchy: ConnectionHierarchy, folderPath: string[]): 
   return node?.sessions ?? []
 }
 
+/** Paths under "Shared" (and Shared itself) are not deletable. */
+function isSharedOrUnderShared(path: string[]): boolean {
+  return path.length > 0 && path[0] === 'Shared'
+}
+
 function FolderTree({
   hierarchy,
   selectedPath,
   onSelect,
   onDelete,
   pathPrefix,
+  depth = 0,
 }: {
   hierarchy: ConnectionHierarchy
   selectedPath: string[]
   onSelect: (path: string[]) => void
   onDelete: (path: string[]) => void
   pathPrefix?: string[]
+  depth?: number
 }) {
   const prefix = pathPrefix ?? []
-  const [open, setOpen] = useState<Record<string, boolean>>({})
+  const [open, setOpen] = useState<Record<string, boolean>>(depth === 0 ? { Shared: true } : {})
+  const indentPx = 20
 
   return (
     <>
@@ -85,37 +93,55 @@ function FolderTree({
         const isSelected = selectedPath.length === fullPath.length && selectedPath.every((p, i) => p === fullPath[i])
         const hasSubfolders = node.subfolders && Object.keys(node.subfolders).length > 0
         const isOpen = open[name] ?? false
+        const nonDeletable = isSharedOrUnderShared(fullPath)
         return (
-          <Box key={name} sx={{ pl: prefix.length * 1.5 }}>
+          <Box key={name} className="folder-tree-item" sx={{ pl: depth * indentPx }}>
             <ListItemButton
               selected={isSelected}
               onClick={() => onSelect(fullPath)}
+              className="folder-tree-row"
               sx={{
                 py: 0.5,
                 borderRadius: '0.25rem',
+                minHeight: 36,
                 '&.Mui-selected': { backgroundColor: 'rgba(59, 130, 246, 0.2)' },
               }}
             >
               {hasSubfolders ? (
-                <IconButton size="small" onClick={(e) => { e.stopPropagation(); setOpen((o) => ({ ...o, [name]: !o[name] })) }} sx={{ mr: 0.5, color: '#94a3b8' }}>
+                <IconButton
+                  size="small"
+                  onClick={(e) => { e.stopPropagation(); setOpen((o) => ({ ...o, [name]: !o[name] })) }}
+                  sx={{ mr: 0.5, color: '#94a3b8', p: 0.25 }}
+                  aria-label={isOpen ? 'Collapse' : 'Expand'}
+                >
                   {isOpen ? <ExpandLess /> : <ExpandMore />}
                 </IconButton>
               ) : (
-                <Box component="span" sx={{ width: 28, display: 'inline-block' }} />
+                <Box component="span" sx={{ width: 28, display: 'inline-block', flexShrink: 0 }} />
               )}
-              {isOpen ? <FolderOpen sx={{ mr: 0.5, fontSize: 18, color: '#94a3b8' }} /> : <Folder sx={{ mr: 0.5, fontSize: 18, color: '#94a3b8' }} />}
-              <ListItemText primary={name} primaryTypographyProps={{ fontSize: '0.875rem', color: '#e2e8f0' }} />
-              <ListItemSecondaryAction>
-                <IconButton
-                  size="small"
-                  edge="end"
-                  onClick={(e) => { e.stopPropagation(); onDelete(fullPath) }}
-                  sx={{ color: '#ef4444', '&:hover': { color: '#f87171' } }}
-                  aria-label={`Delete folder ${name}`}
-                >
-                  <DeleteIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </ListItemSecondaryAction>
+              {isOpen ? (
+                <FolderOpen sx={{ mr: 0.5, fontSize: 20, color: '#94a3b8', flexShrink: 0 }} />
+              ) : (
+                <Folder sx={{ mr: 0.5, fontSize: 20, color: '#94a3b8', flexShrink: 0 }} />
+              )}
+              <ListItemText
+                primary={name}
+                primaryTypographyProps={{ fontSize: '0.875rem', color: '#e2e8f0' }}
+                sx={{ flex: '1 1 auto', minWidth: 0 }}
+              />
+              {!nonDeletable && (
+                <ListItemSecondaryAction>
+                  <IconButton
+                    size="small"
+                    edge="end"
+                    onClick={(e) => { e.stopPropagation(); onDelete(fullPath) }}
+                    sx={{ color: '#ef4444', '&:hover': { color: '#f87171' } }}
+                    aria-label={`Delete folder ${name}`}
+                  >
+                    <DeleteIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </ListItemSecondaryAction>
+              )}
             </ListItemButton>
             {hasSubfolders && (
               <Collapse in={isOpen} unmountOnExit>
@@ -125,6 +151,7 @@ function FolderTree({
                   onSelect={onSelect}
                   onDelete={onDelete}
                   pathPrefix={fullPath}
+                  depth={depth + 1}
                 />
               </Collapse>
             )}
@@ -158,14 +185,17 @@ export default function Console() {
     [fetchProfile]
   )
 
+  const effectiveParentForNewFolder = selectedFolderPath.length > 0 ? selectedFolderPath : ['My Drones']
+  const canCreateFolderUnderSelection = effectiveParentForNewFolder[0] !== 'Shared'
+
   const handleFolderCreated = useCallback(
     (folderName?: string) => {
       if (folderName) {
-        updateHierarchy((h) => addFolderAtPath(h, selectedFolderPath, folderName))
+        updateHierarchy((h) => addFolderAtPath(h, effectiveParentForNewFolder, folderName))
       }
       return fetchProfile({ silent: true })
     },
-    [selectedFolderPath, updateHierarchy, fetchProfile]
+    [effectiveParentForNewFolder, updateHierarchy, fetchProfile]
   )
 
   const handleDeleteConnection = async (sessionId: string, e: React.MouseEvent) => {
@@ -289,6 +319,7 @@ export default function Console() {
           )}
           <Button
             onClick={() => setCreateFolderDialogOpen(true)}
+            disabled={!canCreateFolderUnderSelection}
             disableRipple
             sx={{ color: '#3b82f6', textTransform: 'none', p: 0, mt: 0.5, minWidth: 'auto' }}
           >
@@ -297,7 +328,7 @@ export default function Console() {
           <CreateFolderDialog
             open={createFolderDialogOpen}
             onClose={() => setCreateFolderDialogOpen(false)}
-            parentPath={selectedFolderPath}
+            parentPath={effectiveParentForNewFolder}
             onSuccess={handleFolderCreated}
           />
         </aside>
@@ -323,13 +354,29 @@ export default function Console() {
                   : selectedFolderPath.join(' › ')}
               </Typography>
             </div>
-            <Button
-              onClick={() => setCreateDialogOpen(true)}
-              disableRipple
-              sx={{ color: '#3b82f6', textTransform: 'none' }}
-            >
-              + New connection
-            </Button>
+            <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }}>
+              <Button
+                onClick={() => setCreateFolderDialogOpen(true)}
+                disabled={!canCreateFolderUnderSelection}
+                disableRipple
+                variant="outlined"
+                sx={{
+                  color: '#94a3b8',
+                  borderColor: '#475569',
+                  textTransform: 'none',
+                  '&:hover': { borderColor: '#64748b', backgroundColor: 'rgba(71, 85, 105, 0.2)' },
+                }}
+              >
+                + New folder
+              </Button>
+              <Button
+                onClick={() => setCreateDialogOpen(true)}
+                disableRipple
+                sx={{ color: '#3b82f6', textTransform: 'none' }}
+              >
+                + New connection
+              </Button>
+            </Box>
           </div>
           <CreateConnectionDialog
             isOpen={createDialogOpen}
@@ -343,6 +390,9 @@ export default function Console() {
             open={detailDialogOpen}
             onClose={() => { setDetailDialogOpen(false); setDetailSessionId(null) }}
           />
+          <Typography component="h2" variant="subtitle2" sx={{ color: '#64748b', mb: 1, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Connections
+          </Typography>
           <div className="drones-grid">
             {connections.length === 0 ? (
               <Typography sx={{ color: '#94a3b8', fontSize: '0.875rem' }}>
