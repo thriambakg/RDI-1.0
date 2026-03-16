@@ -106,7 +106,10 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
               add(`Success — full round-trip (client → proxy → Wavelength instance → proxy → client) (T+${ms}ms).`)
               finish()
             } else {
-              finish('Proxy reached; no agent on Wavelength instance. Start the agent on the instance to complete the round-trip.')
+              finish(
+                'Proxy reached; no agent on Wavelength instance. The agent is started when you create a session and runs for that session only. ' +
+                  'Use this session (see Session ID below); if you have multiple sessions, connect from the same session you just created, then ping again.'
+              )
             }
           } else {
             add(`Hop: ${obj.hop} — ${obj.message ?? ''} (T+${ms}ms)`)

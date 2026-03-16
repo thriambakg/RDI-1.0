@@ -101,7 +101,15 @@ The script will:
 
 **Fix:** Ensure Terraform passes the Zone **ID** to Lambda (e.g. `WAVELENGTH_ZONE_ID = var.edge_zone_ids[0]` when using a single Wavelength zone). Apply, then create a new session with that edge zone selected.
 
-### 5. Agent binary missing on instance
+### 5. Agent running but "no agent connected" (session ID mismatch)
+
+**Symptom:** Agent binary is on the instance, `pgrep rdi-agent` shows a process, and `/var/log/rdi-agent.log` shows "Connected to proxy session=...", but the UI ping still says "no agent connected".
+
+**Cause:** The proxy matches frontend and agent by **session_id**. The agent was started for one session (e.g. `1330261b-...`); your WebSocket is connected for a **different** session. So the proxy has an agent for session A and a frontend for session B — it correctly reports "no agent" for B.
+
+**Fix:** Use the **same** session end-to-end. Create **one** new session, open the connection dialog **for that same session** (the one whose Session ID matches the agent log), click Connect, then Ping. Do not open the dialog for a different session in your list. The dialog shows "Session ID" at the bottom — it must match the session the agent was started for (see `tail /var/log/rdi-agent.log` on the instance for `session=...`).
+
+### 6. Agent binary missing on instance
 
 **Symptom:** Log shows "agent binary not found" or SSM command fails to run `/opt/rdi-agent/rdi-agent` (e.g. "No such file or directory"). Diagnostics script step 4 reports this.
 
@@ -116,4 +124,5 @@ The script will:
 - [ ] Instance appears in SSM with Ping: Online.
 - [ ] Session was **created** (POST) after instance was ready (Lambda starts agent on create).
 - [ ] Session’s edge zone matches the zone of the Wavelength instance.
+- [ ] You are connecting and pinging from the **same** session (Session ID in the dialog must match the session the agent was started for; see agent log on instance).
 - [ ] On instance: `rdi-agent` process exists and `/var/log/rdi-agent.log` has no connection errors.

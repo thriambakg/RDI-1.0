@@ -169,46 +169,6 @@ resource "null_resource" "wavelength_agent_ready" {
   depends_on = [aws_s3_object.agent_binary]
 }
 
-# Wavelength EC2 - PX4 SITL at carrier edge (optional, single zone for MVP). Omitted when infra_version is 0 (same cycle as proxy + ALB).
-module "wavelength_ec2" {
-  count  = var.wavelength_zone_id != "" && var.infra_version > 0 ? 1 : 0
-  source = "./modules/wavelength-ec2"
-
-  project_name                  = var.project_name
-  environment                   = var.environment
-  wavelength_zone_id            = var.wavelength_zone_id
-  kms_key_arn                   = module.kms.main_key_arn
-  key_name                      = "" # Use SSM Session Manager; or set to existing key name for SSH
-  allowed_ssh_cidrs             = ["0.0.0.0/0"]
-  allowed_mavlink_cidrs         = ["0.0.0.0/0"]
-  allowed_api_cidrs             = ["0.0.0.0/0"]
-  mavlink_port                  = var.mavlink_port
-  agent_binary_s3_bucket        = var.wavelength_zone_id != "" ? module.proxy_artifacts_bucket.bucket_id : ""
-  agent_binary_s3_key           = "agent/rdi-agent"
-  enable_agent_binary_s3_access = var.wavelength_zone_id != "" && !var.skip_agent_build
-  cloudwatch_log_group_name     = var.wavelength_zone_id != "" ? aws_cloudwatch_log_group.rdi_agent.name : ""
-
-  user_data = var.wavelength_zone_id != "" ? base64encode(templatefile("${path.module}/../src/wavelength/user_data.sh", {
-    s3_bucket            = module.proxy_artifacts_bucket.bucket_id
-    s3_key               = "agent/rdi-agent"
-    aws_region           = local.region
-    cloudwatch_log_group = aws_cloudwatch_log_group.rdi_agent.name
-    infra_version        = var.infra_version
-  })) : ""
-
-  depends_on = [null_resource.wavelength_agent_ready]
-}
-
-output "wavelength_instance_id" {
-  description = "Wavelength EC2 instance ID (when deployed)"
-  value       = length(module.wavelength_ec2) > 0 ? module.wavelength_ec2[0].instance_id : null
-}
-
-output "wavelength_carrier_ip" {
-  description = "Wavelength carrier IP for 5G connectivity"
-  value       = length(module.wavelength_ec2) > 0 ? module.wavelength_ec2[0].carrier_ip : null
-}
-
 # S3 bucket for proxy binary (per-region)
 module "proxy_artifacts_bucket" {
   source = "./modules/s3-bucket"
@@ -304,18 +264,17 @@ module "session_api_lambda" {
   environment_variables = merge({
     CONNECTION_POOL_TABLE = local.connection_pool_tbl
     USER_PROFILES_TABLE   = local.user_profiles_tbl
-    PROXY_ENDPOINT        = length(module.proxy_ec2) > 0 ? ((var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2[0].websocket_endpoint)) : ""
-    PROXY_STATUS_URL      = length(module.proxy_ec2) > 0 ? "http://${module.proxy_ec2[0].public_ip}:8767/session-status" : ""
+    PROXY_ENDPOINT        = length(module.rdi_edge) > 0 ? ((var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (module.rdi_edge[0].alb_dns_name != null ? "wss://${module.rdi_edge[0].alb_dns_name}" : module.rdi_edge[0].proxy_websocket_endpoint_direct)) : ""
+    PROXY_STATUS_URL      = length(module.rdi_edge) > 0 ? "http://${module.rdi_edge[0].proxy_public_ip}:8767/session-status" : ""
     PROXY_STATUS_SECRET   = random_password.proxy_status_secret.result
-    }, length(module.wavelength_ec2) > 0 ? {
-    WAVELENGTH_INSTANCE_ID = module.wavelength_ec2[0].instance_id
-    # Zone ID (e.g. use1-wl1-chi-wlz1) so Lambda matches frontend request body; frontend sends Zone ID, not Zone Name.
-    WAVELENGTH_ZONE_ID = length(var.edge_zone_ids) > 0 ? var.edge_zone_ids[0] : var.wavelength_zone_id
+    }, length(module.rdi_edge) > 0 && module.rdi_edge[0].wavelength_instance_id != null ? {
+    WAVELENGTH_INSTANCE_ID = module.rdi_edge[0].wavelength_instance_id
+    WAVELENGTH_ZONE_ID     = length(var.edge_zone_ids) > 0 ? var.edge_zone_ids[0] : var.wavelength_zone_id
   } : {})
 
   additional_policy_arns = concat(
     [aws_iam_policy.session_api_dynamodb[0].arn],
-    length(module.wavelength_ec2) > 0 ? [aws_iam_policy.session_api_ssm[0].arn] : []
+    length(module.rdi_edge) > 0 && module.rdi_edge[0].wavelength_instance_id != null ? [aws_iam_policy.session_api_ssm[0].arn] : []
   )
   depends_on = [aws_iam_policy.session_api_dynamodb]
   layers     = [module.core_layer.layer_arn]
@@ -325,7 +284,7 @@ module "session_api_lambda" {
 
 # Allow Session API Lambda to start RDI agent on Wavelength instance via SSM
 resource "aws_iam_policy" "session_api_ssm" {
-  count       = var.base_state_bucket != "" && length(module.wavelength_ec2) > 0 ? 1 : 0
+  count       = var.base_state_bucket != "" && length(module.rdi_edge) > 0 && module.rdi_edge[0].wavelength_instance_id != null ? 1 : 0
   name        = "${var.project_name}-session-api-ssm-${var.environment}"
   description = "SSM SendCommand to start agent on Wavelength EC2"
 
@@ -336,7 +295,7 @@ resource "aws_iam_policy" "session_api_ssm" {
         Effect = "Allow"
         Action = "ssm:SendCommand"
         Resource = [
-          "arn:aws:ec2:${local.region}:${data.aws_caller_identity.current.account_id}:instance/${module.wavelength_ec2[0].instance_id}",
+          "arn:aws:ec2:${local.region}:${data.aws_caller_identity.current.account_id}:instance/${module.rdi_edge[0].wavelength_instance_id}",
           "arn:aws:ssm:${local.region}::document/AWS-RunShellScript"
         ]
       }
@@ -557,41 +516,6 @@ resource "aws_cloudwatch_log_group" "rdi_agent" {
   retention_in_days = 7
 }
 
-# Proxy EC2 - depends on binary in S3 so user_data can fetch it at boot. Omitted when infra_version is 0.
-module "proxy_ec2" {
-  count  = var.infra_version > 0 ? 1 : 0
-  source = "./modules/proxy-ec2"
-
-  project_name                  = var.project_name
-  environment                   = var.environment
-  kms_key_arn                   = module.kms.main_key_arn
-  proxy_websocket_port          = 8765
-  proxy_health_port             = 8766
-  proxy_status_port             = 8767
-  proxy_binary_s3_bucket        = module.proxy_artifacts_bucket.bucket_id
-  proxy_binary_s3_key           = "proxy/rdi-proxy"
-  enable_s3_proxy_binary_access = true
-  proxy_subnet_cidr             = var.proxy_subnet_cidr
-  alb_subnet_cidr               = var.enable_alb_wss ? var.alb_subnet_cidr : ""
-  cloudwatch_log_group_name     = aws_cloudwatch_log_group.rdi_proxy.name
-
-  user_data = base64encode(templatefile("${path.module}/../src/proxy/user_data.sh", {
-    s3_bucket            = module.proxy_artifacts_bucket.bucket_id
-    s3_key               = "proxy/rdi-proxy"
-    ws_port              = 8765
-    health_port          = 8766
-    status_port          = 8767
-    status_secret        = random_password.proxy_status_secret.result
-    cloudwatch_log_group = aws_cloudwatch_log_group.rdi_proxy.name
-    infra_version        = var.infra_version
-  }))
-
-  depends_on = [aws_s3_object.proxy_binary]
-
-  tags = {}
-}
-
-
 # Custom domain: Route53 hosted zone + ACM DNS-validated cert (trusted in all browsers and on phones)
 module "domain" {
   count  = var.enable_custom_domain && var.domain_name != "" ? 1 : 0
@@ -616,48 +540,47 @@ module "ssl_certificate" {
   tags         = {}
 }
 
-# ALB for WSS (TLS termination) - targets Proxy EC2. Omitted when infra_version is 0.
-module "alb_websocket" {
-  count  = var.enable_alb_wss && var.alb_subnet_cidr != "" && var.infra_version > 0 ? 1 : 0
-  source = "./modules/alb"
+# RDI Edge bundle: Proxy EC2 + ALB (WebSocket) + Wavelength EC2. Single module for deploy/teardown.
+# Individual modules remain in ./modules/proxy-ec2, ./modules/alb, ./modules/wavelength-ec2 for standalone use.
+module "rdi_edge" {
+  count  = var.infra_version > 0 ? 1 : 0
+  source = "./modules/rdi-edge"
 
-  project_name       = var.project_name
-  environment        = var.environment
-  name_suffix        = "-v${var.infra_version}"
-  vpc_id             = module.proxy_ec2[0].vpc_id
-  public_subnet_ids  = module.proxy_ec2[0].alb_subnet_ids
-  certificate_arn    = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? module.domain[0].certificate_arn : (var.certificate_arn != "" ? var.certificate_arn : module.ssl_certificate[0].certificate_arn)
-  kms_key_arn        = module.kms.main_key_arn
-  enable_waf         = false # WebSocket: skip WAF for lower latency and cost
-  access_logs_bucket = ""
-  enable_access_logs = false
+  project_name                  = var.project_name
+  environment                   = var.environment
+  region                        = local.region
+  infra_version                 = var.infra_version
+  kms_key_arn                   = module.kms.main_key_arn
+  proxy_status_secret           = random_password.proxy_status_secret.result
+  proxy_subnet_cidr             = var.proxy_subnet_cidr
+  alb_subnet_cidr               = var.enable_alb_wss ? var.alb_subnet_cidr : ""
+  proxy_artifacts_bucket_id     = module.proxy_artifacts_bucket.bucket_id
+  proxy_binary_s3_key           = "proxy/rdi-proxy"
+  cloudwatch_log_group_proxy    = aws_cloudwatch_log_group.rdi_proxy.name
+  enable_alb_wss                = var.enable_alb_wss
+  certificate_arn               = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? module.domain[0].certificate_arn : (var.certificate_arn != "" ? var.certificate_arn : (length(module.ssl_certificate) > 0 ? module.ssl_certificate[0].certificate_arn : ""))
+  wavelength_zone_id            = var.wavelength_zone_id
+  mavlink_port                  = var.mavlink_port
+  agent_binary_s3_bucket        = var.wavelength_zone_id != "" ? module.proxy_artifacts_bucket.bucket_id : ""
+  agent_binary_s3_key           = "agent/rdi-agent"
+  enable_agent_binary_s3_access = var.wavelength_zone_id != "" && !var.skip_agent_build
+  cloudwatch_log_group_agent    = var.wavelength_zone_id != "" ? aws_cloudwatch_log_group.rdi_agent.name : ""
 
-  target_group_config = {
-    port                = 8765
-    target_type         = "instance"
-    health_check_path   = "/"
-    health_check_port   = "8766"
-    healthy_threshold   = 2
-    unhealthy_threshold = 3
-    interval            = 30
-    timeout             = 10
-  }
-  target_instance_ids = [module.proxy_ec2[0].instance_id]
+  tags = {}
 
-  depends_on = [module.proxy_ec2]
-  tags       = {}
+  depends_on = [aws_s3_object.proxy_binary, null_resource.wavelength_agent_ready]
 }
 
 # Point custom domain at the ALB so WSS is reachable at wss://<full_domain_name> with a trusted cert
 resource "aws_route53_record" "alb_wss" {
-  count   = var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0 && length(module.alb_websocket) > 0 ? 1 : 0
+  count   = var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0 && length(module.rdi_edge) > 0 && module.rdi_edge[0].alb_dns_name != null ? 1 : 0
   zone_id = module.domain[0].hosted_zone_id
   name    = var.subdomain != "" ? "${var.subdomain}.${var.domain_name}" : var.domain_name
   type    = "A"
 
   alias {
-    name                   = module.alb_websocket[0].alb_dns_name
-    zone_id                = module.alb_websocket[0].alb_zone_id
+    name                   = module.rdi_edge[0].alb_dns_name
+    zone_id                = module.rdi_edge[0].alb_zone_id
     evaluate_target_health = true
   }
 }
@@ -674,16 +597,26 @@ output "api_gateway_base_url" {
 
 output "proxy_instance_id" {
   description = "Proxy EC2 instance ID (for SSM restart after deploy)"
-  value       = length(module.proxy_ec2) > 0 ? module.proxy_ec2[0].instance_id : null
+  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].proxy_instance_id : null
 }
 
 output "proxy_public_ip" {
-  value = length(module.proxy_ec2) > 0 ? module.proxy_ec2[0].public_ip : null
+  value = length(module.rdi_edge) > 0 ? module.rdi_edge[0].proxy_public_ip : null
 }
 
 output "proxy_websocket_endpoint" {
   description = "WebSocket endpoint (wss when ALB enabled; use custom domain when enable_custom_domain is set)"
-  value       = length(module.proxy_ec2) > 0 ? ((var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2[0].websocket_endpoint)) : null
+  value       = length(module.rdi_edge) > 0 ? ((var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (module.rdi_edge[0].alb_dns_name != null ? "wss://${module.rdi_edge[0].alb_dns_name}" : module.rdi_edge[0].proxy_websocket_endpoint_direct)) : null
+}
+
+output "wavelength_instance_id" {
+  description = "Wavelength EC2 instance ID (when deployed)"
+  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].wavelength_instance_id : null
+}
+
+output "wavelength_carrier_ip" {
+  description = "Wavelength carrier IP for 5G connectivity"
+  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].wavelength_carrier_ip : null
 }
 
 output "wss_custom_domain_name_servers" {
@@ -693,12 +626,12 @@ output "wss_custom_domain_name_servers" {
 
 output "alb_dns_name" {
   description = "ALB DNS name (when ALB enabled)"
-  value       = length(module.alb_websocket) > 0 ? module.alb_websocket[0].alb_dns_name : null
+  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].alb_dns_name : null
 }
 
 output "proxy_target_group_arn" {
   description = "Target group ARN for proxy (WebSocket ALB); used by pipeline to check health before restart"
-  value       = length(module.alb_websocket) > 0 ? module.alb_websocket[0].target_group_arn : null
+  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].proxy_target_group_arn : null
 }
 
 output "edge_zone_ids" {
@@ -706,9 +639,9 @@ output "edge_zone_ids" {
   value       = var.edge_zone_ids
 }
 
-# Keep variables in use when proxy_ec2/alb_websocket are commented out (avoids terraform_unused_declarations)
+# Keep variables in use (avoids terraform_unused_declarations)
 output "proxy_alb_subnet_cidrs" {
-  description = "Subnet CIDRs for proxy and ALB (used by module.proxy_ec2 and module.alb_websocket when enabled)"
+  description = "Subnet CIDRs for proxy and ALB (used by module.rdi_edge when enabled)"
   value       = { proxy_subnet_cidr = var.proxy_subnet_cidr, alb_subnet_cidr = var.alb_subnet_cidr }
 }
 
