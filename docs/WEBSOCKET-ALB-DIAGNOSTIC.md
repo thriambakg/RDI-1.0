@@ -55,6 +55,8 @@ If the session API returns `wss://wss.rdistaging.com/` and the connection **neve
 
 **Proxy must listen on port 8766:** The ALB health check uses **HTTP GET /** on port **8766**. The Rust proxy binary listens on 8766 by default. If the instance fell back to the Python placeholder (binary not in S3), user_data now starts a minimal HTTP server on 8766 so the target becomes healthy. **If your instance was launched before this fix**, replace the proxy instance (e.g. `terraform taint 'module.proxy_ec2.aws_instance.proxy'` then `terraform apply`) so new user_data runs, or SSH/SSM in and start an HTTP server on 8766 that returns 200 for GET /.
 
+**ALB security group must have egress:** The ALB needs **egress** to the VPC on **8765** (traffic) and **8766** (health check). If the ALB SG has no egress rules, health checks will always fail. In AWS Console → EC2 → Security Groups → `rdi-alb-sg-v2-staging`, ensure there are egress rules to the VPC CIDR (e.g. 10.200.0.0/16) for ports 8765 and 8766. Then run `terraform apply` so Terraform (re)creates the rules and keeps them in sync.
+
 ---
 
 ## 2. ALB listener and protocol

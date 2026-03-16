@@ -248,9 +248,12 @@ module "session_api_lambda" {
   environment_variables = {
     CONNECTION_POOL_TABLE = local.connection_pool_tbl
     USER_PROFILES_TABLE   = local.user_profiles_tbl
-    PROXY_ENDPOINT        = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2.websocket_endpoint)
-    PROXY_STATUS_URL      = "http://${module.proxy_ec2.public_ip}:8767/session-status"
-    PROXY_STATUS_SECRET   = random_password.proxy_status_secret.result
+    # When proxy/ALB flow is commented out for full recreation, use placeholders; uncomment the line below and remove the placeholder block when re-enabling.
+    # PROXY_ENDPOINT        = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2.websocket_endpoint)
+    # PROXY_STATUS_URL      = "http://${module.proxy_ec2.public_ip}:8767/session-status"
+    PROXY_ENDPOINT      = "wss://placeholder.invalid"
+    PROXY_STATUS_URL    = "http://0.0.0.0:8767/session-status"
+    PROXY_STATUS_SECRET = random_password.proxy_status_secret.result
   }
 
   additional_policy_arns = [aws_iam_policy.session_api_dynamodb[0].arn]
@@ -463,34 +466,35 @@ resource "aws_lambda_permission" "session_idle_expiry" {
 }
 
 # Proxy EC2 - depends on binary in S3 so user_data can fetch it at boot
-module "proxy_ec2" {
-  source = "./modules/proxy-ec2"
-
-  project_name                  = var.project_name
-  environment                   = var.environment
-  kms_key_arn                   = module.kms.main_key_arn
-  proxy_websocket_port          = 8765
-  proxy_health_port             = 8766
-  proxy_status_port             = 8767
-  proxy_binary_s3_bucket        = module.proxy_artifacts_bucket.bucket_id
-  proxy_binary_s3_key           = "proxy/rdi-proxy"
-  enable_s3_proxy_binary_access = true
-  proxy_subnet_cidr             = var.proxy_subnet_cidr
-  alb_subnet_cidr               = var.enable_alb_wss ? var.alb_subnet_cidr : ""
-
-  user_data = base64encode(templatefile("${path.module}/../src/proxy/user_data.sh", {
-    s3_bucket     = module.proxy_artifacts_bucket.bucket_id
-    s3_key        = "proxy/rdi-proxy"
-    ws_port       = 8765
-    health_port   = 8766
-    status_port   = 8767
-    status_secret = random_password.proxy_status_secret.result
-  }))
-
-  depends_on = [aws_s3_object.proxy_binary]
-
-  tags = {}
-}
+# COMMENTED OUT for full recreation: run terraform apply to destroy, then uncomment and apply again.
+# module "proxy_ec2" {
+#   source = "./modules/proxy-ec2"
+#
+#   project_name                  = var.project_name
+#   environment                   = var.environment
+#   kms_key_arn                   = module.kms.main_key_arn
+#   proxy_websocket_port          = 8765
+#   proxy_health_port             = 8766
+#   proxy_status_port             = 8767
+#   proxy_binary_s3_bucket        = module.proxy_artifacts_bucket.bucket_id
+#   proxy_binary_s3_key           = "proxy/rdi-proxy"
+#   enable_s3_proxy_binary_access = true
+#   proxy_subnet_cidr             = var.proxy_subnet_cidr
+#   alb_subnet_cidr               = var.enable_alb_wss ? var.alb_subnet_cidr : ""
+#
+#   user_data = base64encode(templatefile("${path.module}/../src/proxy/user_data.sh", {
+#     s3_bucket     = module.proxy_artifacts_bucket.bucket_id
+#     s3_key        = "proxy/rdi-proxy"
+#     ws_port       = 8765
+#     health_port   = 8766
+#     status_port   = 8767
+#     status_secret = random_password.proxy_status_secret.result
+#   }))
+#
+#   depends_on = [aws_s3_object.proxy_binary]
+#
+#   tags = {}
+# }
 
 
 # Custom domain: Route53 hosted zone + ACM DNS-validated cert (trusted in all browsers and on phones)
@@ -518,49 +522,50 @@ module "ssl_certificate" {
 }
 
 # ALB for WSS (TLS termination) - targets Proxy EC2
-module "alb_websocket" {
-  count  = var.enable_alb_wss && var.alb_subnet_cidr != "" ? 1 : 0
-  source = "./modules/alb"
-
-  project_name       = var.project_name
-  environment        = var.environment
-  vpc_id             = module.proxy_ec2.vpc_id
-  public_subnet_ids  = module.proxy_ec2.alb_subnet_ids
-  certificate_arn    = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? module.domain[0].certificate_arn : (var.certificate_arn != "" ? var.certificate_arn : module.ssl_certificate[0].certificate_arn)
-  kms_key_arn        = module.kms.main_key_arn
-  enable_waf         = false # WebSocket: skip WAF for lower latency and cost
-  access_logs_bucket = ""
-  enable_access_logs = false
-
-  target_group_config = {
-    port                = 8765
-    target_type         = "instance"
-    health_check_path   = "/"
-    health_check_port   = "8766"
-    healthy_threshold   = 2
-    unhealthy_threshold = 3
-    interval            = 30
-    timeout             = 10
-  }
-  target_instance_ids = [module.proxy_ec2.instance_id]
-
-  depends_on = [module.proxy_ec2]
-  tags       = {}
-}
-
-# Point custom domain at the ALB so WSS is reachable at wss://<full_domain_name> with a trusted cert
-resource "aws_route53_record" "alb_wss" {
-  count   = var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0 && length(module.alb_websocket) > 0 ? 1 : 0
-  zone_id = module.domain[0].hosted_zone_id
-  name    = var.subdomain != "" ? "${var.subdomain}.${var.domain_name}" : var.domain_name
-  type    = "A"
-
-  alias {
-    name                   = module.alb_websocket[0].alb_dns_name
-    zone_id                = module.alb_websocket[0].alb_zone_id
-    evaluate_target_health = true
-  }
-}
+# COMMENTED OUT for full recreation: run terraform apply to destroy, then uncomment and apply again.
+# module "alb_websocket" {
+#   count  = var.enable_alb_wss && var.alb_subnet_cidr != "" ? 1 : 0
+#   source = "./modules/alb"
+#
+#   project_name       = var.project_name
+#   environment        = var.environment
+#   vpc_id             = module.proxy_ec2.vpc_id
+#   public_subnet_ids  = module.proxy_ec2.alb_subnet_ids
+#   certificate_arn    = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? module.domain[0].certificate_arn : (var.certificate_arn != "" ? var.certificate_arn : module.ssl_certificate[0].certificate_arn)
+#   kms_key_arn        = module.kms.main_key_arn
+#   enable_waf         = false # WebSocket: skip WAF for lower latency and cost
+#   access_logs_bucket = ""
+#   enable_access_logs = false
+#
+#   target_group_config = {
+#     port                = 8765
+#     target_type         = "instance"
+#     health_check_path   = "/"
+#     health_check_port   = "8766"
+#     healthy_threshold   = 2
+#     unhealthy_threshold = 3
+#     interval            = 30
+#     timeout             = 10
+#   }
+#   target_instance_ids = [module.proxy_ec2.instance_id]
+#
+#   depends_on = [module.proxy_ec2]
+#   tags       = {}
+# }
+#
+# # Point custom domain at the ALB so WSS is reachable at wss://<full_domain_name> with a trusted cert
+# resource "aws_route53_record" "alb_wss" {
+#   count   = var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0 && length(module.alb_websocket) > 0 ? 1 : 0
+#   zone_id = module.domain[0].hosted_zone_id
+#   name    = var.subdomain != "" ? "${var.subdomain}.${var.domain_name}" : var.domain_name
+#   type    = "A"
+#
+#   alias {
+#     name                   = module.alb_websocket[0].alb_dns_name
+#     zone_id                = module.alb_websocket[0].alb_zone_id
+#     evaluate_target_health = true
+#   }
+# }
 
 output "session_api_url" {
   description = "Full URL to the sessions resource (for testing)"
@@ -572,24 +577,25 @@ output "api_gateway_base_url" {
   value       = length(module.session_api) > 0 ? module.session_api[0].stage_url : null
 }
 
-output "proxy_public_ip" {
-  value = module.proxy_ec2.public_ip
-}
-
-output "proxy_websocket_endpoint" {
-  description = "WebSocket endpoint (wss when ALB enabled; use custom domain when enable_custom_domain is set)"
-  value       = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2.websocket_endpoint)
-}
+# COMMENTED OUT for full recreation; uncomment when re-enabling proxy_ec2.
+# output "proxy_public_ip" {
+#   value = module.proxy_ec2.public_ip
+# }
+#
+# output "proxy_websocket_endpoint" {
+#   description = "WebSocket endpoint (wss when ALB enabled; use custom domain when enable_custom_domain is set)"
+#   value       = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2.websocket_endpoint)
+# }
 
 output "wss_custom_domain_name_servers" {
   description = "Route53 name servers for domain_name; set these as NS at your registrar when enable_custom_domain is true"
   value       = var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0 ? module.domain[0].hosted_zone_name_servers : null
 }
 
-output "alb_dns_name" {
-  description = "ALB DNS name (when ALB enabled)"
-  value       = length(module.alb_websocket) > 0 ? module.alb_websocket[0].alb_dns_name : null
-}
+# output "alb_dns_name" {
+#   description = "ALB DNS name (when ALB enabled)"
+#   value       = length(module.alb_websocket) > 0 ? module.alb_websocket[0].alb_dns_name : null
+# }
 
 output "edge_zone_ids" {
   description = "Wavelength zone IDs available in this environment (for UI Edge Location selector)"
