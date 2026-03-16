@@ -12,8 +12,8 @@ wavelength_zone_id = "us-east-1-wl1-chi-wlz-1"
 edge_zone_ids      = ["use1-wl1-chi-wlz1"] # Zone ID for UI display
 
 # Proxy subnet CIDRs (within 10.200.0.0/16). Bump if orphaned subnets cause InvalidSubnet.Conflict.
-proxy_subnet_cidr = "10.200.46.0/24"
-alb_subnet_cidr   = "10.200.47.0/24"
+proxy_subnet_cidr = "10.200.48.0/24"
+alb_subnet_cidr   = "10.200.49.0/24"
 
 # Custom domain for WSS (trusted cert — rdistaging.com)
 # After apply, set rdistaging.com NS records at your registrar to wss_custom_domain_name_servers output.
