@@ -1,6 +1,43 @@
 # WebSocket / ALB Connection Diagnostic Guide
 
-When the frontend fails to establish a WebSocket to the ALB (`wss://rdi-alb-v2-staging-....elb.amazonaws.com/`) with **code 1006, neverOpened**, use this checklist to find the root cause.
+When the frontend fails to establish a WebSocket to the ALB (`wss://rdi-alb-v2-staging-....elb.amazonaws.com/` or `wss://wss.rdistaging.com/`) with **code 1006, neverOpened**, use this checklist to find the root cause.
+
+## 0. Custom domain `wss.rdistaging.com` (staging)
+
+If the session API returns `wss://wss.rdistaging.com/` and the connection **never opens** (timeout, `onopenNeverFired`, code 1006), the problem is **not** the frontend — it is one of the following.
+
+**Run these in order:**
+
+1. **DNS** — Does `wss.rdistaging.com` resolve to your ALB?
+   ```bash
+   nslookup wss.rdistaging.com
+   # or
+   dig +short wss.rdistaging.com
+   ```
+   If it fails or points elsewhere: ensure the **rdistaging.com** NS records at your registrar match the Terraform output `wss_custom_domain_name_servers`, and that Terraform created the A record (e.g. `terraform output` then check Route53 → Hosted zone `rdistaging.com` → record `wss.rdistaging.com`).
+
+2. **Target group health** — ALB will not forward if no target is Healthy.
+   ```bash
+   aws elbv2 describe-target-groups --query 'TargetGroups[?contains(TargetGroupName, `rdi`) && contains(TargetGroupName, `staging`)].{Name:TargetGroupName,Arn:TargetGroupArn}' --output table
+   # Use the TG ARN from above:
+   aws elbv2 describe-target-health --target-group-arn <TG_ARN> --query 'TargetHealthDescriptions[*].TargetHealth.State' --output text
+   ```
+   You want at least one `healthy`. If `unhealthy`, fix the proxy (ports 8765/8766, security groups, process running).
+
+3. **ALB has HTTPS:443** — Browsers use `wss://` (port 443). If the ALB only has HTTP:80, the connection will never establish.
+   ```bash
+   aws elbv2 describe-load-balancers --query 'LoadBalancers[?contains(LoadBalancerName, `rdi`)].LoadBalancerArn' --output text
+   aws elbv2 describe-listeners --load-balancer-arn <ALB_ARN> --query 'Listeners[*].{Port:Port,Protocol:Protocol}' --output table
+   ```
+   You must see **443 / HTTPS**. If you only see 80, the domain module’s ACM certificate may not have been validated (check ACM and Route53 validation records; NS at registrar must point to the hosted zone).
+
+4. **TLS from your machine** — Confirm the ALB (or the hostname) accepts TLS on 443.
+   ```bash
+   curl -vI --connect-timeout 10 https://wss.rdistaging.com/
+   ```
+   If this fails, the issue is DNS, network, or TLS (cert/hostname). If it succeeds, the issue is likely target health or WebSocket upgrade.
+
+---
 
 ## 1. Target group health (most common)
 
@@ -15,6 +52,8 @@ When the frontend fails to establish a WebSocket to the ALB (`wss://rdi-alb-v2-s
 **Why it fails:** Health checks use port **8766**; the ALB security group must allow egress to 8766 (see `alb_egress_health_check` in `terraform/modules/alb/main.tf`). If that rule was missing, targets stay Unhealthy.
 
 **Fix:** Ensure `terraform apply` has been run with the ALB module that includes the health-check egress rule. Wait 1–2 health check intervals (e.g. 30–60s) for the proxy instance to become Healthy.
+
+**Proxy must listen on port 8766:** The ALB health check uses **HTTP GET /** on port **8766**. The Rust proxy binary listens on 8766 by default. If the instance fell back to the Python placeholder (binary not in S3), user_data now starts a minimal HTTP server on 8766 so the target becomes healthy. **If your instance was launched before this fix**, replace the proxy instance (e.g. `terraform taint 'module.proxy_ec2.aws_instance.proxy'` then `terraform apply`) so new user_data runs, or SSH/SSM in and start an HTTP server on 8766 that returns 200 for GET /.
 
 ---
 

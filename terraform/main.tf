@@ -482,6 +482,7 @@ module "proxy_ec2" {
     s3_bucket     = module.proxy_artifacts_bucket.bucket_id
     s3_key        = "proxy/rdi-proxy"
     ws_port       = 8765
+    health_port   = 8766
     status_port   = 8767
     status_secret = random_password.proxy_status_secret.result
   }))
@@ -538,7 +539,7 @@ module "alb_websocket" {
     healthy_threshold   = 2
     unhealthy_threshold = 3
     interval            = 30
-    timeout             = 5
+    timeout             = 10
   }
   target_instance_ids = [module.proxy_ec2.instance_id]
 
