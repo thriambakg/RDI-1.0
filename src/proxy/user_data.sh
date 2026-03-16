@@ -1,5 +1,6 @@
 #!/bin/bash
 # RDI Proxy EC2 user_data - install and run proxy binary
+# deployment_trigger: ${deployment_trigger} (change in variables.tf to force instance replace)
 set -e
 export RDI_PROXY_WS_PORT="${ws_port}"
 export RDI_PROXY_HEALTH_PORT="${health_port}"

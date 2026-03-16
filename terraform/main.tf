@@ -553,12 +553,13 @@ module "proxy_ec2" {
   alb_subnet_cidr               = var.enable_alb_wss ? var.alb_subnet_cidr : ""
 
   user_data = base64encode(templatefile("${path.module}/../src/proxy/user_data.sh", {
-    s3_bucket     = module.proxy_artifacts_bucket.bucket_id
-    s3_key        = "proxy/rdi-proxy"
-    ws_port       = 8765
-    health_port   = 8766
-    status_port   = 8767
-    status_secret = random_password.proxy_status_secret.result
+    s3_bucket          = module.proxy_artifacts_bucket.bucket_id
+    s3_key             = "proxy/rdi-proxy"
+    ws_port            = 8765
+    health_port        = 8766
+    status_port        = 8767
+    status_secret      = random_password.proxy_status_secret.result
+    deployment_trigger = var.infrastructure_deployment_trigger
   }))
 
   depends_on = [aws_s3_object.proxy_binary]
@@ -617,6 +618,7 @@ module "alb_websocket" {
     timeout             = 10
   }
   target_instance_ids = [module.proxy_ec2.instance_id]
+  deployment_trigger  = var.infrastructure_deployment_trigger
 
   depends_on = [module.proxy_ec2]
   tags       = {}

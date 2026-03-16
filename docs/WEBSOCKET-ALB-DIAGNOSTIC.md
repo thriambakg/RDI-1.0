@@ -39,6 +39,18 @@ If the session API returns `wss://wss.rdistaging.com/` and the connection **neve
 
 ---
 
+## 0b. "Connection timed out (15s)" then "Connection closed (code 1006)"
+
+**What you see:** In the UI, the connection stays "Connecting…" then turns red with "Connection failed" and a message like "Connection timed out (15s)" or "Connection could not be established (code 1006)". In the browser console: `[RDI SessionWS] openSession: connection timeout` then `onclose { code: 1006, hadOpened: false }`.
+
+**What it means:** The WebSocket **never reached OPEN**. The browser started the connection to `wss://...` but no handshake completed within 15 seconds. The frontend then closes the socket (so you may also see "WebSocket is closed before the connection is established"). Code **1006** = abnormal closure, no close frame from the server — typical when the connection never fully established (ALB/proxy never completed the WebSocket upgrade).
+
+**Root cause is infrastructure**, not the frontend. The request either never reached the proxy, or the proxy/ALB did not complete the WebSocket upgrade. Follow the checks in **section 0** (DNS, target health, ALB listener 443, TLS) and **sections 1–5** (target group health, listener, security groups, certificate, proxy process). Most often: **target group Unhealthy** (ALB won’t forward) or **no HTTPS:443 listener** (browser uses wss → 443).
+
+**Retry:** After fixing infra, use the **Retry connection** button in the Connection details dialog, or close and reopen the dialog to trigger a fresh connection.
+
+---
+
 ## 1. Target group health (most common)
 
 **Symptom:** Connection never opens; 1006 after ~100ms–8s.

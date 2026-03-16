@@ -45,7 +45,7 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
   const [pingRunning, setPingRunning] = useState(false)
   const [pingError, setPingError] = useState<string | null>(null)
 
-  const { getWs, openSession, connectionState } = useSessionWebSocket()
+  const { getWs, openSession, connectionState, connectionError } = useSessionWebSocket()
 
   useEffect(() => {
     if (!open || !sessionId) {
@@ -143,7 +143,9 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
 
   const name = data?.drone_id ? data.drone_id.split('-').slice(0, -1).join('-') || data.drone_id : ''
   const wsState = sessionId ? connectionState(sessionId) : 'closed'
+  const wsError = sessionId ? connectionError(sessionId) : null
   const isConnected = wsState === 'open'
+  const isFailed = wsState === 'failed'
 
   return (
     <Dialog
@@ -182,13 +184,27 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
                 height: 10,
                 borderRadius: '50%',
                 backgroundColor:
-                  wsState === 'open' ? '#22c55e' : wsState === 'connecting' ? '#eab308' : '#64748b',
+                  wsState === 'open'
+                    ? '#22c55e'
+                    : wsState === 'failed'
+                      ? '#ef4444'
+                      : wsState === 'connecting'
+                        ? '#eab308'
+                        : '#64748b',
                 flexShrink: 0,
               }}
-              aria-label={isConnected ? 'Connection established' : wsState === 'connecting' ? 'Connecting' : 'Disconnected'}
+              aria-label={
+                isConnected ? 'Connection established' : isFailed ? 'Connection failed' : wsState === 'connecting' ? 'Connecting' : 'Not connected'
+              }
             />
             <Typography component="span" variant="caption" sx={{ color: '#94a3b8', textTransform: 'none' }}>
-              {wsState === 'open' ? 'Connection established' : wsState === 'connecting' ? 'Connecting…' : 'Not connected'}
+              {wsState === 'open'
+                ? 'Connection established'
+                : isFailed
+                  ? 'Connection failed'
+                  : wsState === 'connecting'
+                    ? 'Connecting…'
+                    : 'Not connected'}
             </Typography>
           </Box>
         )}
@@ -196,6 +212,27 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
       <DialogContent sx={{ color: '#f8fafc' }}>
         {loading && <Typography sx={{ color: '#94a3b8' }}>Loading…</Typography>}
         {error && <Typography sx={{ color: '#f87171' }}>{error}</Typography>}
+        {isFailed && wsError && (
+          <Box sx={{ mb: 2 }}>
+            <Typography sx={{ color: '#f87171', fontSize: '0.875rem' }}>{wsError}</Typography>
+            {data?.endpoint && (
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => openSession(sessionId!, data!.endpoint)}
+                sx={{
+                  color: '#3b82f6',
+                  borderColor: '#475569',
+                  mt: 1,
+                  textTransform: 'none',
+                  '&:hover': { borderColor: '#3b82f6' },
+                }}
+              >
+                Retry connection
+              </Button>
+            )}
+          </Box>
+        )}
         {data && (
           <>
             <Box
