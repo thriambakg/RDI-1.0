@@ -304,7 +304,8 @@ module "session_api_lambda" {
     PROXY_STATUS_SECRET   = random_password.proxy_status_secret.result
     }, length(module.wavelength_ec2) > 0 ? {
     WAVELENGTH_INSTANCE_ID = module.wavelength_ec2[0].instance_id
-    WAVELENGTH_ZONE_ID     = var.wavelength_zone_id
+    # Zone ID (e.g. use1-wl1-chi-wlz1) so Lambda matches frontend request body; frontend sends Zone ID, not Zone Name.
+    WAVELENGTH_ZONE_ID = length(var.edge_zone_ids) > 0 ? var.edge_zone_ids[0] : var.wavelength_zone_id
   } : {})
 
   additional_policy_arns = concat(

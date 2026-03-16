@@ -102,8 +102,12 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
             add(`1. Proxy EC2: ${obj.message} (T+${ms}ms)`)
           } else if (obj.hop === 'wavelength') {
             add(`2. Wavelength: ${obj.message} (T+${ms}ms)`)
-            add(`Success — all hops reached (T+${ms}ms).`)
-            finish()
+            if (obj.message === 'instance responded') {
+              add(`Success — full round-trip (client → proxy → Wavelength instance → proxy → client) (T+${ms}ms).`)
+              finish()
+            } else {
+              finish('Proxy reached; no agent on Wavelength instance. Start the agent on the instance to complete the round-trip.')
+            }
           } else {
             add(`Hop: ${obj.hop} — ${obj.message ?? ''} (T+${ms}ms)`)
           }
