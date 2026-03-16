@@ -76,9 +76,9 @@ variable "skip_agent_build" {
 }
 
 # Manage in this file only: change default here as needed, then run terraform apply. Do not set in .tfvars.
-# true = destroy proxy + ALB/target group (apply once). false = deploy (apply again to recreate).
+# true = destroy proxy + ALB + Wavelength EC2 (apply once). false = deploy (apply again to recreate).
 variable "destroy_infra" {
-  description = "When true, proxy EC2 and ALB/target group are not created (count = 0). Change this value in variables.tf: set true, apply (destroy); set false, apply (recreate)."
+  description = "When true, proxy EC2, ALB/target group, and Wavelength EC2 are not created (count = 0). Set true, apply (destroy); set false, apply (recreate all)."
   type        = bool
   default     = true
 }

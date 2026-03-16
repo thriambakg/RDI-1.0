@@ -169,9 +169,9 @@ resource "null_resource" "wavelength_agent_ready" {
   depends_on = [aws_s3_object.agent_binary]
 }
 
-# Wavelength EC2 - PX4 SITL at carrier edge (optional, single zone for MVP)
+# Wavelength EC2 - PX4 SITL at carrier edge (optional, single zone for MVP). Omitted when destroy_infra is true (same cycle as proxy + ALB).
 module "wavelength_ec2" {
-  count  = var.wavelength_zone_id != "" ? 1 : 0
+  count  = var.wavelength_zone_id != "" && !var.destroy_infra ? 1 : 0
   source = "./modules/wavelength-ec2"
 
   project_name                  = var.project_name
