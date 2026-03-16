@@ -156,13 +156,17 @@ output "core_layer_arn" {
   value       = module.core_layer.layer_arn
 }
 
-# Ensure agent binary is in S3 before Wavelength boots (so user_data can fetch it)
+# Ensure agent binary is in S3 before Wavelength boots (so user_data can fetch it).
+# Use stable trigger (bucket+key) so plan doesn't change when S3 etag is computed during apply.
 resource "null_resource" "wavelength_agent_ready" {
   count = var.wavelength_zone_id != "" && !var.skip_agent_build ? 1 : 0
 
   triggers = {
-    agent_etag = aws_s3_object.agent_binary[0].etag
+    agent_bucket = module.proxy_artifacts_bucket.bucket_id
+    agent_key    = "agent/rdi-agent"
   }
+
+  depends_on = [aws_s3_object.agent_binary]
 }
 
 # Wavelength EC2 - PX4 SITL at carrier edge (optional, single zone for MVP)
