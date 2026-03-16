@@ -274,7 +274,7 @@ module "session_api_lambda" {
 
   additional_policy_arns = concat(
     [aws_iam_policy.session_api_dynamodb[0].arn],
-    length(module.rdi_edge) > 0 && module.rdi_edge[0].wavelength_instance_id != null ? [aws_iam_policy.session_api_ssm[0].arn] : []
+    var.base_state_bucket != "" && var.infra_version > 0 && var.wavelength_zone_id != "" ? [aws_iam_policy.session_api_ssm[0].arn] : []
   )
   depends_on = [aws_iam_policy.session_api_dynamodb]
   layers     = [module.core_layer.layer_arn]
