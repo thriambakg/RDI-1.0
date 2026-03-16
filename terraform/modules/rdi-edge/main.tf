@@ -85,6 +85,7 @@ module "alb_websocket" {
   certificate_arn    = var.certificate_arn
   kms_key_arn        = var.kms_key_arn
   enable_waf         = false
+  enable_waf_logging = false
   access_logs_bucket = ""
   enable_access_logs = false
 
