@@ -3,6 +3,7 @@
 
 use futures_util::{SinkExt, StreamExt};
 use std::env;
+use std::sync::Arc;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::info;
 
@@ -37,11 +38,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .send(tokio_tungstenite::tungstenite::Message::Text(format!("agent:{}", session_id)))
         .await?;
 
-    let udp = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
+    let udp = Arc::new(tokio::net::UdpSocket::bind("0.0.0.0:0").await?);
     let mavlink: std::net::SocketAddr = mavlink_addr.parse()?;
 
-    let udp_recv = udp.clone();
-    let udp_send = udp.clone();
+    let udp_recv = Arc::clone(&udp);
+    let udp_send = Arc::clone(&udp);
 
     let (pong_tx, mut pong_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
@@ -85,9 +86,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     });
 
     tokio::select! { _ = to_ws => {} _ = to_udp => {} }
-</think>
-Reconsidering: keeping the original structure and adding a channel so the UDP→WS task can send PONG.
-<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
-Read
     Ok(())
 }
