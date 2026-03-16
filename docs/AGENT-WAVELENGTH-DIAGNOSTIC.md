@@ -103,11 +103,11 @@ The script will:
 
 ### 5. Agent binary missing on instance
 
-**Symptom:** Log shows "agent binary not found" or SSM command fails to run `/opt/rdi-agent/rdi-agent`.
+**Symptom:** Log shows "agent binary not found" or SSM command fails to run `/opt/rdi-agent/rdi-agent` (e.g. "No such file or directory"). Diagnostics script step 4 reports this.
 
-**Cause:** Wavelength user_data downloads the agent from S3; if the bucket/key is wrong or the instance has no IAM permission, the binary is missing.
+**Cause:** Wavelength user_data downloads the agent from S3 at first boot; if the S3 download failed (wrong bucket/key or no IAM), the binary can be missing. user_data does not re-run on existing instances.
 
-**Fix:** Ensure Terraform uploads the agent to S3 and the Wavelength instance role has `s3:GetObject` for that bucket/key. Re-run user_data or replace the instance so the binary is installed.
+**Fix:** The deployment pipeline (**Deploy Application Infrastructure** workflow) runs an **Install agent on Wavelength instance** step after every Terraform apply. It uses SSM to copy the agent from S3 to `/opt/rdi-agent/rdi-agent` on the Wavelength instance. Re-run the pipeline (or push to the deploy branch) so that step runs again. Ensure Terraform uploads the agent (`skip_agent_build = false`) and the Wavelength instance role has `s3:GetObject` for the proxy-artifacts bucket. If the instance was just created, wait for it to appear in SSM (Ping: Online) and trigger another deploy, or replace the instance so user_data runs at boot.
 
 ## Quick checklist
 
