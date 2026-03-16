@@ -1,0 +1,9 @@
+{
+  "commands": [
+    "mkdir -p /opt/rdi-agent",
+    "aws s3 cp s3://rdi-proxy-artifacts-staging-us-east-1/agent/rdi-agent /opt/rdi-agent/rdi-agent --region us-east-1",
+    "chmod +x /opt/rdi-agent/rdi-agent",
+    "ls -la /opt/rdi-agent/rdi-agent",
+    "echo 'Agent installed. Create a new session and connect to start the agent.'"
+  ]
+}

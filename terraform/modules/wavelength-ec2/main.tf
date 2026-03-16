@@ -141,6 +141,11 @@ resource "aws_iam_role_policy" "s3_agent_binary" {
         Effect   = "Allow"
         Action   = ["s3:GetObject"]
         Resource = "arn:aws:s3:::${var.agent_binary_s3_bucket}/${var.agent_binary_s3_key}*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:DescribeKey"]
+        Resource = var.kms_key_arn
       }
     ]
   })

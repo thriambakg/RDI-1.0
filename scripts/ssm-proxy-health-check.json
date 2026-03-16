@@ -1,0 +1,13 @@
+{
+  "commands": [
+    "echo '=== Port 8766 health ==='",
+    "curl -s -o /dev/null -w 'HTTP code: %{http_code}' --connect-timeout 2 http://127.0.0.1:8766/ || echo 'FAIL: curl to 8766 failed'",
+    "echo ''",
+    "echo '=== Ports 8765 8766 listening ==='",
+    "ss -tlnp | grep -E '8765|8766' || true",
+    "echo '=== Proxy process ==='",
+    "ps aux | grep -E 'rdi-proxy|relay.py' | grep -v grep || echo 'No proxy process found'",
+    "echo '=== Last proxy log lines ==='",
+    "tail -20 /var/log/rdi-proxy.log 2>/dev/null || echo 'No rdi-proxy.log'"
+  ]
+}

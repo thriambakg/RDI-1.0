@@ -1,0 +1,8 @@
+{
+  "commands": [
+    "cd /opt/rdi-proxy && nohup ./rdi-proxy >> /var/log/rdi-proxy.log 2>&1 &",
+    "sleep 2",
+    "curl -s -o /dev/null -w 'HTTP 8766: %{http_code}' --connect-timeout 2 http://127.0.0.1:8766/",
+    "ss -tlnp | grep -E '8765|8766' || true"
+  ]
+}
