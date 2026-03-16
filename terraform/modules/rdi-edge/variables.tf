@@ -44,6 +44,12 @@ variable "alb_subnet_cidr" {
   default     = ""
 }
 
+variable "proxy_ready_delay_seconds" {
+  type        = number
+  description = "Seconds to wait after proxy EC2 is created before creating ALB/target group, so the proxy health check is up (set 0 to skip). On Windows, use Git Bash/WSL or set 0 unless you have 'sleep' in PATH."
+  default     = 90
+}
+
 variable "proxy_artifacts_bucket_id" {
   type        = string
   description = "S3 bucket ID for proxy binary"
