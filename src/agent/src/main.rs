@@ -3,9 +3,13 @@
 
 use futures_util::{SinkExt, StreamExt};
 use std::env;
+use tokio_tungstenite::tungstenite::Message;
 use tracing::info;
 
 const DEFAULT_MAVLINK_PORT: u16 = 14540;
+/// Proxy sends this; we reply with PONG so round-trip works without PX4.
+const PING_BYTES: &[u8] = b"PING";
+const PONG_BYTES: &[u8] = b"PONG";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -39,28 +43,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let udp_recv = udp.clone();
     let udp_send = udp.clone();
 
+    let (pong_tx, mut pong_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+
     let to_ws = tokio::spawn(async move {
         let mut buf = [0u8; 2048];
         loop {
-            match udp_recv.recv_from(&mut buf).await {
-                Ok((len, _)) => {
-                    if ws_tx.send(tokio_tungstenite::tungstenite::Message::Binary(buf[..len].to_vec())).await.is_err() {
+            tokio::select! {
+                result = udp_recv.recv_from(&mut buf) => {
+                    match result {
+                        Ok((len, _)) => {
+                            if ws_tx.send(Message::Binary(buf[..len].to_vec())).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                pong = pong_rx.recv() => {
+                    if let Some(data) = pong {
+                        if ws_tx.send(Message::Binary(data)).await.is_err() {
+                            break;
+                        }
+                    } else {
                         break;
                     }
                 }
-                Err(_) => break,
             }
         }
     });
 
     let to_udp = tokio::spawn(async move {
         while let Some(msg) = ws_rx.next().await {
-            if let Ok(tokio_tungstenite::tungstenite::Message::Binary(data)) = msg {
-                let _ = udp_send.send_to(&data, mavlink).await;
+            if let Ok(Message::Binary(data)) = msg {
+                if data == PING_BYTES {
+                    let _ = pong_tx.send(PONG_BYTES.to_vec());
+                } else {
+                    let _ = udp_send.send_to(&data, mavlink).await;
+                }
             }
         }
     });
 
     tokio::select! { _ = to_ws => {} _ = to_udp => {} }
+</think>
+Reconsidering: keeping the original structure and adding a channel so the UDP→WS task can send PONG.
+<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
+Read
     Ok(())
 }

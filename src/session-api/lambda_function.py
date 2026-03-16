@@ -8,6 +8,7 @@ and clears idle sessions from memory.
 
 import json
 import os
+import shlex
 import uuid
 import time
 import urllib.request
@@ -25,6 +26,30 @@ PROXY_ENDPOINT = os.environ["PROXY_ENDPOINT"]
 USER_PROFILES_TABLE = os.environ.get("USER_PROFILES_TABLE", "")
 PROXY_STATUS_URL = os.environ.get("PROXY_STATUS_URL", "")
 PROXY_STATUS_SECRET = os.environ.get("PROXY_STATUS_SECRET", "")
+WAVELENGTH_INSTANCE_ID = os.environ.get("WAVELENGTH_INSTANCE_ID", "")
+WAVELENGTH_ZONE_ID = os.environ.get("WAVELENGTH_ZONE_ID", "")
+
+
+def _start_agent_on_wavelength(instance_id: str, proxy_url: str, session_id: str) -> None:
+    """Start RDI agent on Wavelength EC2 via SSM so proxy↔agent connection is established."""
+    if not instance_id or not proxy_url or not session_id:
+        return
+    # Escape for shell: proxy_url and session_id could contain special chars
+    safe_url = shlex.quote(proxy_url)
+    safe_sid = shlex.quote(session_id)
+    commands = [
+        f"export RDI_PROXY_URL={safe_url} RDI_SESSION_ID={safe_sid}",
+        "nohup /opt/rdi-agent/rdi-agent >> /var/log/rdi-agent.log 2>&1 &",
+    ]
+    try:
+        ssm = boto3.client("ssm", region_name=REGION)
+        ssm.send_command(
+            InstanceIds=[instance_id],
+            DocumentName="AWS-RunShellScript",
+            Parameters={"commands": commands},
+        )
+    except Exception as e:
+        print(f"SSM SendCommand to start agent failed for session {session_id}: {e}")
 
 
 def _notify_proxy_session_status(session_id: str, status: str) -> None:
@@ -177,6 +202,9 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
             status="active",
             folder_path=folder_path,
         )
+
+    if WAVELENGTH_INSTANCE_ID and (not WAVELENGTH_ZONE_ID or wavelength_zone_id == WAVELENGTH_ZONE_ID):
+        _start_agent_on_wavelength(WAVELENGTH_INSTANCE_ID, PROXY_ENDPOINT, session_id)
 
     return _response(
         200,

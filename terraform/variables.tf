@@ -69,6 +69,12 @@ variable "skip_proxy_build" {
   default     = false
 }
 
+variable "skip_agent_build" {
+  description = "Skip building and uploading the agent binary. Set true when Rust is not available or agent is not deployed."
+  type        = bool
+  default     = false
+}
+
 variable "proxy_subnet_cidr" {
   description = "CIDR for proxy EC2 subnet (within 10.200.0.0/16). Change if orphaned subnets conflict."
   type        = string

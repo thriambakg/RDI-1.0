@@ -24,6 +24,7 @@ import {
 import type { SelectChangeEvent } from '@mui/material'
 import { Delete as DeleteIcon, ExpandLess, ExpandMore, Folder, FolderOpen, MoreVert, PauseCircleOutline, PlayArrow } from '@mui/icons-material'
 import { useAuth } from '../../contexts/AuthContext'
+import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import { getEnvironmentRegions } from '../../config'
 import { CreateConnectionDialog, CreateFolderDialog, ConnectionDetailDialog } from '../../components/dialogues'
 import { useProfile } from '../../contexts/ProfileContext'
@@ -238,6 +239,8 @@ export default function Console() {
   const effectiveParentForNewConnection = selectedFolderPath.length > 0 ? selectedFolderPath : ['My Drones']
   const canCreateConnectionUnderSelection = effectiveParentForNewConnection[0] !== 'Shared'
 
+  const { openSession: openSessionWs, closeSession: closeSessionWs } = useSessionWebSocket()
+
   const handleConnectionCreated = useCallback(
     (res: CreateSessionResponse, displayName: string) => {
       updateHierarchy((h) =>
@@ -247,8 +250,9 @@ export default function Console() {
           status: 'active',
         })
       )
+      openSessionWs(res.session_id, res.endpoint)
     },
-    [effectiveParentForNewConnection, updateHierarchy]
+    [effectiveParentForNewConnection, updateHierarchy, openSessionWs]
   )
 
   const handleFolderCreated = useCallback(
@@ -265,6 +269,7 @@ export default function Console() {
     setConfirmDeleteConnection(null)
     setConnectionMenuAnchor(null)
     setDeleteLoading(sessionId)
+    closeSessionWs(sessionId)
     if (detailSessionId === sessionId) {
       setDetailSessionId(null)
       setDetailDialogOpen(false)
@@ -284,6 +289,7 @@ export default function Console() {
   const handlePauseConnection = async (sessionId: string) => {
     setConnectionMenuAnchor(null)
     setDeleteLoading(sessionId)
+    closeSessionWs(sessionId)
     updateHierarchy((h) => updateSessionStatusInHierarchy(h, sessionId, 'idle'))
     try {
       await releaseSession(sessionId)

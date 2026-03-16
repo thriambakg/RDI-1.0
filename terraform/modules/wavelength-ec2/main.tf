@@ -129,6 +129,23 @@ resource "aws_iam_role_policy_attachment" "ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+resource "aws_iam_role_policy" "s3_agent_binary" {
+  count = var.enable_agent_binary_s3_access && var.agent_binary_s3_bucket != "" ? 1 : 0
+
+  name = "${var.project_name}-wavelength-agent-s3"
+  role = aws_iam_role.instance.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = "arn:aws:s3:::${var.agent_binary_s3_bucket}/${var.agent_binary_s3_key}*"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_instance_profile" "instance" {
   name_prefix = "${var.project_name}-wavelength-"
   role        = aws_iam_role.instance.name

@@ -80,6 +80,24 @@ variable "user_data" {
   default     = ""
 }
 
+variable "agent_binary_s3_bucket" {
+  description = "S3 bucket containing RDI agent binary (optional)"
+  type        = string
+  default     = ""
+}
+
+variable "agent_binary_s3_key" {
+  description = "S3 key for agent binary"
+  type        = string
+  default     = "agent/rdi-agent"
+}
+
+variable "enable_agent_binary_s3_access" {
+  description = "Enable IAM policy for EC2 to download agent binary from S3"
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   description = "Tags to apply to resources"
   type        = map(string)

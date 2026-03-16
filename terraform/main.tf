@@ -156,20 +156,38 @@ output "core_layer_arn" {
   value       = module.core_layer.layer_arn
 }
 
+# Ensure agent binary is in S3 before Wavelength boots (so user_data can fetch it)
+resource "null_resource" "wavelength_agent_ready" {
+  count = var.wavelength_zone_id != "" && !var.skip_agent_build ? 1 : 0
+
+  triggers = {
+    agent_etag = aws_s3_object.agent_binary[0].etag
+  }
+}
+
 # Wavelength EC2 - PX4 SITL at carrier edge (optional, single zone for MVP)
 module "wavelength_ec2" {
   count  = var.wavelength_zone_id != "" ? 1 : 0
   source = "./modules/wavelength-ec2"
 
-  project_name          = var.project_name
-  environment           = var.environment
-  wavelength_zone_id    = var.wavelength_zone_id
-  kms_key_arn           = module.kms.main_key_arn
-  key_name              = "" # Use SSM Session Manager; or set to existing key name for SSH
-  allowed_ssh_cidrs     = ["0.0.0.0/0"]
-  allowed_mavlink_cidrs = ["0.0.0.0/0"]
-  allowed_api_cidrs     = ["0.0.0.0/0"]
-  mavlink_port          = var.mavlink_port
+  project_name                  = var.project_name
+  environment                   = var.environment
+  wavelength_zone_id            = var.wavelength_zone_id
+  kms_key_arn                   = module.kms.main_key_arn
+  key_name                      = "" # Use SSM Session Manager; or set to existing key name for SSH
+  allowed_ssh_cidrs             = ["0.0.0.0/0"]
+  allowed_mavlink_cidrs         = ["0.0.0.0/0"]
+  allowed_api_cidrs             = ["0.0.0.0/0"]
+  mavlink_port                  = var.mavlink_port
+  agent_binary_s3_bucket        = var.wavelength_zone_id != "" ? module.proxy_artifacts_bucket.bucket_id : ""
+  agent_binary_s3_key           = "agent/rdi-agent"
+  enable_agent_binary_s3_access = var.wavelength_zone_id != "" && !var.skip_agent_build
+  user_data = var.wavelength_zone_id != "" ? base64encode(templatefile("${path.module}/../src/wavelength/user_data.sh", {
+    s3_bucket = module.proxy_artifacts_bucket.bucket_id
+    s3_key    = "agent/rdi-agent"
+  })) : ""
+
+  depends_on = [null_resource.wavelength_agent_ready]
 }
 
 output "wavelength_instance_id" {
@@ -232,6 +250,35 @@ resource "aws_s3_object" "proxy_binary" {
   depends_on = [null_resource.proxy_build]
 }
 
+# Build agent binary (Rust) - skip when skip_agent_build=true
+resource "null_resource" "agent_build" {
+  count = var.skip_agent_build ? 0 : 1
+
+  triggers = {
+    cargo_toml   = filemd5("${path.module}/../src/agent/Cargo.toml")
+    main_rs      = filemd5("${path.module}/../src/agent/src/main.rs")
+    build_script = filemd5("${path.module}/../scripts/build-agent.sh")
+  }
+
+  provisioner "local-exec" {
+    command     = "bash ../scripts/build-agent.sh"
+    working_dir = path.module
+  }
+}
+
+# Upload agent binary to S3 for Wavelength EC2 user_data to fetch
+resource "aws_s3_object" "agent_binary" {
+  count = var.skip_agent_build ? 0 : 1
+
+  bucket       = module.proxy_artifacts_bucket.bucket_id
+  key          = "agent/rdi-agent"
+  source       = "${path.module}/../src/agent/target/release/rdi-agent"
+  content_type = "application/octet-stream"
+  etag         = try(filemd5("${path.module}/../src/agent/target/release/rdi-agent"), "pending-build")
+
+  depends_on = [null_resource.agent_build]
+}
+
 # Session API and Proxy - require base infra (connection pool, Cognito)
 module "session_api_lambda" {
   count  = var.base_state_bucket != "" ? 1 : 0
@@ -245,19 +292,46 @@ module "session_api_lambda" {
   memory_size   = 128
   source_dir    = "${path.module}/../src/session-api"
 
-  environment_variables = {
+  environment_variables = merge({
     CONNECTION_POOL_TABLE = local.connection_pool_tbl
     USER_PROFILES_TABLE   = local.user_profiles_tbl
     PROXY_ENDPOINT        = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2.websocket_endpoint)
     PROXY_STATUS_URL      = "http://${module.proxy_ec2.public_ip}:8767/session-status"
     PROXY_STATUS_SECRET   = random_password.proxy_status_secret.result
-  }
+    }, length(module.wavelength_ec2) > 0 ? {
+    WAVELENGTH_INSTANCE_ID = module.wavelength_ec2[0].instance_id
+    WAVELENGTH_ZONE_ID     = var.wavelength_zone_id
+  } : {})
 
-  additional_policy_arns = [aws_iam_policy.session_api_dynamodb[0].arn]
-  depends_on             = [aws_iam_policy.session_api_dynamodb]
-  layers                 = [module.core_layer.layer_arn]
+  additional_policy_arns = concat(
+    [aws_iam_policy.session_api_dynamodb[0].arn],
+    length(module.wavelength_ec2) > 0 ? [aws_iam_policy.session_api_ssm[0].arn] : []
+  )
+  depends_on = [aws_iam_policy.session_api_dynamodb]
+  layers     = [module.core_layer.layer_arn]
 
   tags = {}
+}
+
+# Allow Session API Lambda to start RDI agent on Wavelength instance via SSM
+resource "aws_iam_policy" "session_api_ssm" {
+  count       = var.base_state_bucket != "" && length(module.wavelength_ec2) > 0 ? 1 : 0
+  name        = "${var.project_name}-session-api-ssm-${var.environment}"
+  description = "SSM SendCommand to start agent on Wavelength EC2"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = "ssm:SendCommand"
+        Resource = [
+          "arn:aws:ec2:${local.region}:${data.aws_caller_identity.current.account_id}:instance/${module.wavelength_ec2[0].instance_id}",
+          "arn:aws:ssm:${local.region}::document/AWS-RunShellScript"
+        ]
+      }
+    ]
+  })
 }
 
 resource "aws_iam_policy" "session_api_dynamodb" {

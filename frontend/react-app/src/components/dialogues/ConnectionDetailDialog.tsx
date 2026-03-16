@@ -9,6 +9,7 @@ import {
 } from '@mui/material'
 import { useCallback, useEffect, useState } from 'react'
 import { getSession } from '../../services/sessionApi'
+import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 
 const PING_BYTES = new Uint8Array([0x50, 0x49, 0x4e, 0x47]) // "PING"
 
@@ -44,6 +45,8 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
   const [pingRunning, setPingRunning] = useState(false)
   const [pingError, setPingError] = useState<string | null>(null)
 
+  const { getWs, openSession, connectionState } = useSessionWebSocket()
+
   useEffect(() => {
     if (!open || !sessionId) {
       setData(null)
@@ -60,8 +63,20 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
       .finally(() => setLoading(false))
   }, [open, sessionId])
 
+  // Keep WebSocket open for active sessions when dialog is open
+  useEffect(() => {
+    if (!open || !sessionId || !data?.endpoint || data?.status !== 'active') return
+    openSession(sessionId, data.endpoint)
+  }, [open, sessionId, data?.endpoint, data?.status, openSession])
+
   const runPing = useCallback(() => {
-    if (!data?.endpoint || !data?.session_id) return
+    if (!data?.session_id) return
+    const ws = getWs(data.session_id)
+    if (!ws) {
+      setPingError('Connection not ready. Wait a moment for the connection to establish, then try again.')
+      return
+    }
+
     setPingRunning(true)
     setPingError(null)
     setPingLog([])
@@ -74,68 +89,33 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
     }
     const elapsed = () => Math.round(performance.now() - start)
 
-    const wsUrl = data.endpoint.replace(/^http/, 'ws')
-    let ws: WebSocket | null = null
     let closed = false
-
-    console.log('[RDI Ping] Starting', {
-      wsUrl,
-      sessionId: data.session_id,
-      status: data.status,
-    })
-    add(`T+0ms — Connecting to ${wsUrl.split('/')[2] ?? wsUrl}…`)
-
-    let opened = false
     const finish = (err?: string) => {
       if (closed) return
       closed = true
       setPingRunning(false)
       if (err) setPingError(err)
-      try {
-        if (ws && ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
-          ws.close()
-        }
-      } catch {
-        // ignore
-      }
+      ws.onmessage = () => {}
     }
 
-    try {
-      ws = new WebSocket(wsUrl)
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to open WebSocket'
-      console.error('[RDI Ping] WebSocket constructor threw', { error: e, msg })
-      finish(msg)
-      return
-    }
+    add(`Pinging over existing connection…`)
 
-    ws.onopen = () => {
-      opened = true
-      const ms = elapsed()
-      console.log('[RDI Ping] WebSocket open', { ms, readyState: ws?.readyState })
-      add(`1. ALB: connection established (T+${ms}ms)`)
-      ws?.send(`frontend:${data!.session_id}`)
-    }
-
+    const prevOnMessage = ws.onmessage
     ws.onmessage = (event) => {
       const ms = elapsed()
       if (typeof event.data === 'string') {
-        console.log('[RDI Ping] Message (string)', { ms, data: event.data })
         try {
           const obj = JSON.parse(event.data) as HopLog & { error?: string; message?: string }
           if (obj.error === 'session idle') {
             add(`Session is idle (T+${ms}ms). Reactivate in console to connect.`)
-            console.warn('[RDI Ping] Session idle — proxy rejected', { ms })
             finish('Session is idle. Reactivate this connection in the console, then ping again.')
             return
           }
           if (obj.hop === 'proxy_ec2') {
-            add(`2. Proxy EC2: ${obj.message} (T+${ms}ms)`)
-            ws?.send(PING_BYTES)
+            add(`1. Proxy EC2: ${obj.message} (T+${ms}ms)`)
           } else if (obj.hop === 'wavelength') {
-            add(`3. Wavelength: ${obj.message} (T+${ms}ms)`)
+            add(`2. Wavelength: ${obj.message} (T+${ms}ms)`)
             add(`Success — all hops reached (T+${ms}ms).`)
-            console.log('[RDI Ping] Done', { totalMs: ms })
             finish()
           } else {
             add(`Hop: ${obj.hop} — ${obj.message ?? ''} (T+${ms}ms)`)
@@ -145,67 +125,25 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
             add(`Raw: ${(event.data as string).slice(0, 80)} (T+${ms}ms)`)
           }
         }
-      } else {
-        console.log('[RDI Ping] Message (binary)', { ms })
       }
     }
 
-    ws.onerror = (event) => {
-      const ms = elapsed()
-      console.warn('[RDI Ping] WebSocket error', { ms, event, readyState: ws?.readyState })
-      if (!closed) add(`WebSocket error (T+${ms}ms)`)
-    }
-
-    ws.onclose = (event) => {
-      const ms = elapsed()
-      console.warn('[RDI Ping] WebSocket close', {
-        ms,
-        code: event.code,
-        reason: event.reason || '(none)',
-        wasClean: event.wasClean,
-        neverOpened: !opened,
-        hint:
-          !opened && event.code === 1006
-            ? '1006 = abnormal closure; connection never reached OPEN. Check ALB/proxy/network.'
-            : undefined,
-      })
-      if (!closed) {
-        const codeLabel = WS_CLOSE_REASONS[event.code] ?? `Code ${event.code}`
-        const reason = event.reason || codeLabel
-        const neverOpenedMsg =
-          event.code === 1006
-            ? `Connection never established (T+${ms}ms): ${reason}. The ALB has no healthy target — in AWS Console check EC2 → Target Groups → rdi-tg-v2-staging → Targets (port 8766 must return HTTP 200). Replace the proxy instance if it was created before the health-check fix, or see docs/WEBSOCKET-ALB-DIAGNOSTIC.md`
-            : `Connection never established (T+${ms}ms): ${reason}. See docs/WEBSOCKET-ALB-DIAGNOSTIC.md`
-        finish(
-          opened
-            ? `Connection closed before completing ping (T+${ms}ms): ${reason}`
-            : neverOpenedMsg
-        )
-      }
-    }
+    ws.send(PING_BYTES)
 
     const t = setTimeout(() => {
       if (!closed) {
-        const ms = elapsed()
-        console.warn('[RDI Ping] Timeout', {
-          elapsedMs: ms,
-          onopenNeverFired: !opened,
-          readyState: ws?.readyState,
-          hint: !opened
-            ? 'Connection never established — check ALB listener, target group health, and proxy reachability.'
-            : undefined,
-        })
-        finish(
-          opened
-            ? 'Ping timed out (8s).'
-            : 'Connection never established (8s). Check ALB, target group health, and proxy.'
-        )
+        finish('Ping timed out (8s).')
       }
     }, 8000)
-    return () => clearTimeout(t)
-  }, [data?.endpoint, data?.session_id, data?.status])
+    return () => {
+      clearTimeout(t)
+      if (!closed) ws.onmessage = prevOnMessage || (() => {})
+    }
+  }, [data?.session_id, getWs])
 
   const name = data?.drone_id ? data.drone_id.split('-').slice(0, -1).join('-') || data.drone_id : ''
+  const wsState = sessionId ? connectionState(sessionId) : 'closed'
+  const isConnected = wsState === 'open'
 
   return (
     <Dialog
@@ -224,8 +162,36 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
         sx: { backgroundColor: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' },
       }}
     >
-      <DialogTitle sx={{ color: '#ffffff', fontWeight: 600, textTransform: 'uppercase' }}>
+      <DialogTitle
+        sx={{
+          color: '#ffffff',
+          fontWeight: 600,
+          textTransform: 'uppercase',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          pr: 6,
+        }}
+      >
         Connection details
+        {data?.status === 'active' && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+            <Box
+              sx={{
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                backgroundColor:
+                  wsState === 'open' ? '#22c55e' : wsState === 'connecting' ? '#eab308' : '#64748b',
+                flexShrink: 0,
+              }}
+              aria-label={isConnected ? 'Connection established' : wsState === 'connecting' ? 'Connecting' : 'Disconnected'}
+            />
+            <Typography component="span" variant="caption" sx={{ color: '#94a3b8', textTransform: 'none' }}>
+              {wsState === 'open' ? 'Connection established' : wsState === 'connecting' ? 'Connecting…' : 'Not connected'}
+            </Typography>
+          </Box>
+        )}
       </DialogTitle>
       <DialogContent sx={{ color: '#f8fafc' }}>
         {loading && <Typography sx={{ color: '#94a3b8' }}>Loading…</Typography>}

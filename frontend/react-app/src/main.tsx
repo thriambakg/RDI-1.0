@@ -8,6 +8,7 @@ import { getConfig } from './config'
 import { rdiTheme } from './theme'
 import { AuthProvider } from './contexts/AuthContext'
 import { ProfileProvider } from './contexts/ProfileContext'
+import { SessionWebSocketProvider } from './contexts/SessionWebSocketContext'
 import './index.css'
 import App from './App'
 
@@ -46,9 +47,11 @@ createRoot(document.getElementById('root')!).render(
       <CssBaseline />
       <AuthProvider>
         <ProfileProvider>
-          <BrowserRouter>
-            <App />
-          </BrowserRouter>
+          <SessionWebSocketProvider>
+            <BrowserRouter>
+              <App />
+            </BrowserRouter>
+          </SessionWebSocketProvider>
         </ProfileProvider>
       </AuthProvider>
     </ThemeProvider>
