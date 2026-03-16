@@ -80,7 +80,7 @@ variable "skip_agent_build" {
 variable "infrastructure_deployment_trigger" {
   description = "Increment to force replacement of proxy EC2 and ALB/target group. Single place to control redeploys without destroy."
   type        = string
-  default     = "1"
+  default     = "2"
 }
 
 variable "proxy_subnet_cidr" {
