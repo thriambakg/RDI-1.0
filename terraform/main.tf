@@ -284,7 +284,7 @@ module "session_api_lambda" {
 
 # Allow Session API Lambda to start RDI agent on Wavelength instance via SSM
 resource "aws_iam_policy" "session_api_ssm" {
-  count       = var.base_state_bucket != "" && length(module.rdi_edge) > 0 && module.rdi_edge[0].wavelength_instance_id != null ? 1 : 0
+  count       = var.base_state_bucket != "" && var.infra_version > 0 && var.wavelength_zone_id != "" ? 1 : 0
   name        = "${var.project_name}-session-api-ssm-${var.environment}"
   description = "SSM SendCommand to start agent on Wavelength EC2"
 
@@ -573,7 +573,7 @@ module "rdi_edge" {
 
 # Point custom domain at the ALB so WSS is reachable at wss://<full_domain_name> with a trusted cert
 resource "aws_route53_record" "alb_wss" {
-  count   = var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0 && length(module.rdi_edge) > 0 && module.rdi_edge[0].alb_dns_name != null ? 1 : 0
+  count   = var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0 && var.infra_version > 0 && var.enable_alb_wss && var.alb_subnet_cidr != "" ? 1 : 0
   zone_id = module.domain[0].hosted_zone_id
   name    = var.subdomain != "" ? "${var.subdomain}.${var.domain_name}" : var.domain_name
   type    = "A"
