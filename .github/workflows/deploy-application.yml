@@ -505,14 +505,23 @@ jobs:
             echo "SSM send-command failed (instance may not be in SSM yet); agent install skipped."
             exit 0
           fi
-          echo "SSM CommandId: $CMD_ID (waiting 10s...)"
-          sleep 10
-          STATUS=$(aws ssm get-command-invocation --region ${{ matrix.region }} --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query "Status" --output text 2>/dev/null || echo "InProgress")
-          if [ "$STATUS" == "Success" ]; then
-            echo "Agent binary installed on Wavelength instance."
-          else
-            echo "Agent install status: $STATUS (next deploy will retry; or run diagnostics)."
-          fi
+          echo "SSM CommandId: $CMD_ID (polling until Success or Failed, max 90s)..."
+          for i in $(seq 1 18); do
+            sleep 5
+            STATUS=$(aws ssm get-command-invocation --region ${{ matrix.region }} --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query "Status" --output text 2>/dev/null || echo "InProgress")
+            echo "  [$i] status: $STATUS"
+            case "$STATUS" in
+              Success) echo "Agent binary installed on Wavelength instance."; exit 0 ;;
+              Failed|Cancelled|TimedOut)
+                STDERR=$(aws ssm get-command-invocation --region ${{ matrix.region }} --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query "StandardErrorContent" --output text 2>/dev/null || true)
+                echo "Agent install failed: $STATUS"
+                echo "Stderr: $STDERR"
+                exit 1
+                ;;
+            esac
+          done
+          echo "Agent install timed out (still InProgress after 90s)."
+          exit 1
 
       - name: Terraform Destroy
         if: github.event.inputs.destroy == 'true'
