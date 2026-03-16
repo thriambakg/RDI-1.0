@@ -602,3 +602,9 @@ output "edge_zone_ids" {
   value       = var.edge_zone_ids
 }
 
+# Keep variables in use when proxy_ec2/alb_websocket are commented out (avoids terraform_unused_declarations)
+output "proxy_alb_subnet_cidrs" {
+  description = "Subnet CIDRs for proxy and ALB (used by module.proxy_ec2 and module.alb_websocket when enabled)"
+  value       = { proxy_subnet_cidr = var.proxy_subnet_cidr, alb_subnet_cidr = var.alb_subnet_cidr }
+}
+
