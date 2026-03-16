@@ -30,29 +30,46 @@ WAVELENGTH_INSTANCE_ID = os.environ.get("WAVELENGTH_INSTANCE_ID", "")
 WAVELENGTH_ZONE_ID = os.environ.get("WAVELENGTH_ZONE_ID", "")
 
 
+AGENT_API_PORT = "8080"  # RDI_AGENT_API_PORT on Wavelength (agent daemon)
+
+
 def _start_agent_on_wavelength(instance_id: str, proxy_url: str, session_id: str) -> None:
-    """Start RDI agent on Wavelength EC2 via SSM so proxy↔agent connection is established."""
+    """Tell the agent daemon on Wavelength to add this session (open proxy connection). Option A: daemon + local API."""
     if not instance_id or not proxy_url or not session_id:
-        print(f"[RDI Session] agent start skipped: missing instance_id={bool(instance_id)} proxy_url={bool(proxy_url)} session_id={bool(session_id)}")
+        print(f"[RDI Session] agent add skipped: missing instance_id={bool(instance_id)} proxy_url={bool(proxy_url)} session_id={bool(session_id)}")
         return
-    # Escape for shell: proxy_url and session_id could contain special chars
-    safe_url = shlex.quote(proxy_url)
-    safe_sid = shlex.quote(session_id)
-    commands = [
-        f"export RDI_PROXY_URL={safe_url} RDI_SESSION_ID={safe_sid}",
-        "nohup /opt/rdi-agent/rdi-agent >> /var/log/rdi-agent.log 2>&1 &",
-    ]
+    body = json.dumps({"session_id": session_id, "proxy_url": proxy_url})
+    # One shell command: curl to local agent API (daemon must already be running on the instance)
+    cmd = f"curl -s -X POST http://127.0.0.1:{AGENT_API_PORT}/sessions -H 'Content-Type: application/json' -d {shlex.quote(body)}"
     try:
         ssm = boto3.client("ssm", region_name=REGION)
         result = ssm.send_command(
             InstanceIds=[instance_id],
             DocumentName="AWS-RunShellScript",
-            Parameters={"commands": commands},
+            Parameters={"commands": [cmd]},
         )
         cmd_id = result.get("Command", {}).get("CommandId", "")
-        print(f"[RDI Session] SSM SendCommand started agent session_id={session_id} instance_id={instance_id} command_id={cmd_id}")
+        print(f"[RDI Session] SSM agent add session_id={session_id} instance_id={instance_id} command_id={cmd_id}")
     except Exception as e:
-        print(f"[RDI Session] SSM SendCommand failed session_id={session_id} instance_id={instance_id} error={e}")
+        print(f"[RDI Session] SSM agent add failed session_id={session_id} instance_id={instance_id} error={e}")
+
+
+def _stop_agent_on_wavelength(instance_id: str, session_id: str) -> None:
+    """Tell the agent daemon on Wavelength to remove this session (close proxy connection)."""
+    if not instance_id or not session_id:
+        return
+    url = f"http://127.0.0.1:{AGENT_API_PORT}/sessions/{session_id}"
+    cmd = f"curl -s -X DELETE {shlex.quote(url)}"
+    try:
+        ssm = boto3.client("ssm", region_name=REGION)
+        ssm.send_command(
+            InstanceIds=[instance_id],
+            DocumentName="AWS-RunShellScript",
+            Parameters={"commands": [cmd]},
+        )
+        print(f"[RDI Session] SSM agent remove session_id={session_id} instance_id={instance_id}")
+    except Exception as e:
+        print(f"[RDI Session] SSM agent remove failed session_id={session_id} error={e}")
 
 
 def _notify_proxy_session_status(session_id: str, status: str) -> None:
@@ -206,6 +223,9 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
             folder_path=folder_path,
         )
 
+    # Mark session active on the proxy so it accepts UI and agent WebSocket connections for this session.
+    _notify_proxy_session_status(session_id, "active")
+
     if WAVELENGTH_INSTANCE_ID and (not WAVELENGTH_ZONE_ID or wavelength_zone_id == WAVELENGTH_ZONE_ID):
         _start_agent_on_wavelength(WAVELENGTH_INSTANCE_ID, PROXY_ENDPOINT, session_id)
 
@@ -276,6 +296,8 @@ def _release_session(user_id: str, session_id: str | None, headers: dict, *, per
     if USER_PROFILES_TABLE:
         _upsert_profile_update_status(dynamodb, user_id, session_id, "idle")
     _notify_proxy_session_status(session_id, "idle")
+    if WAVELENGTH_INSTANCE_ID:
+        _stop_agent_on_wavelength(WAVELENGTH_INSTANCE_ID, session_id)
 
     return _response(200, {"message": "Session released"}, headers)
 
@@ -317,6 +339,8 @@ def _idle_expired_sessions() -> None:
             if USER_PROFILES_TABLE:
                 _upsert_profile_update_status(dynamodb, user_id, session_id, "idle")
             _notify_proxy_session_status(session_id, "idle")
+            if WAVELENGTH_INSTANCE_ID:
+                _stop_agent_on_wavelength(WAVELENGTH_INSTANCE_ID, session_id)
 
 
 def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
@@ -353,6 +377,8 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
     if USER_PROFILES_TABLE:
         _upsert_profile_update_status(dynamodb, user_id, session_id, status)
     _notify_proxy_session_status(session_id, status)
+    if status == "idle" and WAVELENGTH_INSTANCE_ID:
+        _stop_agent_on_wavelength(WAVELENGTH_INSTANCE_ID, session_id)
 
     return _response(200, {"message": f"Session set to {status}"}, headers)
 

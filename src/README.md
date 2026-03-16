@@ -45,11 +45,15 @@ cargo build --release
 
 ## Running the Agent
 
+**On Wavelength EC2 (daemon mode):** The agent runs as a long-lived daemon, started at instance boot. It exposes a local HTTP API on port 8080. Lambda (via SSM) adds/removes sessions with `POST /sessions` and `DELETE /sessions/:id`. No env vars needed for sessions; optional: `RDI_MAVLINK_PORT` (default 14540), `RDI_AGENT_API_PORT` (default 8080).
+
+**Local / dev:** Run the same daemon, then add a session via the API:
+
 ```bash
-export RDI_PROXY_URL=ws://<proxy-ip>:8765
-export RDI_SESSION_ID=<session-id-from-api>
-export RDI_MAVLINK_PORT=18570   # for PX4 v1.13+; use 14540 for older
 ./rdi-agent
+# In another terminal:
+curl -X POST http://127.0.0.1:8080/sessions -H "Content-Type: application/json" \
+  -d '{"session_id":"your-session-id","proxy_url":"wss://wss.rdistaging.com"}'
 ```
 
 ## Session API (Rust - optional low-latency)

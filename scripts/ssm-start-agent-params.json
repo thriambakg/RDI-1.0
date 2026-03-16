@@ -1,0 +1,6 @@
+{
+  "commands": [
+    "export RDI_PROXY_URL='wss://wss.rdistaging.com' RDI_SESSION_ID='cfd4f965-1113-40be-b9f2-eb2eb3c57f69'",
+    "nohup /opt/rdi-agent/rdi-agent >> /var/log/rdi-agent.log 2>&1 &"
+  ]
+}

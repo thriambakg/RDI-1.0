@@ -8,7 +8,7 @@ yum install -y aws-cli
 mkdir -p /opt/rdi-agent
 cd /opt/rdi-agent
 
-# Create log file so CloudWatch agent can tail it (Lambda starts agent and writes here)
+# Create log file so CloudWatch agent can tail it (daemon writes here)
 touch /var/log/rdi-agent.log
 chmod 644 /var/log/rdi-agent.log
 
@@ -16,8 +16,11 @@ chmod 644 /var/log/rdi-agent.log
 if aws s3 cp "s3://${s3_bucket}/${s3_key}" ./rdi-agent --region "${aws_region}" 2>/dev/null; then
   chmod +x ./rdi-agent
   echo "RDI agent binary installed at /opt/rdi-agent/rdi-agent"
+  # Start agent daemon once at boot. Lambda adds/removes sessions via POST/DELETE http://127.0.0.1:8080/sessions
+  nohup ./rdi-agent >> /var/log/rdi-agent.log 2>&1 &
+  echo "RDI agent daemon started (API on 127.0.0.1:8080)"
 else
-  echo "Agent binary not found at s3://${s3_bucket}/${s3_key} - Lambda will start agent when session is created"
+  echo "Agent binary not found at s3://${s3_bucket}/${s3_key} - upload and start daemon manually"
 fi
 
 # Ship agent log to CloudWatch (run without set -e so failures are logged, not fatal)
