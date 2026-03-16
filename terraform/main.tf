@@ -696,6 +696,11 @@ output "alb_dns_name" {
   value       = length(module.alb_websocket) > 0 ? module.alb_websocket[0].alb_dns_name : null
 }
 
+output "proxy_target_group_arn" {
+  description = "Target group ARN for proxy (WebSocket ALB); used by pipeline to check health before restart"
+  value       = length(module.alb_websocket) > 0 ? module.alb_websocket[0].target_group_arn : null
+}
+
 output "edge_zone_ids" {
   description = "Wavelength zone IDs available in this environment (for UI Edge Location selector)"
   value       = var.edge_zone_ids

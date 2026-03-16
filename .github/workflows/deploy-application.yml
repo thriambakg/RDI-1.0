@@ -491,6 +491,15 @@ jobs:
             echo "No proxy instance (infra_version=0 or no proxy_ec2), skipping restart."
             exit 0
           fi
+          TG_ARN=$(cd terraform && terraform output -raw proxy_target_group_arn 2>/dev/null || true)
+          if [ -n "$TG_ARN" ] && [ "$TG_ARN" != "null" ]; then
+            HEALTHY_COUNT=$(aws elbv2 describe-target-health --region ${{ matrix.region }} --target-group-arn "$TG_ARN" --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" --output text 2>/dev/null || echo "0")
+            if [ "${HEALTHY_COUNT:-0}" -ge 1 ]; then
+              echo "Target group already has $HEALTHY_COUNT healthy target(s); skipping proxy restart to avoid unnecessary disruption."
+              exit 0
+            fi
+            echo "Target group has no healthy targets; will restart proxy."
+          fi
           echo "Proxy instance: $PROXY_ID"
           echo "Waiting 60s for instance/SSM to be ready..."
           sleep 60
@@ -507,8 +516,8 @@ jobs:
             --document-name "AWS-RunShellScript" \
             --parameters file://scripts/ssm-proxy-restart.json \
             --query "Command.CommandId" --output text)
-          echo "CommandId: $CMD_ID"
-          for i in 1 2 3 4 5 6 7 8 9 10; do
+          echo "CommandId: $CMD_ID (timeout 10 min)"
+          for i in $(seq 1 40); do
             STATUS=$(aws ssm get-command-invocation --region ${{ matrix.region }} --command-id "$CMD_ID" --instance-id "$PROXY_ID" --query "Status" --output text 2>/dev/null || true)
             if [ "$STATUS" = "Success" ]; then
               echo "Proxy restart succeeded; ALB target should become healthy within 1-2 health check intervals."
@@ -519,10 +528,10 @@ jobs:
               aws ssm get-command-invocation --region ${{ matrix.region }} --command-id "$CMD_ID" --instance-id "$PROXY_ID" --query "[Status,StandardErrorContent]" --output text
               exit 1
             fi
-            echo "Status: $STATUS, waiting 10s..."
-            sleep 10
+            echo "Status: $STATUS, waiting 15s... ($i/40)"
+            sleep 15
           done
-          echo "Timeout waiting for SSM command."
+          echo "Timeout waiting for SSM command (10 min)."
           exit 1
 
       - name: Refresh agent binary on Wavelength instance
