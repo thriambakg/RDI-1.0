@@ -672,6 +672,11 @@ output "api_gateway_base_url" {
   value       = length(module.session_api) > 0 ? module.session_api[0].stage_url : null
 }
 
+output "proxy_instance_id" {
+  description = "Proxy EC2 instance ID (for SSM restart after deploy)"
+  value       = length(module.proxy_ec2) > 0 ? module.proxy_ec2[0].instance_id : null
+}
+
 output "proxy_public_ip" {
   value = length(module.proxy_ec2) > 0 ? module.proxy_ec2[0].public_ip : null
 }
