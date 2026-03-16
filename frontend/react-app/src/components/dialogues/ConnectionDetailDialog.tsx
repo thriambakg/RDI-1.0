@@ -172,10 +172,14 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
       if (!closed) {
         const codeLabel = WS_CLOSE_REASONS[event.code] ?? `Code ${event.code}`
         const reason = event.reason || codeLabel
+        const neverOpenedMsg =
+          event.code === 1006
+            ? `Connection never established (T+${ms}ms): ${reason}. The ALB has no healthy target — in AWS Console check EC2 → Target Groups → rdi-tg-v2-staging → Targets (port 8766 must return HTTP 200). Replace the proxy instance if it was created before the health-check fix, or see docs/WEBSOCKET-ALB-DIAGNOSTIC.md`
+            : `Connection never established (T+${ms}ms): ${reason}. See docs/WEBSOCKET-ALB-DIAGNOSTIC.md`
         finish(
           opened
             ? `Connection closed before completing ping (T+${ms}ms): ${reason}`
-            : `Connection never established (T+${ms}ms): ${reason}. See docs/WEBSOCKET-ALB-DIAGNOSTIC.md`
+            : neverOpenedMsg
         )
       }
     }
