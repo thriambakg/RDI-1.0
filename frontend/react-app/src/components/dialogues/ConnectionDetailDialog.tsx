@@ -13,19 +13,6 @@ import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 
 const PING_BYTES = new Uint8Array([0x50, 0x49, 0x4e, 0x47]) // "PING"
 
-const WS_CLOSE_REASONS: Record<number, string> = {
-  1000: 'Normal closure',
-  1001: 'Going away',
-  1002: 'Protocol error',
-  1003: 'Unsupported data',
-  1005: 'No status received',
-  1006: 'Abnormal closure (no close frame — check ALB target health, listener, proxy)',
-  1007: 'Invalid frame payload',
-  1008: 'Policy violation',
-  1011: 'Internal server error',
-  1015: 'TLS handshake failed',
-}
-
 interface ConnectionDetailDialogProps {
   sessionId: string | null
   open: boolean
