@@ -80,7 +80,7 @@ variable "skip_agent_build" {
 variable "destroy_infra" {
   description = "When true, proxy EC2, ALB/target group, and Wavelength EC2 are not created (count = 0). Set true, apply (destroy); set false, apply (recreate all)."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "proxy_subnet_cidr" {
