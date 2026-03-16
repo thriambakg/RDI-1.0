@@ -1,16 +1,19 @@
 //! RDI Agent - Bridges proxy WebSocket to local PX4 (localhost:14540).
 //! Run on your machine with PX4 + Gazebo. Connects outbound to proxy.
+//! Reconnects automatically when the connection drops (e.g. after proxy restart).
 
 use futures_util::{SinkExt, StreamExt};
 use std::env;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 const DEFAULT_MAVLINK_PORT: u16 = 14540;
 /// Proxy sends this; we reply with PONG so round-trip works without PX4.
 const PING_BYTES: &[u8] = b"PING";
 const PONG_BYTES: &[u8] = b"PONG";
+const RECONNECT_DELAY_SECS: u64 = 5;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -29,12 +32,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .unwrap_or(DEFAULT_MAVLINK_PORT);
 
     let mavlink_addr = format!("127.0.0.1:{}", mavlink_port);
-    info!("Connecting to {} session={} -> {}", proxy_url, session_id, mavlink_addr);
 
-    let ws_stream = match tokio_tungstenite::connect_async(&proxy_url).await {
+    loop {
+        match run_session(&proxy_url, &session_id, &mavlink_addr).await {
+            Ok(()) => {}
+            Err(e) => {
+                error!("Session error: {}", e);
+            }
+        }
+        warn!(
+            "Disconnected from proxy session={}; reconnecting in {}s",
+            session_id, RECONNECT_DELAY_SECS
+        );
+        tokio::time::sleep(Duration::from_secs(RECONNECT_DELAY_SECS)).await;
+    }
+}
+
+/// Connect to proxy, send agent:session_id, then relay until the connection closes.
+async fn run_session(
+    proxy_url: &str,
+    session_id: &str,
+    mavlink_addr: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    info!(
+        "Connecting to {} session={} -> {}",
+        proxy_url, session_id, mavlink_addr
+    );
+
+    let ws_stream = match tokio_tungstenite::connect_async(proxy_url).await {
         Ok((s, _)) => s,
         Err(e) => {
-            error!("Failed to connect to proxy url={} session_id={} error={}", proxy_url, session_id, e);
+            error!(
+                "Failed to connect to proxy url={} session_id={} error={}",
+                proxy_url, session_id, e
+            );
             return Err(e.into());
         }
     };
@@ -42,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Connected to proxy session={}", session_id);
 
     ws_tx
-        .send(tokio_tungstenite::tungstenite::Message::Text(format!("agent:{}", session_id)))
+        .send(Message::Text(format!("agent:{}", session_id)))
         .await?;
 
     let udp = Arc::new(tokio::net::UdpSocket::bind("0.0.0.0:0").await?);

@@ -525,6 +525,36 @@ jobs:
           echo "Timeout waiting for SSM command."
           exit 1
 
+      - name: Refresh agent binary on Wavelength instance
+        if: github.event.inputs.destroy != 'true'
+        run: |
+          WID=$(cd terraform && terraform output -raw wavelength_instance_id 2>/dev/null || true)
+          if [ -z "$WID" ] || [ "$WID" = "null" ]; then
+            echo "No Wavelength instance, skipping agent refresh."
+            exit 0
+          fi
+          BUCKET="rdi-proxy-artifacts-${{ needs.determine-environment.outputs.environment }}-${{ matrix.region }}"
+          echo "Refreshing agent on $WID from s3://$BUCKET/agent/rdi-agent"
+          CMD_ID=$(aws ssm send-command --region ${{ matrix.region }} --instance-ids "$WID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters '{"commands":["mkdir -p /opt/rdi-agent","aws s3 cp s3://'"$BUCKET"'/agent/rdi-agent /opt/rdi-agent/rdi-agent --region ${{ matrix.region }}","chmod +x /opt/rdi-agent/rdi-agent","ls -la /opt/rdi-agent/rdi-agent"]}' \
+            --query "Command.CommandId" --output text)
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            STATUS=$(aws ssm get-command-invocation --region ${{ matrix.region }} --command-id "$CMD_ID" --instance-id "$WID" --query "Status" --output text 2>/dev/null || true)
+            if [ "$STATUS" = "Success" ]; then
+              echo "Agent binary refreshed on Wavelength."
+              exit 0
+            fi
+            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "Agent refresh failed: $STATUS"
+              aws ssm get-command-invocation --region ${{ matrix.region }} --command-id "$CMD_ID" --instance-id "$WID" --query "StandardErrorContent" --output text
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "Timeout waiting for agent refresh."
+          exit 1
+
       - name: Terraform Destroy
         if: github.event.inputs.destroy == 'true'
         run: |
