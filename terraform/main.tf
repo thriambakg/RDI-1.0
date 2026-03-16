@@ -299,8 +299,8 @@ module "session_api_lambda" {
   environment_variables = merge({
     CONNECTION_POOL_TABLE = local.connection_pool_tbl
     USER_PROFILES_TABLE   = local.user_profiles_tbl
-    PROXY_ENDPOINT        = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2.websocket_endpoint)
-    PROXY_STATUS_URL      = "http://${module.proxy_ec2.public_ip}:8767/session-status"
+    PROXY_ENDPOINT        = length(module.proxy_ec2) > 0 ? ((var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2[0].websocket_endpoint)) : ""
+    PROXY_STATUS_URL      = length(module.proxy_ec2) > 0 ? "http://${module.proxy_ec2[0].public_ip}:8767/session-status" : ""
     PROXY_STATUS_SECRET   = random_password.proxy_status_secret.result
     }, length(module.wavelength_ec2) > 0 ? {
     WAVELENGTH_INSTANCE_ID = module.wavelength_ec2[0].instance_id
@@ -540,8 +540,9 @@ resource "aws_lambda_permission" "session_idle_expiry" {
   source_arn    = aws_cloudwatch_event_rule.session_idle_expiry[0].arn
 }
 
-# Proxy EC2 - depends on binary in S3 so user_data can fetch it at boot
+# Proxy EC2 - depends on binary in S3 so user_data can fetch it at boot. Omitted when destroy_infra is true.
 module "proxy_ec2" {
+  count  = var.destroy_infra ? 0 : 1
   source = "./modules/proxy-ec2"
 
   project_name                  = var.project_name
@@ -557,13 +558,12 @@ module "proxy_ec2" {
   alb_subnet_cidr               = var.enable_alb_wss ? var.alb_subnet_cidr : ""
 
   user_data = base64encode(templatefile("${path.module}/../src/proxy/user_data.sh", {
-    s3_bucket          = module.proxy_artifacts_bucket.bucket_id
-    s3_key             = "proxy/rdi-proxy"
-    ws_port            = 8765
-    health_port        = 8766
-    status_port        = 8767
-    status_secret      = random_password.proxy_status_secret.result
-    deployment_trigger = var.infrastructure_deployment_trigger
+    s3_bucket     = module.proxy_artifacts_bucket.bucket_id
+    s3_key        = "proxy/rdi-proxy"
+    ws_port       = 8765
+    health_port   = 8766
+    status_port   = 8767
+    status_secret = random_password.proxy_status_secret.result
   }))
 
   depends_on = [aws_s3_object.proxy_binary]
@@ -596,15 +596,15 @@ module "ssl_certificate" {
   tags         = {}
 }
 
-# ALB for WSS (TLS termination) - targets Proxy EC2
+# ALB for WSS (TLS termination) - targets Proxy EC2. Omitted when destroy_infra is true.
 module "alb_websocket" {
-  count  = var.enable_alb_wss && var.alb_subnet_cidr != "" ? 1 : 0
+  count  = var.enable_alb_wss && var.alb_subnet_cidr != "" && !var.destroy_infra ? 1 : 0
   source = "./modules/alb"
 
   project_name       = var.project_name
   environment        = var.environment
-  vpc_id             = module.proxy_ec2.vpc_id
-  public_subnet_ids  = module.proxy_ec2.alb_subnet_ids
+  vpc_id             = module.proxy_ec2[0].vpc_id
+  public_subnet_ids  = module.proxy_ec2[0].alb_subnet_ids
   certificate_arn    = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? module.domain[0].certificate_arn : (var.certificate_arn != "" ? var.certificate_arn : module.ssl_certificate[0].certificate_arn)
   kms_key_arn        = module.kms.main_key_arn
   enable_waf         = false # WebSocket: skip WAF for lower latency and cost
@@ -621,8 +621,7 @@ module "alb_websocket" {
     interval            = 30
     timeout             = 10
   }
-  target_instance_ids = [module.proxy_ec2.instance_id]
-  deployment_trigger  = var.infrastructure_deployment_trigger
+  target_instance_ids = [module.proxy_ec2[0].instance_id]
 
   depends_on = [module.proxy_ec2]
   tags       = {}
@@ -653,12 +652,12 @@ output "api_gateway_base_url" {
 }
 
 output "proxy_public_ip" {
-  value = module.proxy_ec2.public_ip
+  value = length(module.proxy_ec2) > 0 ? module.proxy_ec2[0].public_ip : null
 }
 
 output "proxy_websocket_endpoint" {
   description = "WebSocket endpoint (wss when ALB enabled; use custom domain when enable_custom_domain is set)"
-  value       = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2.websocket_endpoint)
+  value       = length(module.proxy_ec2) > 0 ? ((var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (length(module.alb_websocket) > 0 ? "wss://${module.alb_websocket[0].alb_dns_name}" : module.proxy_ec2[0].websocket_endpoint)) : null
 }
 
 output "wss_custom_domain_name_servers" {

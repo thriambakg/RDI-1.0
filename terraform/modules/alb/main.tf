@@ -125,7 +125,7 @@ resource "aws_security_group_rule" "alb_egress_health_check" {
 # Application Load Balancer
 # tfsec:ignore:aws-elb-alb-not-public - Public ALB is intentional for web frontend
 resource "aws_lb" "main" {
-  name               = "${var.project_name}-alb-v2-${var.environment}-${var.deployment_trigger}"
+  name               = "${var.project_name}-alb-v2-${var.environment}"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [local.security_group_id]
@@ -168,7 +168,7 @@ resource "aws_lb" "main" {
 # Target Group - configurable for frontend (ECS) or WebSocket proxy (EC2)
 # Note: ALB target groups require HTTP/HTTPS protocol; WebSocket uses HTTP upgrade
 resource "aws_lb_target_group" "main" {
-  name        = "${var.project_name}-tg-v2-${var.environment}-${var.deployment_trigger}"
+  name        = "${var.project_name}-tg-v2-${var.environment}"
   port        = var.target_group_config.port
   protocol    = "HTTP"
   vpc_id      = var.vpc_id

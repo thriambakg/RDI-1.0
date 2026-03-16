@@ -110,12 +110,6 @@ variable "target_instance_ids" {
   default     = []
 }
 
-variable "deployment_trigger" {
-  description = "Increment (e.g. in root variables.tf) to force replacement of ALB and target group"
-  type        = string
-  default     = "1"
-}
-
 variable "enable_waf" {
   description = "Enable WAF for the ALB"
   type        = bool

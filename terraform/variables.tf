@@ -75,12 +75,12 @@ variable "skip_agent_build" {
   default     = false
 }
 
-# Bump this value to force redeploy of proxy EC2 and ALB/target group (e.g. when target group is unhealthy).
-# Increment in this file or in your .tfvars; Terraform will replace the instance and recreate ALB/target group.
-variable "infrastructure_deployment_trigger" {
-  description = "Increment to force replacement of proxy EC2 and ALB/target group. Single place to control redeploys without destroy."
-  type        = string
-  default     = "2"
+# Manage in this file only: change default here as needed, then run terraform apply. Do not set in .tfvars.
+# true = destroy proxy + ALB/target group (apply once). false = deploy (apply again to recreate).
+variable "destroy_infra" {
+  description = "When true, proxy EC2 and ALB/target group are not created (count = 0). Change this value in variables.tf: set true, apply (destroy); set false, apply (recreate)."
+  type        = bool
+  default     = false
 }
 
 variable "proxy_subnet_cidr" {

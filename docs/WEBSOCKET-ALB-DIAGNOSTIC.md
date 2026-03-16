@@ -6,6 +6,14 @@ When the frontend fails to establish a WebSocket to the ALB (`wss://rdi-alb-v2-s
 
 If the session API returns `wss://wss.rdistaging.com/` and the connection **never opens** (timeout, `onopenNeverFired`, code 1006), the problem is **not** the frontend — it is one of the following.
 
+**CLI script:** From the repo root, run all checks (target health, listeners, SGs, DNS, TLS) with:
+```powershell
+# PowerShell (staging uses us-east-1)
+.\scripts\websocket-alb-checks.ps1
+# Or specify region: .\scripts\websocket-alb-checks.ps1 -Region us-east-1
+```
+Requires AWS CLI configured and network access.
+
 **Run these in order:**
 
 1. **DNS** — Does `wss.rdistaging.com` resolve to your ALB?
@@ -65,9 +73,16 @@ If the session API returns `wss://wss.rdistaging.com/` and the connection **neve
 
 **Fix:** Ensure `terraform apply` has been run with the ALB module that includes the health-check egress rule. Wait 1–2 health check intervals (e.g. 30–60s) for the proxy instance to become Healthy.
 
-**Proxy must listen on port 8766:** The ALB health check uses **HTTP GET /** on port **8766**. The Rust proxy binary listens on 8766 by default. If the instance fell back to the Python placeholder (binary not in S3), user_data now starts a minimal HTTP server on 8766 so the target becomes healthy. **If your instance was launched before this fix**, replace the proxy instance (e.g. `terraform taint 'module.proxy_ec2.aws_instance.proxy'` then `terraform apply`) so new user_data runs, or SSH/SSM in and start an HTTP server on 8766 that returns 200 for GET /.
+**Proxy must listen on port 8766:** The ALB health check uses **HTTP GET /** on port **8766**. The Rust proxy binary listens on 8766 by default. If the instance fell back to the Python placeholder (binary not in S3), user_data now starts a minimal HTTP server on 8766 so the target becomes healthy. **To force full recreation** of proxy and ALB: set `destroy_infra = true`, apply (removes resources), then set `destroy_infra = false` and apply again (creates fresh resources). Or SSH/SSM in and start an HTTP server on 8766 that returns 200 for GET /.
 
 **ALB security group must have egress:** The ALB needs **egress** to the VPC on **8765** (traffic) and **8766** (health check). If the ALB SG has no egress rules, health checks will always fail. In AWS Console → EC2 → Security Groups → `rdi-alb-sg-v2-staging`, ensure there are egress rules to the VPC CIDR (e.g. 10.200.0.0/16) for ports 8765 and 8766. Then run `terraform apply` so Terraform (re)creates the rules and keeps them in sync.
+
+**Unhealthy target group – quick checks:** If the target shows **Unhealthy** in the Targets tab, use the **Reason** column (e.g. "Health checks failed") to confirm it’s the health check. Then:
+
+1. **On the proxy instance** (SSH or Session Manager): run `curl -I http://localhost:8766`. You should get `HTTP/1.1 200 OK`. If it fails or times out, nothing is listening on 8766 — the proxy process didn’t start or crashed. Check `/var/log/rdi-proxy.log` and ensure user_data completed (binary from S3 or Python fallback with the health server on 8766).
+2. **Security groups:** ALB SG must have **egress** to the proxy VPC CIDR on **8766** (and 8765). Proxy SG must allow **ingress** from the proxy VPC CIDR (or the ALB’s source range) on **8766**. If the proxy is in a separate VPC from the ALB, the proxy’s `vpc_cidr` must include the ALB subnet(s) so health checks from the ALB are allowed in.
+
+After fixing (e.g. ensuring 8766 responds on the instance and SGs are correct), wait 1–2 health check intervals (e.g. 30–60s) for the target to turn Healthy; then retry the WebSocket connection.
 
 ---
 
