@@ -80,7 +80,7 @@ variable "skip_agent_build" {
 variable "destroy_infra" {
   description = "When true, proxy EC2 and ALB/target group are not created (count = 0). Change this value in variables.tf: set true, apply (destroy); set false, apply (recreate)."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "proxy_subnet_cidr" {
