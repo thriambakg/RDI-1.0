@@ -5,7 +5,7 @@ use futures_util::{SinkExt, StreamExt};
 use std::env;
 use std::sync::Arc;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::info;
+use tracing::{error, info};
 
 const DEFAULT_MAVLINK_PORT: u16 = 14540;
 /// Proxy sends this; we reply with PONG so round-trip works without PX4.
@@ -31,8 +31,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mavlink_addr = format!("127.0.0.1:{}", mavlink_port);
     info!("Connecting to {} session={} -> {}", proxy_url, session_id, mavlink_addr);
 
-    let (ws_stream, _) = tokio_tungstenite::connect_async(&proxy_url).await?;
+    let ws_stream = match tokio_tungstenite::connect_async(&proxy_url).await {
+        Ok((s, _)) => s,
+        Err(e) => {
+            error!("Failed to connect to proxy url={} session_id={} error={}", proxy_url, session_id, e);
+            return Err(e.into());
+        }
+    };
     let (mut ws_tx, mut ws_rx) = ws_stream.split();
+    info!("Connected to proxy session={}", session_id);
 
     ws_tx
         .send(tokio_tungstenite::tungstenite::Message::Text(format!("agent:{}", session_id)))

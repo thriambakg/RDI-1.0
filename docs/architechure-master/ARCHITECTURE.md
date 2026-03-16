@@ -152,6 +152,9 @@ RDI uses two APIs with different protocols and responsibilities:
 6. Proxy pairs frontend and agent by session_id, bridges bytes between them
 ```
 
+**Implementation verification (Lambda not in WebSocket path):**
+- Frontend gets `endpoint` from Session API response (e.g. `wss://wss.rdistaging.com`). It then calls `openSession(sessionId, endpoint)`, which does `new WebSocket(endpoint)` and sends `frontend:${sessionId}` on open. So the WebSocket is **directly** to the ALB/proxy; no traffic goes through API Gateway or Lambda after the REST response. See `frontend/.../SessionWebSocketContext.tsx` (`openSession` → `new WebSocket(wsUrl)`) and `sessionApi.ts` (REST returns `endpoint`). "No agent connected" means the **agent on Wavelength EC2** has not connected to the proxy with the same session_id — it is an EC2/agent/proxy concern, not Lambda holding the connection.
+
 **Connection pool (DynamoDB):**
 - **Key:** user_id (PK) + session_id (SK) — user-centric access
 - **Attributes:** region, wavelength_zone_id, user_zone_sk, status, drone_id, endpoint, expires_at, created_at, updated_at, released_at, metadata

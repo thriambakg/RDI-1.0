@@ -33,6 +33,7 @@ WAVELENGTH_ZONE_ID = os.environ.get("WAVELENGTH_ZONE_ID", "")
 def _start_agent_on_wavelength(instance_id: str, proxy_url: str, session_id: str) -> None:
     """Start RDI agent on Wavelength EC2 via SSM so proxy↔agent connection is established."""
     if not instance_id or not proxy_url or not session_id:
+        print(f"[RDI Session] agent start skipped: missing instance_id={bool(instance_id)} proxy_url={bool(proxy_url)} session_id={bool(session_id)}")
         return
     # Escape for shell: proxy_url and session_id could contain special chars
     safe_url = shlex.quote(proxy_url)
@@ -43,13 +44,15 @@ def _start_agent_on_wavelength(instance_id: str, proxy_url: str, session_id: str
     ]
     try:
         ssm = boto3.client("ssm", region_name=REGION)
-        ssm.send_command(
+        result = ssm.send_command(
             InstanceIds=[instance_id],
             DocumentName="AWS-RunShellScript",
             Parameters={"commands": commands},
         )
+        cmd_id = result.get("Command", {}).get("CommandId", "")
+        print(f"[RDI Session] SSM SendCommand started agent session_id={session_id} instance_id={instance_id} command_id={cmd_id}")
     except Exception as e:
-        print(f"SSM SendCommand to start agent failed for session {session_id}: {e}")
+        print(f"[RDI Session] SSM SendCommand failed session_id={session_id} instance_id={instance_id} error={e}")
 
 
 def _notify_proxy_session_status(session_id: str, status: str) -> None:

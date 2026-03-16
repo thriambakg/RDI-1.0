@@ -2,6 +2,48 @@
 
 When the ping shows **Proxy reached; no agent on Wavelength instance** (or "2. Wavelength: no agent connected"), the WebSocket path to the proxy works but the agent on the Wavelength EC2 instance is not connected to the proxy for this session. Use this guide to find and fix the cause.
 
+## Important: create a new connection after redeploy
+
+The agent is started **only when a session is created** (POST /sessions). If you redeployed Terraform (e.g. fixed `WAVELENGTH_ZONE_ID`), existing sessions were created **before** the fix — Lambda never ran the agent start for them. **Create a brand-new connection** (new session) from the UI after redeploy, then ping that new connection. Do not reuse an old connection’s details.
+
+## CloudWatch Logs
+
+### Session API Lambda
+
+The Session API Lambda logs to **CloudWatch Logs**. You can see whether the agent was started and why not.
+
+**Log group:** `/aws/lambda/rdi-session-api-staging-<region>` (e.g. `/aws/lambda/rdi-session-api-staging-us-east-1`).
+
+**Filter for:** `[RDI Session]` to see agent-related lines.
+
+**What you’ll see:**
+
+| Log message | Meaning |
+|-------------|--------|
+| `[RDI Session] starting agent session_id=... wavelength_zone_id=... WAVELENGTH_ZONE_ID=...` | Zone matched; Lambda is calling SSM to start the agent. |
+| `[RDI Session] SSM SendCommand started agent session_id=... command_id=...` | SSM command was sent; check the instance for the agent process and `/var/log/rdi-agent.log`. |
+| `[RDI Session] SSM SendCommand failed session_id=... error=...` | SSM failed (permissions, instance not in SSM, etc.). |
+| `[RDI Session] agent not started (zone mismatch) session_id=... request_zone=... deployed_zone=...` | Request zone (from frontend) did not match deployed zone; agent not started. |
+| `[RDI Session] agent start skipped: missing ...` | Lambda env missing `WAVELENGTH_INSTANCE_ID` or `PROXY_ENDPOINT`. |
+
+**How to view:** AWS Console → CloudWatch → Log groups → open the log group above → Log streams (pick the latest) or use **Filter log events** with filter pattern `[RDI Session]`. Or use CLI: `aws logs filter-log-events --log-group-name /aws/lambda/rdi-session-api-staging-us-east-1 --filter-pattern "[RDI Session]" --start-time <timestamp_ms>`.
+
+### Proxy and Agent (EC2 instances)
+
+After deploying with the CloudWatch agent (Terraform ships `/var/log/rdi-proxy.log` and `/var/log/rdi-agent.log` to CloudWatch), you can see **why the connection is failing** directly in CloudWatch:
+
+| Log group | Contents |
+|-----------|----------|
+| `/rdi/<env>/proxy` (e.g. `/rdi/staging/proxy`) | Proxy stdout: handshakes, **"session_id=... frontend connected but no agent; PING returned no agent"**, disconnects. |
+| `/rdi/<env>/agent` (e.g. `/rdi/staging/agent`) | Agent stdout: **"Connecting to ... session=..."**, **"Failed to connect to proxy ... error=..."** or **"Connected to proxy session=..."**. |
+
+**Log streams** are the instance ID (one stream per instance), so you can see which proxy or Wavelength instance produced the log.
+
+- If the **proxy** log shows `session_id=... frontend connected but no agent` for your session, the frontend reached the proxy but no agent has connected with that session_id (Lambda didn’t start it, or it failed to connect).
+- If the **agent** log shows `Failed to connect to proxy url=... error=...`, the agent ran but could not reach the proxy (network, DNS, TLS, or wrong URL).
+
+**How to view:** CloudWatch → Log groups → `/rdi/staging/proxy` or `/rdi/staging/agent` → open a log stream (instance ID) or use **Filter log events** with a pattern like `no agent` or `Failed to connect`.
+
 ## Run CLI diagnostics
 
 From the repo root (with AWS CLI configured and `us-east-1` or your region):

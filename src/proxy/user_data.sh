@@ -48,3 +48,30 @@ PYRELAY
   nohup python3 /opt/rdi-proxy/relay.py > /var/log/rdi-proxy.log 2>&1 &
   echo "Python placeholder relay and health server on ${health_port} started"
 fi
+
+# Ship proxy log to CloudWatch (so you can see connection failures in CloudWatch)
+if [ -n "${cloudwatch_log_group}" ]; then
+  yum install -y amazon-cloudwatch-agent
+  mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
+  INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+  cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << CWCONF
+{
+  "agent": { "metrics_collection_interval": 60, "run_as_user": "root" },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/rdi-proxy.log",
+            "log_group_name": "${cloudwatch_log_group}",
+            "log_stream_name": "$INSTANCE_ID"
+          }
+        ]
+      }
+    }
+  }
+}
+CWCONF
+  /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+  echo "CloudWatch agent started; proxy log group ${cloudwatch_log_group}"
+fi

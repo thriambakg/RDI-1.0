@@ -103,3 +103,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "cloudwatch_log_group_name" {
+  description = "CloudWatch Log group name for agent logs (e.g. /rdi/staging/agent). When set, instance role gets write access and user_data ships /var/log/rdi-agent.log."
+  type        = string
+  default     = ""
+}

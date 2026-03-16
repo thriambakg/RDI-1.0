@@ -146,6 +146,28 @@ resource "aws_iam_role_policy" "s3_agent_binary" {
   })
 }
 
+# Allow Wavelength instance to ship agent logs to CloudWatch (for connection failure debugging)
+resource "aws_iam_role_policy" "cloudwatch_logs" {
+  count = var.cloudwatch_log_group_name != "" ? 1 : 0
+
+  name = "${var.project_name}-wavelength-cloudwatch-logs"
+  role = aws_iam_role.instance.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogStreams"
+        ]
+        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:${var.cloudwatch_log_group_name}:*"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_instance_profile" "instance" {
   name_prefix = "${var.project_name}-wavelength-"
   role        = aws_iam_role.instance.name

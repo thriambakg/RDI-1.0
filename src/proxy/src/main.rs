@@ -319,6 +319,7 @@ async fn handle_ws(
                         if let Some(tx) = &peer_send {
                             let _ = tx.send(data.to_vec());
                         } else {
+                            info!("session_id={} frontend connected but no agent; PING returned no agent", session_id);
                             let _ = client_tx_peer.send(ToClient::Text(
                                 r#"{"hop":"wavelength","message":"no agent connected"}"#.to_string(),
                             ));

@@ -107,3 +107,9 @@ variable "alb_subnet_cidr" {
   type        = string
   default     = ""
 }
+
+variable "cloudwatch_log_group_name" {
+  description = "CloudWatch Log group name for proxy logs (e.g. /rdi/staging/proxy). When set, instance role gets write access and user_data ships /var/log/rdi-proxy.log."
+  type        = string
+  default     = ""
+}

@@ -186,9 +186,12 @@ module "wavelength_ec2" {
   agent_binary_s3_bucket        = var.wavelength_zone_id != "" ? module.proxy_artifacts_bucket.bucket_id : ""
   agent_binary_s3_key           = "agent/rdi-agent"
   enable_agent_binary_s3_access = var.wavelength_zone_id != "" && !var.skip_agent_build
+  cloudwatch_log_group_name     = var.wavelength_zone_id != "" ? aws_cloudwatch_log_group.rdi_agent.name : ""
+
   user_data = var.wavelength_zone_id != "" ? base64encode(templatefile("${path.module}/../src/wavelength/user_data.sh", {
-    s3_bucket = module.proxy_artifacts_bucket.bucket_id
-    s3_key    = "agent/rdi-agent"
+    s3_bucket            = module.proxy_artifacts_bucket.bucket_id
+    s3_key               = "agent/rdi-agent"
+    cloudwatch_log_group = aws_cloudwatch_log_group.rdi_agent.name
   })) : ""
 
   depends_on = [null_resource.wavelength_agent_ready]
@@ -541,6 +544,17 @@ resource "aws_lambda_permission" "session_idle_expiry" {
   source_arn    = aws_cloudwatch_event_rule.session_idle_expiry[0].arn
 }
 
+# CloudWatch Log groups for proxy and agent (so you can see connection failures in CloudWatch). Always created so references are valid.
+resource "aws_cloudwatch_log_group" "rdi_proxy" {
+  name              = "/rdi/${var.environment}/proxy"
+  retention_in_days = 7
+}
+
+resource "aws_cloudwatch_log_group" "rdi_agent" {
+  name              = "/rdi/${var.environment}/agent"
+  retention_in_days = 7
+}
+
 # Proxy EC2 - depends on binary in S3 so user_data can fetch it at boot. Omitted when destroy_infra is true.
 module "proxy_ec2" {
   count  = var.destroy_infra ? 0 : 1
@@ -557,14 +571,16 @@ module "proxy_ec2" {
   enable_s3_proxy_binary_access = true
   proxy_subnet_cidr             = var.proxy_subnet_cidr
   alb_subnet_cidr               = var.enable_alb_wss ? var.alb_subnet_cidr : ""
+  cloudwatch_log_group_name     = aws_cloudwatch_log_group.rdi_proxy.name
 
   user_data = base64encode(templatefile("${path.module}/../src/proxy/user_data.sh", {
-    s3_bucket     = module.proxy_artifacts_bucket.bucket_id
-    s3_key        = "proxy/rdi-proxy"
-    ws_port       = 8765
-    health_port   = 8766
-    status_port   = 8767
-    status_secret = random_password.proxy_status_secret.result
+    s3_bucket            = module.proxy_artifacts_bucket.bucket_id
+    s3_key               = "proxy/rdi-proxy"
+    ws_port              = 8765
+    health_port          = 8766
+    status_port          = 8767
+    status_secret        = random_password.proxy_status_secret.result
+    cloudwatch_log_group = aws_cloudwatch_log_group.rdi_proxy.name
   }))
 
   depends_on = [aws_s3_object.proxy_binary]

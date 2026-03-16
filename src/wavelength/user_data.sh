@@ -9,9 +9,40 @@ yum install -y aws-cli
 mkdir -p /opt/rdi-agent
 cd /opt/rdi-agent
 
+# Create log file so CloudWatch agent can tail it (Lambda starts agent and writes here)
+touch /var/log/rdi-agent.log
+chmod 644 /var/log/rdi-agent.log
+
 if aws s3 cp "s3://${s3_bucket}/${s3_key}" ./rdi-agent 2>/dev/null; then
   chmod +x ./rdi-agent
   echo "RDI agent binary installed at /opt/rdi-agent/rdi-agent"
 else
   echo "Agent binary not found at s3://${s3_bucket}/${s3_key} - Lambda will start agent when session is created"
+fi
+
+# Ship agent log to CloudWatch (so you can see connection failures in CloudWatch)
+if [ -n "${cloudwatch_log_group}" ]; then
+  yum install -y amazon-cloudwatch-agent
+  mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
+  INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+  cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << CWCONF
+{
+  "agent": { "metrics_collection_interval": 60, "run_as_user": "root" },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/rdi-agent.log",
+            "log_group_name": "${cloudwatch_log_group}",
+            "log_stream_name": "$INSTANCE_ID"
+          }
+        ]
+      }
+    }
+  }
+}
+CWCONF
+  /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+  echo "CloudWatch agent started; agent log group ${cloudwatch_log_group}"
 fi
