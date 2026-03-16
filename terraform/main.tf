@@ -191,6 +191,7 @@ module "wavelength_ec2" {
   user_data = var.wavelength_zone_id != "" ? base64encode(templatefile("${path.module}/../src/wavelength/user_data.sh", {
     s3_bucket            = module.proxy_artifacts_bucket.bucket_id
     s3_key               = "agent/rdi-agent"
+    aws_region           = local.region
     cloudwatch_log_group = aws_cloudwatch_log_group.rdi_agent.name
   })) : ""
 

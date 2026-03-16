@@ -13,7 +13,8 @@ cd /opt/rdi-agent
 touch /var/log/rdi-agent.log
 chmod 644 /var/log/rdi-agent.log
 
-if aws s3 cp "s3://${s3_bucket}/${s3_key}" ./rdi-agent 2>/dev/null; then
+# Wavelength instances can expose zone name as default region; use explicit region for S3.
+if aws s3 cp "s3://${s3_bucket}/${s3_key}" ./rdi-agent --region "${aws_region}" 2>/dev/null; then
   chmod +x ./rdi-agent
   echo "RDI agent binary installed at /opt/rdi-agent/rdi-agent"
 else
