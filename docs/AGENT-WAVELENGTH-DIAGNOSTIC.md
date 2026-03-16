@@ -107,7 +107,7 @@ The script will:
 
 **Cause:** Wavelength user_data downloads the agent from S3 at first boot; if the S3 download failed (wrong bucket/key or no IAM), the binary can be missing. user_data does not re-run on existing instances.
 
-**Fix:** The agent is installed by **user_data** when the Wavelength instance is created (e.g. after a destroy/recreate with `destroy_infra`). Ensure Terraform uploads the agent (`skip_agent_build = false`) and the Wavelength instance role has `s3:GetObject` for the proxy-artifacts bucket. user_data uses an explicit `--region` for `aws s3 cp` so S3 works on Wavelength (where instance metadata can expose a zone name instead of a standard region). If the binary is missing on an existing instance, replace the instance (set `destroy_infra = true`, apply; set `destroy_infra = false`, apply) so a new instance runs user_data at boot.
+**Fix:** The agent is installed by **user_data** when the Wavelength instance is created (e.g. after bumping `infra_version` and apply). Ensure Terraform uploads the agent (`skip_agent_build = false`) and the Wavelength instance role has `s3:GetObject` for the proxy-artifacts bucket. user_data uses an explicit `--region` for `aws s3 cp` so S3 works on Wavelength. If the binary is missing on an existing instance, bump `infra_version` in tfvars and apply twice (set to 0, apply; set to 1 or higher, apply) to replace the instance so user_data runs at boot.
 
 ## Quick checklist
 

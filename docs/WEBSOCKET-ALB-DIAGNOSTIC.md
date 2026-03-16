@@ -73,7 +73,7 @@ Requires AWS CLI configured and network access.
 
 **Fix:** Ensure `terraform apply` has been run with the ALB module that includes the health-check egress rule. Wait 1–2 health check intervals (e.g. 30–60s) for the proxy instance to become Healthy.
 
-**Proxy must listen on port 8766:** The ALB health check uses **HTTP GET /** on port **8766**. The Rust proxy binary listens on 8766 by default. If the instance fell back to the Python placeholder (binary not in S3), user_data now starts a minimal HTTP server on 8766 so the target becomes healthy. **To force full recreation** of proxy and ALB: set `destroy_infra = true`, apply (removes resources), then set `destroy_infra = false` and apply again (creates fresh resources). Or SSH/SSM in and start an HTTP server on 8766 that returns 200 for GET /.
+**Proxy must listen on port 8766:** The ALB health check uses **HTTP GET /** on port **8766**. The Rust proxy binary listens on 8766 by default. If the instance fell back to the Python placeholder (binary not in S3), user_data now starts a minimal HTTP server on 8766 so the target becomes healthy. **To force full recreation** of proxy and ALB: set `infra_version = 0`, apply (removes resources), then set `infra_version = 1` (or bump the number) and apply again (creates fresh resources). Or SSH/SSM in and start an HTTP server on 8766 that returns 200 for GET /.
 
 **ALB security group must have egress:** The ALB needs **egress** to the VPC on **8765** (traffic) and **8766** (health check). If the ALB SG has no egress rules, health checks will always fail. In AWS Console → EC2 → Security Groups → `rdi-alb-sg-v2-staging`, ensure there are egress rules to the VPC CIDR (e.g. 10.200.0.0/16) for ports 8765 and 8766. Then run `terraform apply` so Terraform (re)creates the rules and keeps them in sync.
 
@@ -83,6 +83,32 @@ Requires AWS CLI configured and network access.
 2. **Security groups:** ALB SG must have **egress** to the proxy VPC CIDR on **8766** (and 8765). Proxy SG must allow **ingress** from the proxy VPC CIDR (or the ALB’s source range) on **8766**. If the proxy is in a separate VPC from the ALB, the proxy’s `vpc_cidr` must include the ALB subnet(s) so health checks from the ALB are allowed in.
 
 After fixing (e.g. ensuring 8766 responds on the instance and SGs are correct), wait 1–2 health check intervals (e.g. 30–60s) for the target to turn Healthy; then retry the WebSocket connection.
+
+---
+
+## 1b. Granular logs for the ping flow (ALB → proxy → agent)
+
+To see exactly where the ping flow stops (ALB, proxy, or agent), use these logs.
+
+**Proxy EC2 (CloudWatch)**  
+- **Log group:** `/rdi/<env>/proxy` (e.g. `/rdi/staging/proxy`).  
+- **Log stream:** instance ID of the proxy.  
+- **What you’ll see (in order when a frontend pings):**
+  - `Frontend connected session_id=... addr=...` — WebSocket reached the proxy.
+  - `PING received session_id=... forwarding to agent` — Proxy got PING and has an agent; it forwards to the agent.
+  - `PING round-trip complete session_id=... agent responded` — Agent replied; frontend gets "instance responded".
+  - If there is **no** agent: `PING received session_id=... no agent connected; replying no agent` — frontend gets "no agent connected".
+
+**Agent (Wavelength EC2) (CloudWatch)**  
+- **Log group:** `/rdi/<env>/agent` (e.g. `/rdi/staging/agent`).  
+- **Log stream:** instance ID of the Wavelength instance.  
+- Look for `Connected to proxy` or `Failed to connect to proxy` to see if the agent reached the proxy.
+
+**ALB (request-level)**  
+- ALB does not write to CloudWatch Logs by default. To see each request (including WebSocket upgrades) to the ALB, enable **access logs** to S3: set `enable_access_logs = true` and provide an `access_logs_bucket` (with the required ALB bucket policy). Then inspect the S3 prefix (e.g. `alb-access-logs/`) for request timestamps, client IP, target, and status codes.
+
+**How to view proxy/agent logs:**  
+AWS Console → CloudWatch → Log groups → `/rdi/staging/proxy` or `/rdi/staging/agent` → open the log stream (instance ID) → filter by time around when you pinged. Or CLI: `aws logs filter-log-events --log-group-name /rdi/staging/proxy --filter-pattern "PING" --start-time <epoch_ms>`.
 
 ---
 

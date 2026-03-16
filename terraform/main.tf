@@ -169,9 +169,9 @@ resource "null_resource" "wavelength_agent_ready" {
   depends_on = [aws_s3_object.agent_binary]
 }
 
-# Wavelength EC2 - PX4 SITL at carrier edge (optional, single zone for MVP). Omitted when destroy_infra is true (same cycle as proxy + ALB).
+# Wavelength EC2 - PX4 SITL at carrier edge (optional, single zone for MVP). Omitted when infra_version is 0 (same cycle as proxy + ALB).
 module "wavelength_ec2" {
-  count  = var.wavelength_zone_id != "" && !var.destroy_infra ? 1 : 0
+  count  = var.wavelength_zone_id != "" && var.infra_version > 0 ? 1 : 0
   source = "./modules/wavelength-ec2"
 
   project_name                  = var.project_name
@@ -193,6 +193,7 @@ module "wavelength_ec2" {
     s3_key               = "agent/rdi-agent"
     aws_region           = local.region
     cloudwatch_log_group = aws_cloudwatch_log_group.rdi_agent.name
+    infra_version        = var.infra_version
   })) : ""
 
   depends_on = [null_resource.wavelength_agent_ready]
@@ -556,9 +557,9 @@ resource "aws_cloudwatch_log_group" "rdi_agent" {
   retention_in_days = 7
 }
 
-# Proxy EC2 - depends on binary in S3 so user_data can fetch it at boot. Omitted when destroy_infra is true.
+# Proxy EC2 - depends on binary in S3 so user_data can fetch it at boot. Omitted when infra_version is 0.
 module "proxy_ec2" {
-  count  = var.destroy_infra ? 0 : 1
+  count  = var.infra_version > 0 ? 1 : 0
   source = "./modules/proxy-ec2"
 
   project_name                  = var.project_name
@@ -582,6 +583,7 @@ module "proxy_ec2" {
     status_port          = 8767
     status_secret        = random_password.proxy_status_secret.result
     cloudwatch_log_group = aws_cloudwatch_log_group.rdi_proxy.name
+    infra_version        = var.infra_version
   }))
 
   depends_on = [aws_s3_object.proxy_binary]
@@ -614,13 +616,14 @@ module "ssl_certificate" {
   tags         = {}
 }
 
-# ALB for WSS (TLS termination) - targets Proxy EC2. Omitted when destroy_infra is true.
+# ALB for WSS (TLS termination) - targets Proxy EC2. Omitted when infra_version is 0.
 module "alb_websocket" {
-  count  = var.enable_alb_wss && var.alb_subnet_cidr != "" && !var.destroy_infra ? 1 : 0
+  count  = var.enable_alb_wss && var.alb_subnet_cidr != "" && var.infra_version > 0 ? 1 : 0
   source = "./modules/alb"
 
   project_name       = var.project_name
   environment        = var.environment
+  name_suffix        = "-v${var.infra_version}"
   vpc_id             = module.proxy_ec2[0].vpc_id
   public_subnet_ids  = module.proxy_ec2[0].alb_subnet_ids
   certificate_arn    = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? module.domain[0].certificate_arn : (var.certificate_arn != "" ? var.certificate_arn : module.ssl_certificate[0].certificate_arn)

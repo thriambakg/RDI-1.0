@@ -1,5 +1,5 @@
 #!/bin/bash
-# RDI Proxy EC2 user_data - install and run proxy binary
+# RDI Proxy EC2 user_data - install and run proxy binary (infra_version=${infra_version})
 set -e
 export RDI_PROXY_WS_PORT="${ws_port}"
 export RDI_PROXY_HEALTH_PORT="${health_port}"

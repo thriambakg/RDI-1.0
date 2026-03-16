@@ -1,6 +1,5 @@
 #!/bin/bash
-# RDI Wavelength EC2 user_data - install agent binary from S3 for session connections.
-# Agent is started per-session via Lambda (SSM SendCommand); this only installs the binary.
+# RDI Wavelength EC2 user_data - install agent binary from S3 (infra_version=${infra_version})
 set -e
 
 yum update -y

@@ -11,6 +11,12 @@ variable "environment" {
   type        = string
 }
 
+variable "name_suffix" {
+  description = "Suffix for ALB and target group names (e.g. -v2 to force replacement when changed)"
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   description = "Common tags to apply to all resources"
   type        = map(string)

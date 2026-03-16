@@ -75,12 +75,11 @@ variable "skip_agent_build" {
   default     = false
 }
 
-# Manage in this file only: change default here as needed, then run terraform apply. Do not set in .tfvars.
-# true = destroy proxy + ALB + Wavelength EC2 (apply once). false = deploy (apply again to recreate).
-variable "destroy_infra" {
-  description = "When true, proxy EC2, ALB/target group, and Wavelength EC2 are not created (count = 0). Set true, apply (destroy); set false, apply (recreate all)."
-  type        = bool
-  default     = false
+# Incremental counter to force redeploy of proxy, ALB, and Wavelength EC2. Change the number and apply to recreate resources.
+variable "infra_version" {
+  description = "Version number for proxy/ALB/Wavelength infra. Set to 0 to destroy (count=0); set to 1 or higher to create. Bump the value (e.g. 1 -> 2) and apply to force replacement of instances and ALB."
+  type        = number
+  default     = 2
 }
 
 variable "proxy_subnet_cidr" {

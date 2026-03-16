@@ -287,9 +287,11 @@ async fn handle_ws(
     let peer_send = {
         let mut s = sessions.write().await;
         let target = if role == "agent" {
+            info!("Agent connected session_id={} addr={}", session_id, addr);
             s.agents.insert(session_id.clone(), (peer, close_tx));
             s.frontends.get(&session_id).map(|(p, _)| p.tx.clone())
         } else {
+            info!("Frontend connected session_id={} addr={}", session_id, addr);
             s.frontends.insert(session_id.clone(), (peer, close_tx));
             let _ = client_tx.send(ToClient::Text(
                 r#"{"hop":"proxy_ec2","message":"handshake accepted"}"#.to_string(),
@@ -318,9 +320,10 @@ async fn handle_ws(
                 Ok(Message::Binary(data)) => {
                     if data == PING_BYTES {
                         if let Some(tx) = &peer_send {
+                            info!("PING received session_id={} forwarding to agent", session_id_for_peer);
                             let _ = tx.send(data.to_vec());
                         } else {
-                            info!("session_id={} frontend connected but no agent; PING returned no agent", session_id_for_peer);
+                            info!("PING received session_id={} no agent connected; replying no agent", session_id_for_peer);
                             let _ = client_tx_peer.send(ToClient::Text(
                                 r#"{"hop":"wavelength","message":"no agent connected"}"#.to_string(),
                             ));
@@ -340,10 +343,12 @@ async fn handle_ws(
         }
     });
 
+    let session_id_pong = session_id.clone();
     let to_pong = tokio::spawn(async move {
         let mut sent_wavelength = false;
         while let Some(data) = peer_rx.recv().await {
             if !sent_wavelength {
+                info!("PING round-trip complete session_id={} agent responded", session_id_pong);
                 let _ = client_tx_pong.send(ToClient::Text(
                     r#"{"hop":"wavelength","message":"instance responded"}"#.to_string(),
                 ));
