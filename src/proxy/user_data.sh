@@ -12,10 +12,14 @@ yum install -y aws-cli
 mkdir -p /opt/rdi-proxy
 cd /opt/rdi-proxy
 
+# Create log file before starting anything so CloudWatch agent can tail it
+touch /var/log/rdi-proxy.log
+chmod 644 /var/log/rdi-proxy.log
+
 # Download proxy binary from S3 if available
 if aws s3 cp "s3://${s3_bucket}/${s3_key}" ./rdi-proxy 2>/dev/null; then
   chmod +x ./rdi-proxy
-  nohup ./rdi-proxy > /var/log/rdi-proxy.log 2>&1 &
+  nohup ./rdi-proxy >> /var/log/rdi-proxy.log 2>&1 &
   echo "Proxy started from S3"
 else
   echo "Proxy binary not found in S3 - build and upload rdi-proxy to s3://${s3_bucket}/${s3_key}"
@@ -45,16 +49,20 @@ asyncio.run(main())
 PYRELAY
   yum install -y python3 python3-pip
   pip3 install websockets
-  nohup python3 /opt/rdi-proxy/relay.py > /var/log/rdi-proxy.log 2>&1 &
+  nohup python3 /opt/rdi-proxy/relay.py >> /var/log/rdi-proxy.log 2>&1 &
   echo "Python placeholder relay and health server on ${health_port} started"
 fi
 
 # Ship proxy log to CloudWatch (so you can see connection failures in CloudWatch)
+# Run without set -e so a failure here doesn't break proxy startup; log errors for debugging.
 if [ -n "${cloudwatch_log_group}" ]; then
-  yum install -y amazon-cloudwatch-agent
-  mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
-  INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
-  cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << CWCONF
+  CWA_LOG="/var/log/cloudwatch-agent-setup.log"
+  { set +e
+    echo "=== CloudWatch agent setup $(date) ==="
+    yum install -y amazon-cloudwatch-agent || dnf install -y amazon-cloudwatch-agent || echo "WARN: install failed"
+    mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
+    INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+    cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << CWCONF
 {
   "agent": { "metrics_collection_interval": 60, "run_as_user": "root" },
   "logs": {
@@ -72,6 +80,15 @@ if [ -n "${cloudwatch_log_group}" ]; then
   }
 }
 CWCONF
-  /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
-  echo "CloudWatch agent started; proxy log group ${cloudwatch_log_group}"
+    CTL="/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl"
+    [ -x "$CTL" ] || CTL=$(command -v amazon-cloudwatch-agent-ctl 2>/dev/null)
+    if [ -n "$CTL" ] && [ -x "$CTL" ]; then
+      $CTL -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+      echo "CloudWatch agent started (ctl=$CTL)"
+    else
+      echo "ERROR: amazon-cloudwatch-agent-ctl not found"
+    fi
+  } >> "$CWA_LOG" 2>&1
+  set -e
+  echo "[user_data] CloudWatch agent setup done; see $CWA_LOG if no logs in CloudWatch" >> /var/log/rdi-proxy.log
 fi

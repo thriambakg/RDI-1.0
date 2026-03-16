@@ -1,0 +1,1 @@
+{"commands":["echo === rdi-proxy.log ===","tail -40 /var/log/rdi-proxy.log 2>/dev/null || echo no file","echo === cloudwatch-agent-setup ===","cat /var/log/cloudwatch-agent-setup.log 2>/dev/null || echo no file"]}

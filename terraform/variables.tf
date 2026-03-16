@@ -79,7 +79,7 @@ variable "skip_agent_build" {
 variable "infra_version" {
   description = "Version number for proxy/ALB/Wavelength infra. Set to 0 to destroy (count=0); set to 1 or higher to create. Bump the value (e.g. 1 -> 2) and apply to force replacement of instances and ALB."
   type        = number
-  default     = 2
+  default     = 3
 }
 
 variable "proxy_subnet_cidr" {

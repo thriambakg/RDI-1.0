@@ -107,8 +107,31 @@ To see exactly where the ping flow stops (ALB, proxy, or agent), use these logs.
 **ALB (request-level)**  
 - ALB does not write to CloudWatch Logs by default. To see each request (including WebSocket upgrades) to the ALB, enable **access logs** to S3: set `enable_access_logs = true` and provide an `access_logs_bucket` (with the required ALB bucket policy). Then inspect the S3 prefix (e.g. `alb-access-logs/`) for request timestamps, client IP, target, and status codes.
 
-**How to view proxy/agent logs:**  
-AWS Console → CloudWatch → Log groups → `/rdi/staging/proxy` or `/rdi/staging/agent` → open the log stream (instance ID) → filter by time around when you pinged. Or CLI: `aws logs filter-log-events --log-group-name /rdi/staging/proxy --filter-pattern "PING" --start-time <epoch_ms>`.
+**Where to find log files**
+
+| Where | What |
+|-------|------|
+| **CloudWatch (proxy)** | Log group **`/rdi/staging/proxy`** → log stream = proxy instance ID (e.g. `i-0abc...`). |
+| **CloudWatch (agent)** | Log group **`/rdi/staging/agent`** → log stream = Wavelength instance ID. |
+| **On proxy instance (SSM)** | `/var/log/rdi-proxy.log` (proxy stdout), `/var/log/cloudwatch-agent-setup.log` (why CloudWatch agent may have failed). |
+| **On Wavelength instance (SSM)** | `/var/log/rdi-agent.log` (agent stdout), `/var/log/cloudwatch-agent-setup.log`. |
+
+**How to view:**  
+- **CloudWatch:** AWS Console → **CloudWatch** → **Log groups** → `/rdi/staging/proxy` or `/rdi/staging/agent` → open the log stream (instance ID). Or CLI: `aws logs filter-log-events --log-group-name /rdi/staging/proxy --filter-pattern "PING" --region us-east-1`.  
+- **On instance:** Use **SSM Run Command** or **Session Manager** to run `tail -50 /var/log/rdi-proxy.log` (or the paths above). Instance IDs: EC2 → Instances, or Target groups → Targets tab for the proxy.
+
+**No logs appearing in the log groups?**
+
+If you **have** recreated the instances (bumped `infra_version` and applied) but still see no log streams:
+
+1. **CloudWatch agent may be failing on Amazon Linux 2023** — user_data now writes setup output to `/var/log/cloudwatch-agent-setup.log` on each instance so you can see install/start errors. Via SSM, run on the **proxy** instance (instance ID from EC2 or target group):
+   ```powershell
+   # Replace PROXY_INSTANCE_ID with the proxy EC2 instance ID (e.g. from target group Targets tab)
+   aws ssm send-command --region us-east-1 --instance-ids PROXY_INSTANCE_ID --document-name "AWS-RunShellScript" --parameters '{"commands":["echo === cloudwatch-agent-setup ===","cat /var/log/cloudwatch-agent-setup.log 2>/dev/null || echo no file","echo === rdi-proxy.log tail ===","tail -15 /var/log/rdi-proxy.log","echo === cloudwatch process ===","ps aux | grep -E cloudwatch | grep -v grep"]}' --query "Command.CommandId" --output text
+   ```
+   Then: `aws ssm get-command-invocation --region us-east-1 --command-id <COMMAND_ID> --instance-id PROXY_INSTANCE_ID --query "StandardOutputContent" --output text`. Check for "ERROR" or "install failed" in the setup log; if the ctl path is wrong or the agent didn’t start, fix is in user_data (or use the updated user_data and replace instances again).
+
+2. **Instances never had CloudWatch user_data** — If the instances were created before CloudWatch was added to user_data, they won’t ship logs. **Fix:** Bump `infra_version` in `variables.tf`, run `terraform apply` so proxy and Wavelength EC2 are replaced; new instances run current user_data and write to the setup log if the agent fails.
 
 ---
 
