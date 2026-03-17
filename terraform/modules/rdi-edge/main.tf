@@ -124,3 +124,4 @@ module "alb_websocket" {
 
   depends_on = [module.proxy_ec2, null_resource.proxy_ready]
 }
+
