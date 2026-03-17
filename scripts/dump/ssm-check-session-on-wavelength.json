@@ -1,0 +1,12 @@
+{
+  "commands": [
+    "echo '=== Checking for session_id de9ba9dc-0975-4b18-858a-64d0dfb79479 on Wavelength agent ==='",
+    "echo '--- Lines in rdi-agent.log containing this session_id ---'",
+    "grep -E 'de9ba9dc-0975-4b18-858a-64d0dfb79479' /var/log/rdi-agent.log 2>/dev/null || echo 'No matching lines (session never added or log rotated)'",
+    "echo '--- Agent process and port 8080 ---'",
+    "pgrep -a rdi-agent || echo 'rdi-agent not running'",
+    "ss -tlnp 2>/dev/null | grep 8080 || echo 'Port 8080 not listening'",
+    "echo '--- Last 30 lines of rdi-agent.log ---'",
+    "tail -30 /var/log/rdi-agent.log 2>/dev/null || echo 'no log'"
+  ]
+}

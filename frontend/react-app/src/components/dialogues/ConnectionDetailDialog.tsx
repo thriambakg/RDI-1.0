@@ -12,6 +12,7 @@ import { getSession } from '../../services/sessionApi'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 
 const PING_BYTES = new Uint8Array([0x50, 0x49, 0x4e, 0x47]) // "PING"
+const PONG_BYTES = new Uint8Array([0x50, 0x4f, 0x4e, 0x47]) // "PONG"
 
 interface ConnectionDetailDialogProps {
   sessionId: string | null
@@ -88,8 +89,19 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
     add(`Pinging over existing connection…`)
 
     const prevOnMessage = ws.onmessage
-    ws.onmessage = (event) => {
+    ws.onmessage = async (event: MessageEvent) => {
       const ms = elapsed()
+      // Binary PONG from proxy (same round-trip as "instance responded" text)
+      if (event.data instanceof Blob) {
+        const buf = await event.data.arrayBuffer()
+        const arr = new Uint8Array(buf)
+        if (arr.length === PONG_BYTES.length && arr.every((b, i) => b === PONG_BYTES[i])) {
+          add(`2. Wavelength: instance responded (T+${ms}ms)`)
+          add(`Success — full round-trip (client → proxy → Wavelength instance → proxy → client) (T+${ms}ms).`)
+          finish()
+        }
+        return
+      }
       if (typeof event.data === 'string') {
         try {
           const obj = JSON.parse(event.data) as HopLog & { error?: string; message?: string }

@@ -288,9 +288,9 @@ async fn handle_ws(
     let client_tx_peer = client_tx.clone();
     let client_tx_pong = client_tx.clone();
 
-    let peer_send = {
+    {
         let mut s = sessions.write().await;
-        let target = if role == "agent" {
+        if role == "agent" {
             let had_frontend = s.frontends.contains_key(&session_id);
             info!(
                 "Agent WebSocket connected session_id={} addr={} (Wavelength EC2) frontend_already_connected={}",
@@ -300,7 +300,6 @@ async fn handle_ws(
             if had_frontend {
                 info!("Session {} pairing complete: frontend + agent both connected (proxy_ec2)", session_id);
             }
-            s.frontends.get(&session_id).map(|(p, _)| p.tx.clone())
         } else {
             let had_agent = s.agents.contains_key(&session_id);
             info!(
@@ -314,10 +313,8 @@ async fn handle_ws(
             if had_agent {
                 info!("Session {} pairing complete: frontend + agent both connected (proxy_ec2)", session_id);
             }
-            s.agents.get(&session_id).map(|(p, _)| p.tx.clone())
-        };
-        target
-    };
+        }
+    }
 
     let to_ws = tokio::spawn(async move {
         while let Some(to_client) = client_rx.recv().await {
@@ -331,13 +328,18 @@ async fn handle_ws(
         }
     });
 
+    // Look up peer at send time so PONG from agent reaches frontend even when frontend connects after agent.
+    let sessions_for_peer = sessions.clone();
     let session_id_for_peer = session_id.clone();
+    let role_for_peer = role.clone();
     let to_peer = tokio::spawn(async move {
         while let Some(msg) = ws_rx.next().await {
             match msg {
                 Ok(Message::Binary(data)) => {
                     if data == PING_BYTES {
-                        if let Some(tx) = &peer_send {
+                        // Frontend sent PING: forward to agent (or reply no agent).
+                        let peer_tx = sessions_for_peer.read().await.agents.get(&session_id_for_peer).map(|(p, _)| p.tx.clone());
+                        if let Some(tx) = peer_tx {
                             info!("PING received session_id={} forwarding to agent", session_id_for_peer);
                             let _ = tx.send(data.to_vec());
                         } else {
@@ -346,8 +348,18 @@ async fn handle_ws(
                                 r#"{"hop":"wavelength","message":"no agent connected"}"#.to_string(),
                             ));
                         }
-                    } else if let Some(tx) = &peer_send {
-                        let _ = tx.send(data);
+                    } else if role_for_peer == "agent" {
+                        // Agent sent binary (e.g. PONG): forward to frontend.
+                        let peer_tx = sessions_for_peer.read().await.frontends.get(&session_id_for_peer).map(|(p, _)| p.tx.clone());
+                        if let Some(tx) = peer_tx {
+                            let _ = tx.send(data);
+                        }
+                    } else {
+                        // Frontend sent other binary (e.g. MAVLink): forward to agent.
+                        let peer_tx = sessions_for_peer.read().await.agents.get(&session_id_for_peer).map(|(p, _)| p.tx.clone());
+                        if let Some(tx) = peer_tx {
+                            let _ = tx.send(data);
+                        }
                     }
                 }
                 Ok(Message::Text(_)) => {}
@@ -361,11 +373,14 @@ async fn handle_ws(
         }
     });
 
+    // Only the frontend connection should send "instance responded" when it receives PONG from the agent.
+    // The agent connection's to_pong receives PING (from frontend) and must only forward Binary(PING) to the agent.
+    let role_pong = role.clone();
     let session_id_pong = session_id.clone();
     let to_pong = tokio::spawn(async move {
         let mut sent_wavelength = false;
         while let Some(data) = peer_rx.recv().await {
-            if !sent_wavelength {
+            if role_pong == "frontend" && !sent_wavelength {
                 info!("PING round-trip complete session_id={} agent responded", session_id_pong);
                 let _ = client_tx_pong.send(ToClient::Text(
                     r#"{"hop":"wavelength","message":"instance responded"}"#.to_string(),
