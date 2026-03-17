@@ -79,13 +79,9 @@ module "proxy_secrets" {
   }
 }
 
-data "aws_secretsmanager_secret_version" "proxy_status" {
-  count     = var.infra_version > 0 ? 1 : 0
-  secret_id = module.proxy_secrets[0].secret_ids["proxy_status"]
-}
-
+# Use module secret_values output (Cosine-Base-Infra pattern); avoids external data source race with secret version
 locals {
-  proxy_status_secret_value       = var.infra_version > 0 ? (var.proxy_status_secret != "" ? var.proxy_status_secret : jsondecode(data.aws_secretsmanager_secret_version.proxy_status[0].secret_string)["value"]) : random_password.proxy_status_secret.result
+  proxy_status_secret_value       = var.infra_version > 0 ? module.proxy_secrets[0].secret_values["proxy_status"]["value"] : random_password.proxy_status_secret.result
   is_primary_region               = var.primary_region != "" && var.region == var.primary_region
   region                          = data.aws_region.current.name
   base_state_key                  = var.base_state_key != "" ? var.base_state_key : "base-infra/${var.environment}/${var.region}/terraform.tfstate"
