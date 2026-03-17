@@ -12,8 +12,8 @@ wavelength_zone_id = "us-east-1-wl1-chi-wlz-1"
 edge_zone_ids      = ["use1-wl1-chi-wlz1"] # Zone ID for UI display
 
 # Proxy subnet CIDRs (within 10.200.0.0/16). Bump if orphaned subnets cause InvalidSubnet.Conflict.
-proxy_subnet_cidr = "10.200.62.0/24"
-alb_subnet_cidr   = "10.200.63.0/24"
+proxy_subnet_cidr = "10.200.72.0/24"
+alb_subnet_cidr   = "10.200.73.0/24"
 
 # Optional: fixed secret for Lambda->proxy session-status API (avoids 401 when random_password drifts)
 # proxy_status_secret = "your-stable-secret-min-32-chars"
