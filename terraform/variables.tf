@@ -79,7 +79,7 @@ variable "skip_agent_build" {
 variable "infra_version" {
   description = "Version number for proxy/ALB/Wavelength infra. Set to 0 to destroy (count=0); set to 1 or higher to create. Bump the value (e.g. 1 -> 2) and apply to force replacement of instances and ALB."
   type        = number
-  default     = 4
+  default     = 5
 }
 
 variable "proxy_subnet_cidr" {
@@ -125,4 +125,9 @@ variable "subdomain" {
   default     = ""
 }
 
-
+variable "proxy_status_secret" {
+  description = "Fixed secret for Lambda->proxy session-status API. When set, stored in Secrets Manager and used by Lambda and proxy (avoids drift from random_password). Leave empty to use auto-generated value."
+  type        = string
+  default     = ""
+  sensitive   = true
+}

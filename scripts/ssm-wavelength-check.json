@@ -1,0 +1,10 @@
+{
+  "commands": [
+    "echo '=== rdi-agent process ==='",
+    "pgrep -a rdi-agent || echo 'no rdi-agent process'",
+    "echo '=== Agent log (last 40 lines) ==='",
+    "tail -40 /var/log/rdi-agent.log 2>/dev/null || echo 'no log'",
+    "echo '=== Listening ports 8080 8765 ==='",
+    "ss -tlnp 2>/dev/null | grep -E '8080|8765' || echo 'none'"
+  ]
+}

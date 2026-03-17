@@ -183,7 +183,7 @@ resource "aws_iam_role_policy" "s3_proxy_binary" {
   })
 }
 
-# Allow proxy instance to ship logs to CloudWatch (for connection failure debugging)
+# Allow proxy instance to ship logs to CloudWatch via CloudWatch agent (connection failure debugging)
 resource "aws_iam_role_policy" "cloudwatch_logs" {
   count = var.cloudwatch_log_group_name != "" ? 1 : 0
 
@@ -195,11 +195,36 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
       {
         Effect = "Allow"
         Action = [
+          "logs:CreateLogGroup",
           "logs:CreateLogStream",
-          "logs:PutLogEvents",
-          "logs:DescribeLogStreams"
+          "logs:DescribeLogStreams",
+          "logs:DescribeLogGroups",
+          "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:${var.cloudwatch_log_group_name}:*"
+        Resource = [
+          "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:${var.cloudwatch_log_group_name}:*",
+          "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:${var.cloudwatch_log_group_name}"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricData"
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "cloudwatch:namespace" = "CWAgent"
+          }
+        }
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeVolumes",
+          "ec2:DescribeTags"
+        ]
+        Resource = "*"
       }
     ]
   })

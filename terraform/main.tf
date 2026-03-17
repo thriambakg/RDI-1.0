@@ -61,7 +61,31 @@ resource "random_password" "proxy_status_secret" {
   special = true
 }
 
+# Store proxy status secret in Secrets Manager so it stays stable (avoids Lambda/proxy drift when random_password is recreated)
+module "proxy_secrets" {
+  source = "./modules/secrets-manager"
+  count  = var.infra_version > 0 ? 1 : 0
+
+  project_name = var.project_name
+  environment  = var.environment
+  kms_key_id   = module.kms.main_key_arn
+  tags         = {}
+
+  secrets = {
+    proxy_status = {
+      description = "Secret for Lambda->proxy session-status API (X-Proxy-Secret)"
+      secret_data = { "value" = coalesce(var.proxy_status_secret, random_password.proxy_status_secret.result) }
+    }
+  }
+}
+
+data "aws_secretsmanager_secret_version" "proxy_status" {
+  count     = var.infra_version > 0 ? 1 : 0
+  secret_id = module.proxy_secrets[0].secret_ids["proxy_status"]
+}
+
 locals {
+  proxy_status_secret_value       = var.infra_version > 0 ? (var.proxy_status_secret != "" ? var.proxy_status_secret : jsondecode(data.aws_secretsmanager_secret_version.proxy_status[0].secret_string)["value"]) : random_password.proxy_status_secret.result
   is_primary_region               = var.primary_region != "" && var.region == var.primary_region
   region                          = data.aws_region.current.name
   base_state_key                  = var.base_state_key != "" ? var.base_state_key : "base-infra/${var.environment}/${var.region}/terraform.tfstate"
@@ -241,7 +265,7 @@ module "session_api_lambda" {
     USER_PROFILES_TABLE   = local.user_profiles_tbl
     PROXY_ENDPOINT        = length(module.rdi_edge) > 0 ? ((var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (module.rdi_edge[0].alb_dns_name != null ? "wss://${module.rdi_edge[0].alb_dns_name}" : module.rdi_edge[0].proxy_websocket_endpoint_direct)) : ""
     PROXY_STATUS_URL      = length(module.rdi_edge) > 0 ? "http://${module.rdi_edge[0].proxy_public_ip}:8767/session-status" : ""
-    PROXY_STATUS_SECRET   = random_password.proxy_status_secret.result
+    PROXY_STATUS_SECRET   = length(module.rdi_edge) > 0 ? local.proxy_status_secret_value : ""
     }, length(module.rdi_edge) > 0 && module.rdi_edge[0].wavelength_instance_id != null ? {
     WAVELENGTH_INSTANCE_ID = module.rdi_edge[0].wavelength_instance_id
     WAVELENGTH_ZONE_ID     = length(var.edge_zone_ids) > 0 ? var.edge_zone_ids[0] : var.wavelength_zone_id
@@ -526,7 +550,7 @@ module "rdi_edge" {
   region                        = local.region
   infra_version                 = var.infra_version
   kms_key_arn                   = module.kms.main_key_arn
-  proxy_status_secret           = random_password.proxy_status_secret.result
+  proxy_status_secret           = local.proxy_status_secret_value
   proxy_subnet_cidr             = var.proxy_subnet_cidr
   alb_subnet_cidr               = var.enable_alb_wss ? var.alb_subnet_cidr : ""
   proxy_artifacts_bucket_id     = module.proxy_artifacts_bucket.bucket_id

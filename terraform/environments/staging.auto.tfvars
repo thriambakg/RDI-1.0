@@ -15,6 +15,9 @@ edge_zone_ids      = ["use1-wl1-chi-wlz1"] # Zone ID for UI display
 proxy_subnet_cidr = "10.200.56.0/24"
 alb_subnet_cidr   = "10.200.57.0/24"
 
+# Optional: fixed secret for Lambda->proxy session-status API (avoids 401 when random_password drifts)
+# proxy_status_secret = "your-stable-secret-min-32-chars"
+
 # Custom domain for WSS (trusted cert — rdistaging.com)
 # After apply, set rdistaging.com NS records at your registrar to wss_custom_domain_name_servers output.
 enable_custom_domain = true
