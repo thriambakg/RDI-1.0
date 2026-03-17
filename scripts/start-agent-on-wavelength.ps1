@@ -34,22 +34,30 @@ if (-not $InstanceId -or -not $ProxyUrl) {
 
 # Agent daemon API: POST http://127.0.0.1:8080/sessions with JSON body. Use file on instance to avoid quoting.
 $body = @{ session_id = $SessionId; proxy_url = $ProxyUrl } | ConvertTo-Json -Compress
-$cmd1 = "echo '$($body.Replace("'","'\"'\"'"))' > /tmp/session-add.json"
+$bashEscaped = $body.Replace("'", "'\''")
+$cmd1 = "echo '" + $bashEscaped + "' > /tmp/session-add.json"
 $cmd2 = "curl -s -X POST http://127.0.0.1:8080/sessions -H 'Content-Type: application/json' -d @/tmp/session-add.json"
 
 $params = @{ commands = @($cmd1, $cmd2) }
 $paramsFile = [System.IO.Path]::GetTempFileName()
-$params | ConvertTo-Json -Depth 3 | Set-Content -Path $paramsFile -Encoding UTF8
+$params | ConvertTo-Json -Depth 3 | Set-Content -Path $paramsFile -Encoding UTF8 -NoNewline
+# AWS CLI on Windows: use absolute path with forward slashes for file://
+$paramsPath = "file:///" + (Resolve-Path -LiteralPath $paramsFile).Path.Replace('\', '/')
 
 Write-Host "Adding session to agent daemon on $InstanceId (session $SessionId, proxy $ProxyUrl)..." -ForegroundColor Cyan
-$cmdId = aws ssm send-command --region $Region --instance-ids $InstanceId `
+$sendResult = aws ssm send-command --region $Region --instance-ids $InstanceId `
     --document-name "AWS-RunShellScript" `
-    --parameters "file://$paramsFile" `
-    --query "Command.CommandId" --output text 2>&1
+    --parameters $paramsPath `
+    --query "Command.CommandId" --output text
 Remove-Item -LiteralPath $paramsFile -ErrorAction SilentlyContinue
 
-if ($LASTEXITCODE -ne 0 -or -not $cmdId) {
-    Write-Host "SSM SendCommand failed: $cmdId" -ForegroundColor Red
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "SSM SendCommand failed (exit $LASTEXITCODE). Check AWS credentials and that instance $InstanceId is SSM-managed (Online)." -ForegroundColor Red
+    exit 1
+}
+$cmdId = $sendResult?.Trim()
+if (-not $cmdId) {
+    Write-Host "SSM SendCommand returned no CommandId." -ForegroundColor Red
     exit 1
 }
 

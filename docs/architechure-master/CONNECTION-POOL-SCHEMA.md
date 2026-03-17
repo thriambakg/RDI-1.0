@@ -53,11 +53,12 @@
 
 ---
 
-## TTL and idle vs delete
+## TTL and idle vs delete (connection lifetime)
 
 - **Deletion** happens only when the user explicitly deletes (DELETE with `permanent: true`). DynamoDB TTL is not used to delete session rows (that would remove the row from the connection pool but leave the user's list/hierarchy out of sync).
 - **Idle after time:** `POST /sessions` accepts `ttl_seconds` (optional). Default 4h, min 60s, max 7 days. The backend stores `idle_after` = now + ttl_seconds and `expires_at` = far-future. A scheduled job (EventBridge every 5 min) invokes the Session Lambda to mark active sessions as **idle** when `idle_after` has passed (updates status, notifies proxy, updates user hierarchy). The row stays in the table until the user explicitly deletes.
 - `ttl_seconds: 0` means no auto-idle (indefinite); no `idle_after` is set.
+- **Connection lifetime:** TTL is shared with idle logic. While status is **active**, the WebSocket connection can stay up indefinitely: the ALB in front of the proxy has a 3600s idle timeout so long-lived connections are not closed by the load balancer. Only when the session becomes **idle** (user clicks Release, or `idle_after` has passed) does the Lambda notify the proxy to disconnect and the agent to close; the UI will then show "not connected" until the user reactivates or creates a new session.
 
 ---
 

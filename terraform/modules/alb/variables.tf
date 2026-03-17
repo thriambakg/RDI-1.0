@@ -50,6 +50,12 @@ variable "enable_deletion_protection" {
   default     = false
 }
 
+variable "idle_timeout_seconds" {
+  description = "ALB idle timeout in seconds (1-4000). For WebSocket, use 3600+ so connections stay up while session is active; default 60."
+  type        = number
+  default     = 60
+}
+
 variable "enable_access_logs" {
   description = "Enable access logs for ALB"
   type        = bool

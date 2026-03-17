@@ -105,6 +105,8 @@ module "alb_websocket" {
   enable_waf_logging = false
   access_logs_bucket = ""
   enable_access_logs = false
+  # WebSocket: keep connections up while session is active; TTL/idle is handled by Lambda (idle_after), not by ALB
+  idle_timeout_seconds = 3600
 
   target_group_config = {
     port                = 8765

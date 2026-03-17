@@ -259,6 +259,10 @@ async fn handle_ws(
         }
         _ => ("default".to_string(), "frontend".to_string()),
     };
+    info!(
+        "WebSocket handshake session_id={} role={} addr={} (proxy_ec2)",
+        session_id, role, addr
+    );
 
     // Reject connections for sessions Lambda has marked idle (only active allowed).
     {
@@ -287,15 +291,29 @@ async fn handle_ws(
     let peer_send = {
         let mut s = sessions.write().await;
         let target = if role == "agent" {
-            info!("Agent connected session_id={} addr={}", session_id, addr);
+            let had_frontend = s.frontends.contains_key(&session_id);
+            info!(
+                "Agent WebSocket connected session_id={} addr={} (Wavelength EC2) frontend_already_connected={}",
+                session_id, addr, had_frontend
+            );
             s.agents.insert(session_id.clone(), (peer, close_tx));
+            if had_frontend {
+                info!("Session {} pairing complete: frontend + agent both connected (proxy_ec2)", session_id);
+            }
             s.frontends.get(&session_id).map(|(p, _)| p.tx.clone())
         } else {
-            info!("Frontend connected session_id={} addr={}", session_id, addr);
+            let had_agent = s.agents.contains_key(&session_id);
+            info!(
+                "Frontend WebSocket connected session_id={} addr={} (browser) agent_already_connected={}",
+                session_id, addr, had_agent
+            );
             s.frontends.insert(session_id.clone(), (peer, close_tx));
             let _ = client_tx.send(ToClient::Text(
                 r#"{"hop":"proxy_ec2","message":"handshake accepted"}"#.to_string(),
             ));
+            if had_agent {
+                info!("Session {} pairing complete: frontend + agent both connected (proxy_ec2)", session_id);
+            }
             s.agents.get(&session_id).map(|(p, _)| p.tx.clone())
         };
         target
@@ -370,9 +388,10 @@ async fn handle_ws(
     let mut s = sessions.write().await;
     if role == "agent" {
         s.agents.remove(&session_id);
+        info!("Agent WebSocket disconnected session_id={} addr={} (Wavelength EC2)", session_id, addr);
     } else {
         s.frontends.remove(&session_id);
+        info!("Frontend WebSocket disconnected session_id={} addr={} (browser)", session_id, addr);
     }
-    info!("Disconnected {} {}", addr, session_id);
     Ok(())
 }

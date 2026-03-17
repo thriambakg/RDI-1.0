@@ -38,6 +38,7 @@ def _start_agent_on_wavelength(instance_id: str, proxy_url: str, session_id: str
     if not instance_id or not proxy_url or not session_id:
         print(f"[RDI Session] agent add skipped: missing instance_id={bool(instance_id)} proxy_url={bool(proxy_url)} session_id={bool(session_id)}")
         return
+    print(f"[RDI Session] starting agent on Wavelength session_id={session_id} proxy_url={proxy_url} instance_id={instance_id} (agent will open WebSocket to proxy)")
     body = json.dumps({"session_id": session_id, "proxy_url": proxy_url})
     # One shell command: curl to local agent API (daemon must already be running on the instance)
     cmd = f"curl -s -X POST http://127.0.0.1:{AGENT_API_PORT}/sessions -H 'Content-Type: application/json' -d {shlex.quote(body)}"
@@ -49,7 +50,7 @@ def _start_agent_on_wavelength(instance_id: str, proxy_url: str, session_id: str
             Parameters={"commands": [cmd]},
         )
         cmd_id = result.get("Command", {}).get("CommandId", "")
-        print(f"[RDI Session] SSM agent add session_id={session_id} instance_id={instance_id} command_id={cmd_id}")
+        print(f"[RDI Session] SSM agent add session_id={session_id} instance_id={instance_id} command_id={cmd_id} (WebSocket connection will appear in proxy/agent logs)")
     except Exception as e:
         print(f"[RDI Session] SSM agent add failed session_id={session_id} instance_id={instance_id} error={e}")
 
@@ -58,6 +59,7 @@ def _stop_agent_on_wavelength(instance_id: str, session_id: str) -> None:
     """Tell the agent daemon on Wavelength to remove this session (close proxy connection)."""
     if not instance_id or not session_id:
         return
+    print(f"[RDI Session] stopping agent on Wavelength session_id={session_id} instance_id={instance_id} (WebSocket to proxy will close)")
     url = f"http://127.0.0.1:{AGENT_API_PORT}/sessions/{session_id}"
     cmd = f"curl -s -X DELETE {shlex.quote(url)}"
     try:
@@ -75,7 +77,9 @@ def _stop_agent_on_wavelength(instance_id: str, session_id: str) -> None:
 def _notify_proxy_session_status(session_id: str, status: str) -> None:
     """Tell the proxy to set session status (active/idle). Idle => disconnect and clear from memory."""
     if not PROXY_STATUS_URL or not PROXY_STATUS_SECRET:
+        print(f"[RDI Session] proxy status notify skipped (no PROXY_STATUS_URL/SECRET) session_id={session_id} status={status}")
         return
+    print(f"[RDI Session] notifying proxy session_id={session_id} status={status} (proxy will {'accept' if status == 'active' else 'disconnect'} WebSocket connections for this session)")
     body = json.dumps({"session_id": session_id, "status": status}).encode("utf-8")
     req = urllib.request.Request(
         PROXY_STATUS_URL,
@@ -89,11 +93,13 @@ def _notify_proxy_session_status(session_id: str, status: str) -> None:
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             if resp.status != 200:
-                print(f"Proxy status API returned {resp.status} for session {session_id}")
+                print(f"[RDI Session] proxy status API returned {resp.status} for session {session_id}")
+            else:
+                print(f"[RDI Session] proxy status acknowledged session_id={session_id} status={status}")
     except urllib.error.URLError as e:
-        print(f"Proxy status notify failed for session {session_id}: {e}")
+        print(f"[RDI Session] proxy status notify failed session_id={session_id} error={e}")
     except Exception as e:
-        print(f"Proxy status notify error: {e}")
+        print(f"[RDI Session] proxy status notify error session_id={session_id}: {e}")
 
 
 def lambda_handler(event: dict, context: Any) -> dict:
@@ -143,9 +149,10 @@ def _get_user_id(event: dict) -> str | None:
     return claims.get("sub")
 
 
-# TTL bounds: default 4h for idle sessions, max 7 days
+# TTL and connection lifetime (shared with idle logic):
+# - ttl_seconds=0: no idle_after; session stays "active" until user clicks Release. WebSocket can stay connected indefinitely (ALB idle_timeout is 3600s).
+# - ttl_seconds>0: idle_after = now + ttl_seconds; scheduled Lambda marks session idle when idle_after passes, then proxy disconnects and agent closes.
 # We do NOT use DynamoDB TTL for deletion: TTL would remove the row and leave the user's list out of sync.
-# Instead we store expires_at = INDEFINITE and idle_after = when to transition to idle; a scheduled Lambda marks idle.
 # Deletion only happens on explicit user DELETE.
 DEFAULT_TTL_SECONDS = 14400  # 4 hours
 MAX_TTL_SECONDS = 604800  # 7 days
@@ -224,9 +231,15 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
         )
 
     # Mark session active on the proxy so it accepts UI and agent WebSocket connections for this session.
+    idle_desc = f"idle_after_ts={idle_after_ts}" if idle_after_ts else "indefinite (no TTL; only explicit release marks idle)"
+    print(f"[RDI Session] session created session_id={session_id} endpoint={PROXY_ENDPOINT} drone_id={drone_id} {idle_desc} wavelength_zone_id={wavelength_zone_id}")
     _notify_proxy_session_status(session_id, "active")
 
-    if WAVELENGTH_INSTANCE_ID and (not WAVELENGTH_ZONE_ID or wavelength_zone_id == WAVELENGTH_ZONE_ID):
+    if not WAVELENGTH_INSTANCE_ID:
+        print(f"[RDI Session] agent not started: WAVELENGTH_INSTANCE_ID not set (no Wavelength instance); frontend/agent WebSocket will not pair until agent connects")
+    elif WAVELENGTH_ZONE_ID and wavelength_zone_id != WAVELENGTH_ZONE_ID:
+        print(f"[RDI Session] agent not started: zone mismatch request_zone={wavelength_zone_id} deployed_zone={WAVELENGTH_ZONE_ID}")
+    else:
         _start_agent_on_wavelength(WAVELENGTH_INSTANCE_ID, PROXY_ENDPOINT, session_id)
 
     return _response(
@@ -293,6 +306,7 @@ def _release_session(user_id: str, session_id: str | None, headers: dict, *, per
             return _response(404, {"error": "Session not found"}, headers)
         raise
 
+    print(f"[RDI Session] session released (user) session_id={session_id} -> idle (proxy will disconnect WebSocket; agent will close)")
     if USER_PROFILES_TABLE:
         _upsert_profile_update_status(dynamodb, user_id, session_id, "idle")
     _notify_proxy_session_status(session_id, "idle")
@@ -303,7 +317,9 @@ def _release_session(user_id: str, session_id: str | None, headers: dict, *, per
 
 
 def _idle_expired_sessions() -> None:
-    """Scheduled job: mark active sessions as idle when idle_after has passed. Does not delete."""
+    """Scheduled job: mark active sessions as idle when idle_after has passed. Does not delete.
+    TTL is shared with connection lifetime: only sessions with idle_after set will transition to idle;
+    sessions with ttl_seconds=0 have no idle_after and stay active until explicit release."""
     dynamodb = boto3.client("dynamodb")
     now = int(time.time())
     paginator = dynamodb.get_paginator("scan")
@@ -320,6 +336,7 @@ def _idle_expired_sessions() -> None:
             if not user_id or not session_id:
                 continue
             try:
+                print(f"[RDI Session] idle_expired marking idle session_id={session_id} (idle_after passed; proxy/agent will disconnect)")
                 dynamodb.update_item(
                     TableName=TABLE_NAME,
                     Key={"user_id": {"S": user_id}, "session_id": {"S": session_id}},

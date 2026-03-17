@@ -132,6 +132,7 @@ resource "aws_lb" "main" {
   subnets            = var.public_subnet_ids
 
   enable_deletion_protection = var.enable_deletion_protection
+  idle_timeout               = var.idle_timeout_seconds
 
   # Access logs
   access_logs {

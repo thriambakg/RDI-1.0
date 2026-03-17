@@ -110,7 +110,10 @@ async fn add_session(
     guard.insert(session_id.clone(), handle);
     drop(guard);
 
-    info!("Added session {} -> {}", session_id, proxy_url);
+    info!(
+        "Added session session_id={} proxy_url={} (Wavelength EC2); WebSocket connection task started",
+        session_id, proxy_url
+    );
     (StatusCode::CREATED, format!("session {} added", session_id))
 }
 
@@ -127,7 +130,7 @@ async fn remove_session(
     if let Some(handle) = guard.remove(&session_id) {
         handle.abort();
         drop(guard);
-        info!("Removed session {}", session_id);
+        info!("Removed session session_id={} (Wavelength EC2); WebSocket to proxy will close", session_id);
         (StatusCode::OK, format!("session {} removed", session_id))
     } else {
         drop(guard);
@@ -165,7 +168,7 @@ async fn run_session(
     mavlink_addr: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!(
-        "Connecting to {} session={} -> {}",
+        "WebSocket opening url={} session_id={} (Wavelength EC2) -> mavlink {}",
         proxy_url, session_id, mavlink_addr
     );
 
@@ -173,14 +176,17 @@ async fn run_session(
         Ok((s, _)) => s,
         Err(e) => {
             error!(
-                "Failed to connect to proxy url={} session_id={} error={}",
+                "Failed to connect to proxy url={} session_id={} error={} (Wavelength EC2)",
                 proxy_url, session_id, e
             );
             return Err(e.into());
         }
     };
     let (mut ws_tx, mut ws_rx) = ws_stream.split();
-    info!("Connected to proxy session={}", session_id);
+    info!(
+        "WebSocket connected to proxy session_id={} (Wavelength EC2); sending handshake agent:{}",
+        session_id, session_id
+    );
 
     ws_tx
         .send(Message::Text(format!("agent:{}", session_id)))
