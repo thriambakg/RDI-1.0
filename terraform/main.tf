@@ -534,39 +534,7 @@ module "ssl_certificate" {
 
 # RDI Edge bundle: Proxy EC2 + ALB (WebSocket) + Wavelength EC2. Single module for deploy/teardown.
 # Individual modules remain in ./modules/proxy-ec2, ./modules/alb, ./modules/wavelength-ec2 for standalone use.
-module "rdi_edge" {
-  count  = var.infra_version > 0 ? 1 : 0
-  source = "./modules/rdi-edge"
 
-  project_name                  = var.project_name
-  environment                   = var.environment
-  region                        = local.region
-  infra_version                 = var.infra_version
-  kms_key_arn                   = module.kms.main_key_arn
-  proxy_status_secret           = local.proxy_status_secret_value
-  proxy_subnet_cidr             = var.proxy_subnet_cidr
-  alb_subnet_cidr               = var.enable_alb_wss ? var.alb_subnet_cidr : ""
-  proxy_artifacts_bucket_id     = module.proxy_artifacts_bucket.bucket_id
-  proxy_binary_s3_key           = "proxy/rdi-proxy"
-  cloudwatch_log_group_proxy    = aws_cloudwatch_log_group.rdi_proxy.name
-  enable_alb_wss                = var.enable_alb_wss
-  certificate_arn               = (var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? module.domain[0].certificate_arn : (var.certificate_arn != "" ? var.certificate_arn : (length(module.ssl_certificate) > 0 ? module.ssl_certificate[0].certificate_arn : ""))
-  wavelength_zone_id            = var.wavelength_zone_id
-  mavlink_port                  = var.mavlink_port
-  agent_binary_s3_bucket        = var.wavelength_zone_id != "" ? module.proxy_artifacts_bucket.bucket_id : ""
-  agent_binary_s3_key           = "agent/rdi-agent"
-  enable_agent_binary_s3_access = var.wavelength_zone_id != "" && !var.skip_agent_build
-  cloudwatch_log_group_agent    = var.wavelength_zone_id != "" ? aws_cloudwatch_log_group.rdi_agent.name : ""
-
-  tags = {}
-
-  # Only depend on proxy_binary; do not depend on null_resource.wavelength_agent_ready to avoid
-  # a destroy cycle (rdi_edge -> wavelength_agent_ready, and resources that consume rdi_edge outputs
-  # require those outputs during destroy, which forces an ordering that cycles with wavelength_agent_ready).
-  # For create: when not using skip_agent_build, ensure agent binary is in S3 before Wavelength boots
-  # (e.g. same apply creates agent_binary before rdi_edge runs, or run deploy-ec2-code after first apply).
-  depends_on = [aws_s3_object.proxy_binary]
-}
 
 # Point custom domain at the ALB so WSS is reachable at wss://<full_domain_name> with a trusted cert
 resource "aws_route53_record" "alb_wss" {
