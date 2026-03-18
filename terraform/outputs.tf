@@ -33,6 +33,11 @@ output "api_gateway_base_url" {
   value       = length(module.session_api) > 0 ? module.session_api[0].stage_url : null
 }
 
+output "rdi_edge_vpc_id" {
+  description = "RDI Edge VPC ID (from rdi-edge module)"
+  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].vpc_id : null
+}
+
 output "proxy_instance_id" {
   description = "Proxy EC2 instance ID (for SSM restart after deploy)"
   value       = null

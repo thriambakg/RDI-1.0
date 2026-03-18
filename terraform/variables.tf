@@ -75,13 +75,6 @@ variable "skip_agent_build" {
   default     = false
 }
 
-# Incremental counter to force redeploy of proxy, ALB, and Wavelength EC2. Change the number and apply to recreate resources.
-variable "infra_version" {
-  description = "Version number for proxy/ALB/Wavelength infra. Set to 0 to destroy (count=0); set to 1 or higher to create. Bump the value (e.g. 1 -> 2) and apply to force replacement of instances and ALB."
-  type        = number
-  default     = 6
-}
-
 variable "proxy_subnet_cidr" {
   description = "CIDR for proxy EC2 subnet (within 10.200.0.0/16). Change if orphaned subnets conflict."
   type        = string

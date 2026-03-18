@@ -64,7 +64,7 @@ resource "random_password" "proxy_status_secret" {
 # Store proxy status secret in Secrets Manager so it stays stable (avoids Lambda/proxy drift when random_password is recreated)
 module "proxy_secrets" {
   source = "./modules/secrets-manager"
-  count  = var.infra_version > 0 ? 1 : 0
+  count  = 1
 
   project_name = var.project_name
   environment  = var.environment
@@ -79,9 +79,22 @@ module "proxy_secrets" {
   }
 }
 
+# RDI Edge - VPC and (incrementally) proxy/ALB/Wavelength resources in one module. No submodules.
+# Bump infra_version here (e.g. 1 -> 2) to force replacement of edge resources.
+module "rdi_edge" {
+  source = "./modules/rdi-edge"
+  count  = 1
+
+  project_name  = var.project_name
+  environment   = var.environment
+  infra_version = 1
+  vpc_cidr      = "10.200.0.0/16"
+  tags          = {}
+}
+
 # Use module secret_values output (Cosine-Base-Infra pattern); avoids external data source race with secret version
 locals {
-  proxy_status_secret_value       = var.infra_version > 0 ? module.proxy_secrets[0].secret_values["proxy_status"]["value"] : random_password.proxy_status_secret.result
+  proxy_status_secret_value       = length(module.proxy_secrets) > 0 ? module.proxy_secrets[0].secret_values["proxy_status"]["value"] : random_password.proxy_status_secret.result
   is_primary_region               = var.primary_region != "" && var.region == var.primary_region
   region                          = data.aws_region.current.name
   base_state_key                  = var.base_state_key != "" ? var.base_state_key : "base-infra/${var.environment}/${var.region}/terraform.tfstate"
