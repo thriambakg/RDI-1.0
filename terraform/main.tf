@@ -79,17 +79,44 @@ module "proxy_secrets" {
   }
 }
 
-# RDI Edge - VPC and (incrementally) proxy/ALB/Wavelength resources in one module. No submodules.
+# Proxy user_data: install from S3, run proxy, ship logs to CloudWatch (template from src/proxy/user_data.sh)
+locals {
+  proxy_user_data = templatefile("${path.module}/../src/proxy/user_data.sh", {
+    infra_version        = 1
+    ws_port              = 8765
+    health_port          = 8766
+    status_port          = 8767
+    status_secret        = local.proxy_status_secret_value
+    s3_bucket            = module.proxy_artifacts_bucket.bucket_id
+    s3_key               = "proxy/rdi-proxy"
+    cloudwatch_log_group = "/rdi/${var.environment}/proxy"
+  })
+}
+
+# RDI Edge - VPC and proxy EC2 (and later ALB, Wavelength). No submodules.
 # Bump infra_version here (e.g. 1 -> 2) to force replacement of edge resources.
 module "rdi_edge" {
   source = "./modules/rdi-edge"
   count  = 1
 
-  project_name  = var.project_name
-  environment   = var.environment
-  infra_version = 1
-  vpc_cidr      = "10.200.0.0/16"
-  tags          = {}
+  project_name                  = var.project_name
+  environment                   = var.environment
+  infra_version                 = 1
+  vpc_cidr                      = "10.200.0.0/16"
+  proxy_subnet_cidr             = var.proxy_subnet_cidr
+  instance_type                 = "t3.small"
+  root_volume_size              = 30
+  key_name                      = ""
+  kms_key_arn                   = module.kms.main_key_arn
+  proxy_websocket_port          = 8765
+  proxy_health_port             = 8766
+  proxy_status_port             = 8767
+  user_data                     = local.proxy_user_data
+  proxy_binary_s3_bucket        = module.proxy_artifacts_bucket.bucket_id
+  proxy_binary_s3_key           = "proxy/rdi-proxy"
+  enable_s3_proxy_binary_access = true
+  cloudwatch_log_group_name     = "/rdi/${var.environment}/proxy"
+  tags                          = {}
 }
 
 # Use module secret_values output (Cosine-Base-Infra pattern); avoids external data source race with secret version

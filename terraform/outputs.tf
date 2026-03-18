@@ -40,11 +40,12 @@ output "rdi_edge_vpc_id" {
 
 output "proxy_instance_id" {
   description = "Proxy EC2 instance ID (for SSM restart after deploy)"
-  value       = null
+  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].proxy_instance_id : null
 }
 
 output "proxy_public_ip" {
-  value = null
+  description = "Proxy public IP (EIP)"
+  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].proxy_public_ip : null
 }
 
 output "proxy_websocket_endpoint" {
