@@ -36,3 +36,21 @@ terraform plan -no-color 2>&1 | tee plan.txt
 ```
 
 Then open `plan.txt` for the full list of resources to add, change, or destroy. Summary line at the end: `Plan: X to add, Y to change, Z to destroy.`
+
+## Pipeline behavior and why “every deploy” replaced everything
+
+### What triggers replacements (summary)
+- **Subnet CIDR change** → subnets and instances that use them are replaced (one-time after fixing conflicts).
+- **AMI change** → without `ignore_changes = [ami]`, instances would be replaced every time a newer AMI is returned; we use `ignore_changes = [ami]` to avoid that.
+- **`null_resource.proxy_build` / `agent_build`** → triggers are `filemd5(Cargo.toml)`, `filemd5(main.rs)`, `filemd5(build script)`. If proxy/agent **code** or build scripts change, these resources are replaced, which can force S3 object and downstream updates. If only **infra** (e.g. Terraform, Lambda, frontend) changes, those hashes are unchanged so these null_resources are **not** replaced.
+- **Lambda layer** → new layer zip or hash → new layer version, Lambda config update.
+- **API Gateway** → redeployment triggers (e.g. integration changes) can force a new deployment.
+- **rdi_edge** → `null_resource.proxy_ready` trigger is `proxy_instance_id`; if the proxy instance is replaced (e.g. subnet change), this and ALB/target attachments change.
+
+So after a one-time subnet (or similar) fix, **infra-only** pushes should not replace EC2s if AMI is ignored and proxy/agent source files are unchanged.
+
+### Two workflows (recommended)
+- **Deploy Application Infrastructure** (main workflow) runs on **infra paths only**: `terraform/**`, `backend_app/**`, `.github/workflows/**`, `frontend/**`, `src/session-api/**`, `src/wavelength/**`, `scripts/**`. Changes under `src/proxy` or `src/agent` (proxy/agent **code** only) do **not** trigger this workflow, so no Terraform apply and no EC2 replacement from those commits.
+- **Deploy EC2 code** (separate workflow) runs only when **proxy/agent code** changes: `src/proxy/**`, `src/agent/**`. It builds binaries, uploads to S3, and uses **SSM Run Command** to run `update-from-s3.sh` on proxy and Wavelength instances so they pull the new binary and restart. No Terraform, no instance replacement.
+
+Result: infra changes → main pipeline (Terraform, Lambda, etc.); proxy/agent code changes → code-only pipeline (S3 + SSM in-place update). Target group stays healthy when only proxy/agent code is updated.

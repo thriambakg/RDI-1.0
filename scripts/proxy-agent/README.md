@@ -121,3 +121,19 @@ python3 sim_frontend.py <SESSION_ID>
 - Frontend sim can connect with **frontend:session_id** and receive “handshake accepted” and PING/PONG when the agent is connected.
 
 This matches the AWS flow (Lambda → proxy status API + SSM → agent; agent → proxy WS; frontend → ALB → proxy WS) for local debugging.
+
+## Production vs sim
+
+| Step | Sim | Production (AWS) |
+|------|-----|------------------|
+| Register session | `sim_lambda.py` POSTs to proxy status API and to agent at `http://127.0.0.1:8080/sessions` | Session API Lambda: notifies proxy (status API), then **SSM SendCommand** runs `curl -X POST http://127.0.0.1:8080/sessions` on the Wavelength instance |
+| Agent connects | Agent (local) opens WebSocket to proxy | Agent daemon on Wavelength (must be running) opens WebSocket to `PROXY_ENDPOINT` (wss://…) |
+| Frontend | `sim_frontend.py <SESSION_ID>` connects with same session_id | UI: create a session first, then connect using the **same** Session ID shown |
+
+### If you see “no agent connected” in the UI
+
+1. **Create a session first** – The agent is started only when you create a session (Session API calls Lambda → SSM → agent’s POST /sessions). Use the Session ID from that response.
+2. **Use the same session** – Connect from the same place/session you just created; if you have multiple sessions, use the one you created before pinging.
+3. **Wavelength daemon** – The agent daemon must be running on the Wavelength instance (user_data starts it; SSM can run `/opt/rdi-agent/update-from-s3.sh` to refresh and restart).
+4. **Lambda env** – Lambda needs `WAVELENGTH_INSTANCE_ID` and `WAVELENGTH_ZONE_ID` set (from Terraform); otherwise it will not run SSM to start the agent.
+5. **Zone match** – If the UI sends a different `wavelength_zone_id` than the deployed zone, Lambda skips starting the agent (see logs: “agent not started: zone mismatch”).
