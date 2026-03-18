@@ -256,17 +256,14 @@ module "session_api_lambda" {
   environment_variables = merge({
     CONNECTION_POOL_TABLE = local.connection_pool_tbl
     USER_PROFILES_TABLE   = local.user_profiles_tbl
-    PROXY_ENDPOINT        = length(module.rdi_edge) > 0 ? ((var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (module.rdi_edge[0].alb_dns_name != null ? "wss://${module.rdi_edge[0].alb_dns_name}" : module.rdi_edge[0].proxy_websocket_endpoint_direct)) : ""
-    PROXY_STATUS_URL      = length(module.rdi_edge) > 0 ? "http://${module.rdi_edge[0].proxy_public_ip}:8767/session-status" : ""
-    PROXY_STATUS_SECRET   = length(module.rdi_edge) > 0 ? local.proxy_status_secret_value : ""
-    }, length(module.rdi_edge) > 0 && module.rdi_edge[0].wavelength_instance_id != null ? {
-    WAVELENGTH_INSTANCE_ID = module.rdi_edge[0].wavelength_instance_id
-    WAVELENGTH_ZONE_ID     = length(var.edge_zone_ids) > 0 ? var.edge_zone_ids[0] : var.wavelength_zone_id
-  } : {})
+    PROXY_ENDPOINT        = ""
+    PROXY_STATUS_URL      = ""
+    PROXY_STATUS_SECRET   = ""
+  }, {})
 
   additional_policy_arns = concat(
     [aws_iam_policy.session_api_dynamodb[0].arn],
-    var.base_state_bucket != "" && var.infra_version > 0 && var.wavelength_zone_id != "" ? [aws_iam_policy.session_api_ssm[0].arn] : []
+    length(aws_iam_policy.session_api_ssm) > 0 ? [aws_iam_policy.session_api_ssm[0].arn] : []
   )
   depends_on = [aws_iam_policy.session_api_dynamodb]
   layers     = [module.core_layer.layer_arn]
@@ -274,9 +271,9 @@ module "session_api_lambda" {
   tags = {}
 }
 
-# Allow Session API Lambda to start RDI agent on Wavelength instance via SSM
+# Allow Session API Lambda to start RDI agent on Wavelength instance via SSM (disabled when rdi_edge removed)
 resource "aws_iam_policy" "session_api_ssm" {
-  count       = var.base_state_bucket != "" && var.infra_version > 0 && var.wavelength_zone_id != "" ? 1 : 0
+  count       = 0
   name        = "${var.project_name}-session-api-ssm-${var.environment}"
   description = "SSM SendCommand to start agent on Wavelength EC2"
 
@@ -284,12 +281,9 @@ resource "aws_iam_policy" "session_api_ssm" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
-        Action = "ssm:SendCommand"
-        Resource = [
-          "arn:aws:ec2:${local.region}:${data.aws_caller_identity.current.account_id}:instance/${module.rdi_edge[0].wavelength_instance_id}",
-          "arn:aws:ssm:${local.region}::document/AWS-RunShellScript"
-        ]
+        Effect   = "Allow"
+        Action   = "ssm:SendCommand"
+        Resource = ["arn:aws:ssm:${local.region}::document/AWS-RunShellScript"]
       }
     ]
   })
@@ -532,20 +526,5 @@ module "ssl_certificate" {
   tags         = {}
 }
 
-# RDI Edge bundle: Proxy EC2 + ALB (WebSocket) + Wavelength EC2. Single module for deploy/teardown.
-# Individual modules remain in ./modules/proxy-ec2, ./modules/alb, ./modules/wavelength-ec2 for standalone use.
-
-
-# Point custom domain at the ALB so WSS is reachable at wss://<full_domain_name> with a trusted cert
-resource "aws_route53_record" "alb_wss" {
-  count   = var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0 && var.infra_version > 0 && var.enable_alb_wss && var.alb_subnet_cidr != "" ? 1 : 0
-  zone_id = module.domain[0].hosted_zone_id
-  name    = var.subdomain != "" ? "${var.subdomain}.${var.domain_name}" : var.domain_name
-  type    = "A"
-
-  alias {
-    name                   = module.rdi_edge[0].alb_dns_name
-    zone_id                = module.rdi_edge[0].alb_zone_id
-    evaluate_target_health = true
-  }
-}
+# RDI Edge bundle removed for now; can be recreated later.
+# Route53 ALB alias record disabled (no rdi_edge = no ALB).

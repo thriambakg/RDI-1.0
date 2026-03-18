@@ -35,26 +35,26 @@ output "api_gateway_base_url" {
 
 output "proxy_instance_id" {
   description = "Proxy EC2 instance ID (for SSM restart after deploy)"
-  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].proxy_instance_id : null
+  value       = null
 }
 
 output "proxy_public_ip" {
-  value = length(module.rdi_edge) > 0 ? module.rdi_edge[0].proxy_public_ip : null
+  value = null
 }
 
 output "proxy_websocket_endpoint" {
   description = "WebSocket endpoint (wss when ALB enabled; use custom domain when enable_custom_domain is set)"
-  value       = length(module.rdi_edge) > 0 ? ((var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0) ? "wss://${module.domain[0].full_domain_name}" : (module.rdi_edge[0].alb_dns_name != null ? "wss://${module.rdi_edge[0].alb_dns_name}" : module.rdi_edge[0].proxy_websocket_endpoint_direct)) : null
+  value       = null
 }
 
 output "wavelength_instance_id" {
   description = "Wavelength EC2 instance ID (when deployed)"
-  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].wavelength_instance_id : null
+  value       = null
 }
 
 output "wavelength_carrier_ip" {
   description = "Wavelength carrier IP for 5G connectivity"
-  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].wavelength_carrier_ip : null
+  value       = null
 }
 
 output "wss_custom_domain_name_servers" {
@@ -64,12 +64,12 @@ output "wss_custom_domain_name_servers" {
 
 output "alb_dns_name" {
   description = "ALB DNS name (when ALB enabled)"
-  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].alb_dns_name : null
+  value       = null
 }
 
 output "proxy_target_group_arn" {
   description = "Target group ARN for proxy (WebSocket ALB); used by pipeline to check health before restart"
-  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].proxy_target_group_arn : null
+  value       = null
 }
 
 output "edge_zone_ids" {
@@ -79,6 +79,6 @@ output "edge_zone_ids" {
 
 # Keep variables in use (avoids terraform_unused_declarations)
 output "proxy_alb_subnet_cidrs" {
-  description = "Subnet CIDRs for proxy and ALB (used by module.rdi_edge when enabled)"
+  description = "Subnet CIDRs for proxy and ALB (for rdi_edge when recreated)"
   value       = { proxy_subnet_cidr = var.proxy_subnet_cidr, alb_subnet_cidr = var.alb_subnet_cidr }
 }
