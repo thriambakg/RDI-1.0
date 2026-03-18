@@ -82,3 +82,8 @@ output "proxy_alb_subnet_cidrs" {
   description = "Subnet CIDRs for proxy and ALB (for rdi_edge when recreated)"
   value       = { proxy_subnet_cidr = var.proxy_subnet_cidr, alb_subnet_cidr = var.alb_subnet_cidr }
 }
+
+output "mavlink_port" {
+  description = "MAVLink UDP port (for rdi_edge when recreated)"
+  value       = var.mavlink_port
+}

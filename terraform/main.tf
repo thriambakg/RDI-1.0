@@ -258,7 +258,7 @@ module "session_api_lambda" {
     USER_PROFILES_TABLE   = local.user_profiles_tbl
     PROXY_ENDPOINT        = ""
     PROXY_STATUS_URL      = ""
-    PROXY_STATUS_SECRET   = ""
+    PROXY_STATUS_SECRET   = local.proxy_status_secret_value
   }, {})
 
   additional_policy_arns = concat(
