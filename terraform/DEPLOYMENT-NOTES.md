@@ -19,6 +19,7 @@ Data sources like `data.aws_caller_identity.current`, `data.aws_region.current`,
 ### Reducing churn on future runs
 - **AMI:** The proxy and wavelength EC2 modules use `lifecycle { ignore_changes = [ami] }` on the instance so that when `data.aws_ami.amazon_linux` (e.g. `most_recent = true`) returns a newer AMI, Terraform will **not** replace the instance. You can still roll out a new AMI by temporarily removing that `ignore_changes` or by tainting the instance.
 - **Subnet CIDRs:** Leave `proxy_subnet_cidr` and `alb_subnet_cidr` unchanged after the conflict is resolved so subnets (and everything that depends on them) are not replaced again.
+- **Availability zones:** The proxy-ec2 module uses `sort(data.aws_availability_zones.available.names)` so that `names[0]` and `names[1]` are stable across runs. Without this, AWS can return AZs in a different order and Terraform would try to replace the subnets (and then the instance, ALB, etc.) and hit CIDR conflicts when creating the “new” subnets before destroying the old ones.
 
 ## Getting the full plan list
 

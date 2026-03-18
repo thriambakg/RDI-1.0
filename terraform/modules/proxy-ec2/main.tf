@@ -3,13 +3,18 @@
 
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
+# Use sorted AZ names so the same indices always refer to the same AZ across runs.
+# AWS returns names in undefined order; without sort(), names[0] and names[1] can swap and force subnet replacement.
 data "aws_availability_zones" "available" {
   state = "available"
-  # Exclude Wavelength/Local zones - proxy belongs in standard regional AZ (gp3, IGW, etc.)
   filter {
     name   = "opt-in-status"
     values = ["opt-in-not-required"]
   }
+}
+
+locals {
+  az_names_sorted = sort(data.aws_availability_zones.available.names)
 }
 
 resource "aws_vpc" "proxy" {
@@ -33,7 +38,7 @@ resource "aws_internet_gateway" "proxy" {
 resource "aws_subnet" "proxy" {
   vpc_id            = aws_vpc.proxy.id
   cidr_block        = var.proxy_subnet_cidr
-  availability_zone = data.aws_availability_zones.available.names[0]
+  availability_zone = local.az_names_sorted[0]
   # false: proxy uses EIP for public IP; true can fail in Wavelength/local zones
   map_public_ip_on_launch = false
 
@@ -66,7 +71,7 @@ resource "aws_subnet" "alb" {
 
   vpc_id                  = aws_vpc.proxy.id
   cidr_block              = var.alb_subnet_cidr
-  availability_zone       = data.aws_availability_zones.available.names[1]
+  availability_zone       = local.az_names_sorted[1]
   map_public_ip_on_launch = false
 
   tags = merge(var.tags, {
