@@ -518,7 +518,7 @@ jobs:
           send_restart() {
             aws ssm send-command --region ${{ matrix.region }} --instance-ids "$PROXY_ID" \
               --document-name "AWS-RunShellScript" \
-              --parameters file://scripts/ssm-proxy-restart.json \
+              --parameters '{"commands":["[ -x /opt/rdi-proxy/update-from-s3.sh ] && /opt/rdi-proxy/update-from-s3.sh || (pkill -f rdi-proxy || true; sleep 2; cd /opt/rdi-proxy && nohup ./rdi-proxy >> /var/log/rdi-proxy.log 2>&1 &)"]}' \
               --timeout-seconds 300 \
               --query "Command.CommandId" --output text
           }
