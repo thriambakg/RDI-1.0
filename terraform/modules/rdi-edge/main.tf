@@ -72,24 +72,9 @@ module "wavelength_ec2" {
   tags = var.tags
 }
 
-# Wait for proxy to finish user_data and serve health checks before creating ALB/target group.
-# Otherwise the target group is attached immediately and health checks fail until the proxy is ready.
-resource "null_resource" "proxy_ready" {
-  count = local.create_alb && var.proxy_ready_delay_seconds > 0 ? 1 : 0
-
-  triggers = {
-    proxy_instance_id = module.proxy_ec2[0].instance_id
-  }
-
-  provisioner "local-exec" {
-    command = var.proxy_ready_delay_seconds > 0 ? "sleep ${var.proxy_ready_delay_seconds}" : "true"
-  }
-
-  depends_on = [module.proxy_ec2]
-}
-
 # --- ALB for WebSocket (TLS) ---
-# Created after proxy_ready so the target group sees a healthy proxy (avoids initial unhealthy state).
+# Depends only on proxy_ec2 to avoid destroy cycles (null_resource.proxy_ready was removed for that reason).
+# On create the target group may be briefly unhealthy until the proxy passes health checks; the pipeline can restart proxy if needed.
 module "alb_websocket" {
   count  = local.create_alb ? 1 : 0
   source = "../alb"
@@ -122,6 +107,6 @@ module "alb_websocket" {
 
   tags = var.tags
 
-  depends_on = [module.proxy_ec2, null_resource.proxy_ready]
+  depends_on = [module.proxy_ec2]
 }
 
