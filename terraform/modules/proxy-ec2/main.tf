@@ -283,6 +283,11 @@ resource "aws_instance" "proxy" {
     Name = "${var.project_name}-proxy-${var.environment}"
     Type = "MAVLink-Proxy"
   })
+
+  # Avoid replacing instance on every apply when data.aws_ami returns a newer image
+  lifecycle {
+    ignore_changes = [ami]
+  }
 }
 
 resource "aws_eip" "proxy" {

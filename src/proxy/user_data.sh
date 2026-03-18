@@ -21,6 +21,21 @@ if aws s3 cp "s3://${s3_bucket}/${s3_key}" ./rdi-proxy 2>/dev/null; then
   chmod +x ./rdi-proxy
   nohup ./rdi-proxy >> /var/log/rdi-proxy.log 2>&1 &
   echo "Proxy started from S3"
+  # Script to update binary from S3 without replacing the instance (run via SSM or SSH: sudo /opt/rdi-proxy/update-from-s3.sh)
+  cat > /opt/rdi-proxy/update-from-s3.sh << UPDATEEND
+#!/bin/bash
+set -e
+BUCKET="${s3_bucket}"
+KEY="${s3_key}"
+cd /opt/rdi-proxy
+pkill -f ./rdi-proxy || true
+sleep 2
+aws s3 cp "s3://\$BUCKET/\$KEY" ./rdi-proxy
+chmod +x ./rdi-proxy
+nohup ./rdi-proxy >> /var/log/rdi-proxy.log 2>&1 &
+echo "Proxy updated and restarted \$(date)"
+UPDATEEND
+  chmod +x /opt/rdi-proxy/update-from-s3.sh
 else
   echo "Proxy binary not found in S3 - build and upload rdi-proxy to s3://${s3_bucket}/${s3_key}"
   # ALB health check needs HTTP 200 on health_port; Python relay only has WS on ws_port

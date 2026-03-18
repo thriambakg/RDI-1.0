@@ -228,6 +228,11 @@ resource "aws_instance" "wavelength" {
     Name = "${var.project_name}-px4-wavelength-${var.environment}"
     Type = "PX4-SITL"
   })
+
+  # Avoid replacing instance on every apply when data.aws_ami returns a newer image
+  lifecycle {
+    ignore_changes = [ami]
+  }
 }
 
 # Carrier IP (Elastic IP in Wavelength - required for carrier connectivity)
