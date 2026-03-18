@@ -560,7 +560,12 @@ module "rdi_edge" {
 
   tags = {}
 
-  depends_on = [aws_s3_object.proxy_binary, null_resource.wavelength_agent_ready]
+  # Only depend on proxy_binary; do not depend on null_resource.wavelength_agent_ready to avoid
+  # a destroy cycle (rdi_edge -> wavelength_agent_ready, and resources that consume rdi_edge outputs
+  # require those outputs during destroy, which forces an ordering that cycles with wavelength_agent_ready).
+  # For create: when not using skip_agent_build, ensure agent binary is in S3 before Wavelength boots
+  # (e.g. same apply creates agent_binary before rdi_edge runs, or run deploy-ec2-code after first apply).
+  depends_on = [aws_s3_object.proxy_binary]
 }
 
 # Point custom domain at the ALB so WSS is reachable at wss://<full_domain_name> with a trusted cert
