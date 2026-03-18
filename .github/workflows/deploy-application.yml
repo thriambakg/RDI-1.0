@@ -266,57 +266,8 @@ jobs:
             echo "has_agent=false" >> $GITHUB_OUTPUT
           fi
 
-  build-proxy:
-    name: 'Build Proxy Binary'
-    needs: [determine-environment, check-proxy]
-    if: needs.check-proxy.outputs.has_proxy == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
-
-      - name: Build proxy
-        run: |
-          cd src/proxy
-          cargo build --release
-          ls -la target/release/rdi-proxy
-
-      - name: Upload Proxy Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: proxy-binary-${{ needs.determine-environment.outputs.environment }}
-          path: src/proxy/target/release/rdi-proxy
-          retention-days: 7
-
-  build-agent:
-    name: 'Build Agent Binary'
-    needs: [determine-environment, check-agent]
-    if: needs.check-agent.outputs.has_agent == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
-
-      - name: Build agent
-        run: |
-          cd src/agent
-          cargo build --release
-          ls -la target/release/rdi-agent
-
-      - name: Upload Agent Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: agent-binary-${{ needs.determine-environment.outputs.environment }}
-          path: src/agent/target/release/rdi-agent
-          retention-days: 7
+  # Proxy/agent binaries are not built here; use the "Deploy EC2 Code" workflow when proxy/agent code changes.
+  # Terraform apply is run with skip_proxy_build and skip_agent_build so EC2 instances are not updated by this pipeline.
 
   check-lambda-layer:
     name: 'Check Lambda Layer'
@@ -406,16 +357,13 @@ jobs:
           path: terraform/modules/lambda-layer/layer-*.zip
           retention-days: 7
 
-  # Inline deploy when proxy exists - downloads proxy (and agent) artifacts so Terraform can upload to S3
+  # Infra-only deploy: Terraform apply with skip_proxy_build and skip_agent_build (no EC2 binary upload).
   deploy-application-inline:
-    name: Deploy (with proxy) ${{ matrix.region }}
-    needs: [determine-environment, terraform-validate-and-scan, check-proxy, check-agent, check-lambda-layer, build-proxy, build-agent, build-lambda-layers]
+    name: Deploy ${{ matrix.region }}
+    needs: [determine-environment, terraform-validate-and-scan, check-proxy, check-agent, check-lambda-layer, build-lambda-layers]
     if: >-
       always() &&
       needs.terraform-validate-and-scan.result == 'success' &&
-      needs.check-proxy.outputs.has_proxy == 'true' &&
-      (needs.build-proxy.result == 'success' || needs.build-proxy.result == 'skipped') &&
-      (needs.build-agent.result == 'success' || needs.build-agent.result == 'skipped') &&
       (needs.build-lambda-layers.result == 'success' || needs.build-lambda-layers.result == 'skipped')
     strategy:
       fail-fast: false
@@ -427,34 +375,6 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Download Proxy Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: proxy-binary-${{ needs.determine-environment.outputs.environment }}
-
-      - name: Place Proxy Binary
-        run: |
-          mkdir -p src/proxy/target/release
-          BINARY=$(find . -name "rdi-proxy" -type f | head -1)
-          cp "$BINARY" src/proxy/target/release/
-          chmod +x src/proxy/target/release/rdi-proxy
-          ls -la src/proxy/target/release/rdi-proxy
-
-      - name: Download Agent Artifact
-        if: needs.check-agent.outputs.has_agent == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: agent-binary-${{ needs.determine-environment.outputs.environment }}
-
-      - name: Place Agent Binary
-        if: needs.check-agent.outputs.has_agent == 'true'
-        run: |
-          mkdir -p src/agent/target/release
-          BINARY=$(find . -name "rdi-agent" -type f | head -1)
-          cp "$BINARY" src/agent/target/release/
-          chmod +x src/agent/target/release/rdi-agent
-          ls -la src/agent/target/release/rdi-agent
 
       - name: Download Lambda Layers
         if: needs.check-lambda-layer.outputs.has_lambda_layer == 'true'
@@ -480,15 +400,13 @@ jobs:
       - name: Terraform Apply
         if: github.event.inputs.destroy != 'true'
         run: |
-          EXTRA_VARS=""
-          if [ "${{ needs.check-agent.outputs.has_agent }}" != "true" ]; then
-            EXTRA_VARS='-var="skip_agent_build=true"'
-          fi
+          # Skip proxy/agent build and S3 upload; EC2 code updates use the "Deploy EC2 Code" workflow.
           terraform apply -auto-approve -input=false \
             -var-file="environments/${{ needs.determine-environment.outputs.environment }}.auto.tfvars" \
             -var="region=${{ matrix.region }}" \
             -var='regions=${{ needs.determine-environment.outputs.regions }}' \
-            $EXTRA_VARS
+            -var="skip_proxy_build=true" \
+            -var="skip_agent_build=true"
         working-directory: terraform
 
       - name: Restart proxy and ensure target healthy
