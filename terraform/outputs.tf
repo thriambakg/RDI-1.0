@@ -60,12 +60,12 @@ output "proxy_websocket_endpoint" {
 
 output "wavelength_instance_id" {
   description = "Wavelength EC2 instance ID (when deployed)"
-  value       = null
+  value       = var.wavelength_zone_id != "" ? module.wavelength_ec2[0].instance_id : null
 }
 
 output "wavelength_carrier_ip" {
   description = "Wavelength carrier IP for 5G connectivity"
-  value       = null
+  value       = var.wavelength_zone_id != "" ? module.wavelength_ec2[0].carrier_ip : null
 }
 
 output "wss_custom_domain_name_servers" {

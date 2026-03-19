@@ -17,7 +17,7 @@ if aws s3 cp "s3://${s3_bucket}/${s3_key}" ./rdi-agent --region "${aws_region}" 
   chmod +x ./rdi-agent
   echo "RDI agent binary installed at /opt/rdi-agent/rdi-agent"
   # Start agent daemon once at boot. Lambda adds/removes sessions via POST/DELETE http://127.0.0.1:8080/sessions
-  nohup ./rdi-agent >> /var/log/rdi-agent.log 2>&1 &
+  nohup env RDI_MAVLINK_PORT=${mavlink_port} ./rdi-agent >> /var/log/rdi-agent.log 2>&1 &
   echo "RDI agent daemon started (API on 127.0.0.1:8080)"
   # Script to update binary from S3 without replacing the instance (run via SSM or SSH: sudo /opt/rdi-agent/update-from-s3.sh)
   cat > /opt/rdi-agent/update-from-s3.sh << UPDATEEND
@@ -31,7 +31,7 @@ pkill -f ./rdi-agent || true
 sleep 2
 aws s3 cp "s3://\$BUCKET/\$KEY" ./rdi-agent --region "\$REGION"
 chmod +x ./rdi-agent
-nohup ./rdi-agent >> /var/log/rdi-agent.log 2>&1 &
+nohup env RDI_MAVLINK_PORT=${mavlink_port} ./rdi-agent >> /var/log/rdi-agent.log 2>&1 &
 echo "Agent updated and restarted \$(date)"
 UPDATEEND
   chmod +x /opt/rdi-agent/update-from-s3.sh

@@ -168,6 +168,34 @@ resource "null_resource" "wavelength_agent_ready" {
   depends_on = [aws_s3_object.agent_binary]
 }
 
+# Wavelength EC2 - agent at 5G edge for MAVLink UDP <-> WebSocket bridge
+module "wavelength_ec2" {
+  source = "./modules/wavelength-ec2"
+  count  = var.wavelength_zone_id != "" ? 1 : 0
+
+  project_name                  = var.project_name
+  environment                   = var.environment
+  wavelength_zone_id            = var.wavelength_zone_id
+  kms_key_arn                   = module.kms.main_key_arn
+  mavlink_port                  = var.mavlink_port
+  agent_binary_s3_bucket        = module.proxy_artifacts_bucket.bucket_id
+  agent_binary_s3_key           = "agent/rdi-agent"
+  enable_agent_binary_s3_access = true
+  cloudwatch_log_group_name     = "/rdi/${var.environment}/agent"
+
+  user_data = templatefile("${path.module}/../src/wavelength/user_data.sh", {
+    s3_bucket            = module.proxy_artifacts_bucket.bucket_id
+    s3_key               = "agent/rdi-agent"
+    aws_region           = local.region
+    cloudwatch_log_group = "/rdi/${var.environment}/agent"
+    mavlink_port         = tostring(var.mavlink_port)
+    infra_version        = var.environment
+  })
+
+  tags       = {}
+  depends_on = [null_resource.wavelength_agent_ready]
+}
+
 # S3 bucket for proxy binary (per-region)
 module "proxy_artifacts_bucket" {
   source = "./modules/s3-bucket"
@@ -266,7 +294,12 @@ module "session_api_lambda" {
     PROXY_ENDPOINT        = local.proxy_endpoint
     PROXY_STATUS_URL      = local.proxy_status_url
     PROXY_STATUS_SECRET   = local.proxy_status_secret_value
-  }, {})
+    }, var.wavelength_zone_id != "" ? {
+    WAVELENGTH_INSTANCE_ID = module.wavelength_ec2[0].instance_id
+    WAVELENGTH_ZONE_ID     = length(var.edge_zone_ids) > 0 ? var.edge_zone_ids[0] : ""
+    WAVELENGTH_CARRIER_IP  = module.wavelength_ec2[0].carrier_ip
+    MAVLINK_PORT           = tostring(var.mavlink_port)
+  } : {})
 
   additional_policy_arns = concat(
     [aws_iam_policy.session_api_dynamodb[0].arn],
@@ -278,9 +311,9 @@ module "session_api_lambda" {
   tags = {}
 }
 
-# Allow Session API Lambda to start RDI agent on Wavelength instance via SSM (disabled when rdi_edge removed)
+# Allow Session API Lambda to start RDI agent on Wavelength instance via SSM
 resource "aws_iam_policy" "session_api_ssm" {
-  count       = 0
+  count       = var.wavelength_zone_id != "" ? 1 : 0
   name        = "${var.project_name}-session-api-ssm-${var.environment}"
   description = "SSM SendCommand to start agent on Wavelength EC2"
 
@@ -288,9 +321,12 @@ resource "aws_iam_policy" "session_api_ssm" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = "ssm:SendCommand"
-        Resource = ["arn:aws:ssm:${local.region}::document/AWS-RunShellScript"]
+        Effect = "Allow"
+        Action = "ssm:SendCommand"
+        Resource = [
+          "arn:aws:ssm:${local.region}::document/AWS-RunShellScript",
+          "arn:aws:ec2:${local.region}:${data.aws_caller_identity.current.account_id}:instance/${module.wavelength_ec2[0].instance_id}"
+        ]
       }
     ]
   })

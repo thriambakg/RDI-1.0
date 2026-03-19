@@ -542,43 +542,6 @@ jobs:
             -var='regions=${{ needs.determine-environment.outputs.regions }}'
         working-directory: terraform
 
-  reboot-proxy:
-    name: Reboot Proxy ${{ matrix.region }}
-    needs: [determine-environment, deploy-application-inline]
-    if: >-
-      github.event.inputs.destroy != 'true' &&
-      needs.deploy-application-inline.result == 'success'
-    strategy:
-      fail-fast: false
-      matrix:
-        region: ${{ fromJson(needs.determine-environment.outputs.regions) }}
-    runs-on: ubuntu-latest
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "~1.5"
-
-      - name: Terraform Init
-        run: |
-          terraform init -backend-config="backend-configs/${{ needs.determine-environment.outputs.environment }}-${{ matrix.region }}.tfbackend"
-        working-directory: terraform
-
-      - name: Reboot proxy EC2 instance
-        run: |
-          PROXY_ID=$(cd terraform && terraform output -raw proxy_instance_id 2>/dev/null || true)
-          if [ -z "$PROXY_ID" ] || [ "$PROXY_ID" = "null" ]; then
-            echo "No proxy instance in this region, skipping reboot."
-            exit 0
-          fi
-          echo "Rebooting proxy instance $PROXY_ID in ${{ matrix.region }}..."
-          aws ec2 reboot-instances --instance-ids "$PROXY_ID" --region ${{ matrix.region }}
-          echo "Reboot initiated."
-
   # Reusable workflow when no proxy (e.g. proxy removed from repo)
   deploy-application:
     name: Deploy ${{ matrix.region }}

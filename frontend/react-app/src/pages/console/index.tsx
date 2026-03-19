@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Alert,
@@ -39,7 +39,7 @@ import {
   type SessionRef,
   type ConnectionHierarchy,
 } from '../../services/profileApi'
-import { deleteSession, releaseSession, activateSession } from '../../services/sessionApi'
+import { deleteSession, releaseSession, activateSession, getSession } from '../../services/sessionApi'
 import type { CreateSessionResponse } from '../../services/sessionApi'
 import './Console.css'
 
@@ -239,7 +239,27 @@ export default function Console() {
   const effectiveParentForNewConnection = selectedFolderPath.length > 0 ? selectedFolderPath : ['My Drones']
   const canCreateConnectionUnderSelection = effectiveParentForNewConnection[0] !== 'Shared'
 
-  const { openSession: openSessionWs, closeSession: closeSessionWs } = useSessionWebSocket()
+  const { openSession: openSessionWs, closeSession: closeSessionWs, connectionState } = useSessionWebSocket()
+
+  // Keep WebSockets open for all active sessions. Connect as soon as hierarchy loads and on any hierarchy change.
+  useEffect(() => {
+    if (profileLoading || !hierarchy) return
+    const allSessions = collectSessions(hierarchy, [])
+    const active = allSessions.filter((s) => s.status === 'active')
+    if (active.length === 0) return
+    // Fetch endpoint for each active session and open WebSocket (skip already connected or connecting)
+    active.forEach((s) => {
+      const state = connectionState(s.session_id)
+      if (state === 'open' || state === 'connecting') return
+      getSession(s.session_id)
+        .then((data) => {
+          if (data.status === 'active' && data.endpoint) {
+            openSessionWs(s.session_id, data.endpoint)
+          }
+        })
+        .catch(() => { /* ignore; session may be stale */ })
+    })
+  }, [hierarchy, profileLoading, openSessionWs, connectionState])
 
   const handleConnectionCreated = useCallback(
     (res: CreateSessionResponse, displayName: string) => {
@@ -313,6 +333,10 @@ export default function Console() {
     updateHierarchy((h) => updateSessionStatusInHierarchy(h, sessionId, 'active'))
     try {
       await activateSession(sessionId)
+      const data = await getSession(sessionId)
+      if (data.status === 'active' && data.endpoint) {
+        openSessionWs(sessionId, data.endpoint)
+      }
     } catch (err) {
       console.error('[RDI Console] Activate failed', err)
       const isNotFound = err instanceof Error && /not found/i.test(err.message)

@@ -28,6 +28,8 @@ PROXY_STATUS_URL = os.environ.get("PROXY_STATUS_URL", "")
 PROXY_STATUS_SECRET = os.environ.get("PROXY_STATUS_SECRET", "")
 WAVELENGTH_INSTANCE_ID = os.environ.get("WAVELENGTH_INSTANCE_ID", "")
 WAVELENGTH_ZONE_ID = os.environ.get("WAVELENGTH_ZONE_ID", "")
+WAVELENGTH_CARRIER_IP = os.environ.get("WAVELENGTH_CARRIER_IP", "")
+MAVLINK_PORT = os.environ.get("MAVLINK_PORT", "18570")
 
 
 AGENT_API_PORT = "8080"  # RDI_AGENT_API_PORT on Wavelength (agent daemon)
@@ -242,16 +244,16 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     else:
         _start_agent_on_wavelength(WAVELENGTH_INSTANCE_ID, PROXY_ENDPOINT, session_id)
 
-    return _response(
-        200,
-        {
-            "session_id": session_id,
-            "drone_id": drone_id,
-            "endpoint": PROXY_ENDPOINT,
-            "expires_at": display_expires_at,
-        },
-        headers,
-    )
+    payload = {
+        "session_id": session_id,
+        "drone_id": drone_id,
+        "endpoint": PROXY_ENDPOINT,
+        "expires_at": display_expires_at,
+    }
+    if WAVELENGTH_CARRIER_IP and (not WAVELENGTH_ZONE_ID or wavelength_zone_id == WAVELENGTH_ZONE_ID):
+        payload["carrier_ip"] = WAVELENGTH_CARRIER_IP
+        payload["mavlink_port"] = MAVLINK_PORT
+    return _response(200, payload, headers)
 
 
 def _release_session(user_id: str, session_id: str | None, headers: dict, *, permanent: bool = False) -> dict:
@@ -427,16 +429,18 @@ def _get_session(
         if not item:
             return _response(404, {"error": "Session not found"}, headers)
 
-        return _response(
-            200,
-            {
-                "session_id": session_id,
-                "drone_id": item.get("drone_id", {}).get("S"),
-                "endpoint": item.get("endpoint", {}).get("S"),
-                "status": item.get("status", {}).get("S"),
-            },
-            headers,
-        )
+        out = {
+            "session_id": session_id,
+            "drone_id": item.get("drone_id", {}).get("S"),
+            "endpoint": item.get("endpoint", {}).get("S"),
+            "status": item.get("status", {}).get("S"),
+        }
+        if WAVELENGTH_CARRIER_IP:
+            wl_zone = item.get("wavelength_zone_id", {}).get("S")
+            if not WAVELENGTH_ZONE_ID or wl_zone == WAVELENGTH_ZONE_ID:
+                out["carrier_ip"] = WAVELENGTH_CARRIER_IP
+                out["mavlink_port"] = MAVLINK_PORT
+        return _response(200, out, headers)
 
     # List sessions for user
     try:
@@ -472,7 +476,7 @@ def _get_session(
         # Prefer idle_after for "when session goes idle"; else expires_at (both N)
         exp_n = (item.get("idle_after") or item.get("expires_at")) or {}
         expires_at_val = int(exp_n.get("N", "0") or "0")
-        sessions.append({
+        sess = {
             "session_id": sid,
             "drone_id": drone_id,
             "name": name,
@@ -480,7 +484,13 @@ def _get_session(
             "wavelength_zone_id": item.get("wavelength_zone_id", {}).get("S"),
             "endpoint": item.get("endpoint", {}).get("S"),
             "expires_at": expires_at_val,
-        })
+        }
+        if WAVELENGTH_CARRIER_IP:
+            wl_zone = item.get("wavelength_zone_id", {}).get("S")
+            if not WAVELENGTH_ZONE_ID or wl_zone == WAVELENGTH_ZONE_ID:
+                sess["carrier_ip"] = WAVELENGTH_CARRIER_IP
+                sess["mavlink_port"] = MAVLINK_PORT
+        sessions.append(sess)
 
     return _response(200, {"sessions": sessions}, headers)
 

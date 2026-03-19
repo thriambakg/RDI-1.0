@@ -26,7 +26,14 @@ interface HopLog {
 }
 
 export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionDetailDialogProps) {
-  const [data, setData] = useState<{ session_id: string; drone_id: string; endpoint: string; status: string } | null>(null)
+  const [data, setData] = useState<{
+    session_id: string
+    drone_id: string
+    endpoint: string
+    status: string
+    carrier_ip?: string
+    mavlink_port?: string
+  } | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pingLog, setPingLog] = useState<string[]>([])
@@ -269,6 +276,11 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
               <Typography sx={{ fontSize: '0.875rem', color: '#94a3b8' }}>
                 <strong>Endpoint:</strong> {data.endpoint}
               </Typography>
+              {data.carrier_ip && data.mavlink_port && (
+                <Typography sx={{ fontSize: '0.875rem', mt: 1, color: '#22c55e' }}>
+                  <strong>MAVLink UDP:</strong> {data.carrier_ip}:{data.mavlink_port}
+                </Typography>
+              )}
             </Box>
 
             <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 1 }}>
