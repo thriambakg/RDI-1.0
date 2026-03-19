@@ -1,17 +1,3 @@
-# Proxy user_data: install from S3, run proxy, ship logs to CloudWatch (template from src/proxy/user_data.sh)
-locals {
-  proxy_user_data = templatefile("${path.module}/../src/proxy/user_data.sh", {
-    infra_version        = 1
-    ws_port              = 8765
-    health_port          = 8766
-    status_port          = 8767
-    status_secret        = local.proxy_status_secret_value
-    s3_bucket            = module.proxy_artifacts_bucket.bucket_id
-    s3_key               = "proxy/rdi-proxy"
-    cloudwatch_log_group = "/rdi/${var.environment}/proxy"
-  })
-}
-
 # Shared locals (base state, region, session API / Lambda wiring)
 locals {
   proxy_status_secret_value       = length(module.proxy_secrets) > 0 ? module.proxy_secrets[0].secret_values["proxy_status"]["value"] : random_password.proxy_status_secret.result
