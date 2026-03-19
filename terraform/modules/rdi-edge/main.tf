@@ -388,8 +388,8 @@ resource "aws_lb_target_group" "proxy" {
     enabled             = true
     healthy_threshold   = 2
     unhealthy_threshold = 5
-    interval            = 35
-    timeout             = 30
+    interval            = 15
+    timeout             = 10
     port                = var.proxy_health_port
     protocol            = "HTTP"
     path                = "/"
@@ -416,8 +416,8 @@ resource "aws_lb_target_group" "proxy_status" {
     enabled             = true
     healthy_threshold   = 2
     unhealthy_threshold = 3
-    interval            = 35
-    timeout             = 30
+    interval            = 15
+    timeout             = 10
     port                = var.proxy_health_port
     protocol            = "HTTP"
     path                = "/"
