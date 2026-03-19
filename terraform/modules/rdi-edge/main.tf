@@ -44,6 +44,12 @@ resource "aws_subnet" "proxy" {
   tags = merge(var.tags, {
     Name = "${var.project_name}-proxy-subnet-${var.environment}-v${var.infra_version}"
   })
+
+  # Prevent replacement when aws_availability_zones is read during apply (nested module)
+  # which marks availability_zone as "known after apply" and triggers CIDR conflict.
+  lifecycle {
+    ignore_changes = [availability_zone]
+  }
 }
 
 resource "aws_route_table" "proxy" {
@@ -310,6 +316,11 @@ resource "aws_subnet" "alb" {
   tags = merge(var.tags, {
     Name = "${var.project_name}-proxy-alb-${var.environment}-v${var.infra_version}"
   })
+
+  # Prevent replacement when aws_availability_zones is read during apply (nested module)
+  lifecycle {
+    ignore_changes = [availability_zone]
+  }
 }
 
 resource "aws_route_table_association" "alb" {
