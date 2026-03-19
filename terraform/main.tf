@@ -460,6 +460,7 @@ module "session_api" {
     }
   }
 
+
   lambda_permissions = {
     post               = { function_arn = module.session_api_lambda[0].function_arn, http_method = "POST", resource_path = "sessions" }
     get                = { function_arn = module.session_api_lambda[0].function_arn, http_method = "GET", resource_path = "sessions" }
