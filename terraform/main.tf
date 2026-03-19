@@ -530,7 +530,7 @@ module "ssl_certificate" {
 
 # Route53 ALB alias for WSS subdomain (wss.rdistaging.com -> ALB)
 resource "aws_route53_record" "wss_alias" {
-  count = var.enable_custom_domain && var.domain_name != "" && var.subdomain != "" && var.enable_alb_wss && length(module.domain) > 0 && length(module.rdi_edge) > 0 && module.rdi_edge[0].alb_dns_name != null ? 1 : 0
+  count = var.enable_custom_domain && var.domain_name != "" && var.subdomain != "" && var.enable_alb_wss && var.alb_subnet_cidr != "" && length(module.domain) > 0 && length(module.rdi_edge) > 0 ? 1 : 0
 
   zone_id = module.domain[0].hosted_zone_id
   name    = "${var.subdomain}.${var.domain_name}"
