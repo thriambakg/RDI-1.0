@@ -108,6 +108,25 @@ variable "cloudwatch_log_group_name" {
   default     = ""
 }
 
+# --- ALB (WebSocket + session-status) ---
+variable "alb_subnet_cidr" {
+  type        = string
+  description = "CIDR for second subnet (ALB multi-AZ). Empty = no ALB, use direct EIP."
+  default     = ""
+}
+
+variable "certificate_arn" {
+  type        = string
+  description = "ACM certificate ARN for ALB HTTPS/WSS. Empty = no HTTPS listener."
+  default     = ""
+}
+
+variable "alb_idle_timeout_seconds" {
+  type        = number
+  description = "ALB idle timeout for WebSocket (seconds)"
+  default     = 3600
+}
+
 variable "tags" {
   type        = map(string)
   description = "Tags applied to resources"

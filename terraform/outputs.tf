@@ -49,8 +49,8 @@ output "proxy_public_ip" {
 }
 
 output "proxy_websocket_endpoint" {
-  description = "WebSocket endpoint (wss when ALB enabled; use custom domain when enable_custom_domain is set)"
-  value       = null
+  description = "WebSocket endpoint (wss when ALB+custom domain; use for frontend connections)"
+  value       = length(module.rdi_edge) > 0 ? local.proxy_endpoint : null
 }
 
 output "wavelength_instance_id" {
@@ -70,12 +70,12 @@ output "wss_custom_domain_name_servers" {
 
 output "alb_dns_name" {
   description = "ALB DNS name (when ALB enabled)"
-  value       = null
+  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].alb_dns_name : null
 }
 
 output "proxy_target_group_arn" {
   description = "Target group ARN for proxy (WebSocket ALB); used by pipeline to check health before restart"
-  value       = null
+  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].target_group_arn : null
 }
 
 output "edge_zone_ids" {

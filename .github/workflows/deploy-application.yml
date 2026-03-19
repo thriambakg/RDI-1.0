@@ -3,8 +3,6 @@
 
 name: Deploy Application Infrastructure
 
-# Infra-only paths: excludes src/proxy and src/agent code so proxy/agent code changes
-# run the separate "Deploy EC2 code" workflow (S3 + SSM in-place update) instead of full Terraform.
 on:
   push:
     branches:
@@ -16,11 +14,8 @@ on:
       - 'terraform/**'
       - 'backend_app/**'
       - 'scripts/**'
-      - 'src/session-api/**'
-      - 'src/wavelength/**'
-      - 'src/proxy/user_data.sh'
+      - 'src/**'
       - '.github/workflows/**'
-      - 'frontend/**'
   pull_request:
     branches:
       - main
@@ -31,11 +26,8 @@ on:
       - 'terraform/**'
       - 'backend_app/**'
       - 'scripts/**'
-      - 'src/session-api/**'
-      - 'src/wavelength/**'
-      - 'src/proxy/user_data.sh'
+      - 'src/**'
       - '.github/workflows/**'
-      - 'frontend/**'
   workflow_dispatch:
     inputs:
       environment:
@@ -266,8 +258,57 @@ jobs:
             echo "has_agent=false" >> $GITHUB_OUTPUT
           fi
 
-  # Proxy/agent binaries are not built here; use the "Deploy EC2 Code" workflow when proxy/agent code changes.
-  # Terraform apply is run with skip_proxy_build and skip_agent_build so EC2 instances are not updated by this pipeline.
+  build-proxy:
+    name: 'Build Proxy Binary'
+    needs: [determine-environment, check-proxy]
+    if: needs.check-proxy.outputs.has_proxy == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Build proxy
+        run: |
+          cd src/proxy
+          cargo build --release
+          ls -la target/release/rdi-proxy
+
+      - name: Upload Proxy Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-binary-${{ needs.determine-environment.outputs.environment }}
+          path: src/proxy/target/release/rdi-proxy
+          retention-days: 7
+
+  build-agent:
+    name: 'Build Agent Binary'
+    needs: [determine-environment, check-agent]
+    if: needs.check-agent.outputs.has_agent == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Build agent
+        run: |
+          cd src/agent
+          cargo build --release
+          ls -la target/release/rdi-agent
+
+      - name: Upload Agent Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-binary-${{ needs.determine-environment.outputs.environment }}
+          path: src/agent/target/release/rdi-agent
+          retention-days: 7
 
   check-lambda-layer:
     name: 'Check Lambda Layer'
@@ -357,13 +398,16 @@ jobs:
           path: terraform/modules/lambda-layer/layer-*.zip
           retention-days: 7
 
-  # Infra-only deploy: Terraform apply with skip_proxy_build and skip_agent_build (no EC2 binary upload).
+  # Inline deploy when proxy exists - downloads proxy (and agent) artifacts so Terraform can upload to S3
   deploy-application-inline:
-    name: Deploy ${{ matrix.region }}
-    needs: [determine-environment, terraform-validate-and-scan, check-proxy, check-agent, check-lambda-layer, build-lambda-layers]
+    name: Deploy (with proxy) ${{ matrix.region }}
+    needs: [determine-environment, terraform-validate-and-scan, check-proxy, check-agent, check-lambda-layer, build-proxy, build-agent, build-lambda-layers]
     if: >-
       always() &&
       needs.terraform-validate-and-scan.result == 'success' &&
+      needs.check-proxy.outputs.has_proxy == 'true' &&
+      (needs.build-proxy.result == 'success' || needs.build-proxy.result == 'skipped') &&
+      (needs.build-agent.result == 'success' || needs.build-agent.result == 'skipped') &&
       (needs.build-lambda-layers.result == 'success' || needs.build-lambda-layers.result == 'skipped')
     strategy:
       fail-fast: false
@@ -375,6 +419,34 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download Proxy Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: proxy-binary-${{ needs.determine-environment.outputs.environment }}
+
+      - name: Place Proxy Binary
+        run: |
+          mkdir -p src/proxy/target/release
+          BINARY=$(find . -name "rdi-proxy" -type f | head -1)
+          cp "$BINARY" src/proxy/target/release/
+          chmod +x src/proxy/target/release/rdi-proxy
+          ls -la src/proxy/target/release/rdi-proxy
+
+      - name: Download Agent Artifact
+        if: needs.check-agent.outputs.has_agent == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-binary-${{ needs.determine-environment.outputs.environment }}
+
+      - name: Place Agent Binary
+        if: needs.check-agent.outputs.has_agent == 'true'
+        run: |
+          mkdir -p src/agent/target/release
+          BINARY=$(find . -name "rdi-agent" -type f | head -1)
+          cp "$BINARY" src/agent/target/release/
+          chmod +x src/agent/target/release/rdi-agent
+          ls -la src/agent/target/release/rdi-agent
 
       - name: Download Lambda Layers
         if: needs.check-lambda-layer.outputs.has_lambda_layer == 'true'
@@ -400,14 +472,119 @@ jobs:
       - name: Terraform Apply
         if: github.event.inputs.destroy != 'true'
         run: |
-          # Skip proxy/agent build and S3 upload; EC2 code updates use the "Deploy EC2 Code" workflow.
+          EXTRA_VARS=""
+          if [ "${{ needs.check-agent.outputs.has_agent }}" != "true" ]; then
+            EXTRA_VARS='-var="skip_agent_build=true"'
+          fi
           terraform apply -auto-approve -input=false \
             -var-file="environments/${{ needs.determine-environment.outputs.environment }}.auto.tfvars" \
             -var="region=${{ matrix.region }}" \
             -var='regions=${{ needs.determine-environment.outputs.regions }}' \
-            -var="skip_proxy_build=true" \
-            -var="skip_agent_build=true"
+            $EXTRA_VARS
         working-directory: terraform
+
+      - name: Restart proxy and ensure target healthy
+        if: github.event.inputs.destroy != 'true'
+        run: |
+          PROXY_ID=$(cd terraform && terraform output -raw proxy_instance_id 2>/dev/null || true)
+          if [ -z "$PROXY_ID" ] || [ "$PROXY_ID" = "null" ]; then
+            echo "No proxy instance (infra_version=0 or no proxy_ec2), skipping restart."
+            exit 0
+          fi
+          TG_ARN=$(cd terraform && terraform output -raw proxy_target_group_arn 2>/dev/null || true)
+          if [ -z "$TG_ARN" ] || [ "$TG_ARN" = "null" ]; then
+            echo "No proxy target group ARN; skipping target health wait."
+          fi
+          if [ -n "$TG_ARN" ] && [ "$TG_ARN" != "null" ]; then
+            HEALTHY_COUNT=$(aws elbv2 describe-target-health --region ${{ matrix.region }} --target-group-arn "$TG_ARN" --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" --output text 2>/dev/null || echo "0")
+            if [ "${HEALTHY_COUNT:-0}" -ge 1 ]; then
+              echo "Target group already has $HEALTHY_COUNT healthy target(s); skipping proxy restart to avoid unnecessary disruption."
+              exit 0
+            fi
+            echo "Target group has no healthy targets; will restart proxy and poll until healthy (outcome-based)."
+          fi
+          echo "Proxy instance: $PROXY_ID"
+          echo "Waiting 60s for instance/SSM to be ready..."
+          sleep 60
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            PING=$(aws ssm describe-instance-information --region ${{ matrix.region }} --filters "Key=InstanceIds,Values=$PROXY_ID" --query "InstanceInformationList[0].PingStatus" --output text 2>/dev/null || true)
+            if [ "$PING" = "Online" ]; then
+              echo "SSM Online."
+              break
+            fi
+            echo "SSM not ready ($PING), waiting 15s..."
+            sleep 15
+          done
+          send_restart() {
+            aws ssm send-command --region ${{ matrix.region }} --instance-ids "$PROXY_ID" \
+              --document-name "AWS-RunShellScript" \
+              --parameters file://scripts/dump/ssm-proxy-restart.json \
+              --timeout-seconds 300 \
+              --query "Command.CommandId" --output text
+          }
+          MAX_POLLS=24
+          RETRY_AFTER_POLL=8
+          CMD_ID=$(send_restart)
+          echo "CommandId: $CMD_ID; polling target group health every 15s (up to ${MAX_POLLS} polls). Retry restart after ${RETRY_AFTER_POLL} polls if still unhealthy."
+          retried=0
+          for i in $(seq 1 $MAX_POLLS); do
+            sleep 15
+            HEALTHY_COUNT=0
+            if [ -n "$TG_ARN" ] && [ "$TG_ARN" != "null" ]; then
+              HEALTHY_COUNT=$(aws elbv2 describe-target-health --region ${{ matrix.region }} --target-group-arn "$TG_ARN" --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" --output text 2>/dev/null || echo "0")
+              if [ "${HEALTHY_COUNT:-0}" -ge 1 ]; then
+                echo "Target group has $HEALTHY_COUNT healthy target(s); done."
+                exit 0
+              fi
+            fi
+            STATUS=$(aws ssm get-command-invocation --region ${{ matrix.region }} --command-id "$CMD_ID" --instance-id "$PROXY_ID" --query "Status" --output text 2>/dev/null || true)
+            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "SSM command ended: $STATUS (will keep polling target health)"
+              if [ "$STATUS" = "Failed" ]; then
+                aws ssm get-command-invocation --region ${{ matrix.region }} --command-id "$CMD_ID" --instance-id "$PROXY_ID" --query "StandardErrorContent" --output text 2>/dev/null || true
+              fi
+            fi
+            if [ $i -eq $RETRY_AFTER_POLL ] && [ "${retried:-0}" -eq 0 ] && [ -n "$TG_ARN" ] && [ "$TG_ARN" != "null" ]; then
+              if [ "${HEALTHY_COUNT:-0}" -lt 1 ]; then
+                echo "Still unhealthy after 2 min; sending second proxy restart."
+                CMD_ID=$(send_restart)
+                retried=1
+              fi
+            fi
+            echo "Poll $i/$MAX_POLLS: target healthy=${HEALTHY_COUNT:-0}, SSM=$STATUS"
+          done
+          echo "Target group did not become healthy within $((MAX_POLLS * 15))s."
+          exit 1
+
+      - name: Refresh agent binary on Wavelength instance
+        if: github.event.inputs.destroy != 'true'
+        run: |
+          WID=$(cd terraform && terraform output -raw wavelength_instance_id 2>/dev/null || true)
+          if [ -z "$WID" ] || [ "$WID" = "null" ]; then
+            echo "No Wavelength instance, skipping agent refresh."
+            exit 0
+          fi
+          BUCKET="rdi-proxy-artifacts-${{ needs.determine-environment.outputs.environment }}-${{ matrix.region }}"
+          echo "Refreshing agent on $WID from s3://$BUCKET/agent/rdi-agent"
+          CMD_ID=$(aws ssm send-command --region ${{ matrix.region }} --instance-ids "$WID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters '{"commands":["mkdir -p /opt/rdi-agent","aws s3 cp s3://'"$BUCKET"'/agent/rdi-agent /opt/rdi-agent/rdi-agent --region ${{ matrix.region }}","chmod +x /opt/rdi-agent/rdi-agent","ls -la /opt/rdi-agent/rdi-agent"]}' \
+            --query "Command.CommandId" --output text)
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            STATUS=$(aws ssm get-command-invocation --region ${{ matrix.region }} --command-id "$CMD_ID" --instance-id "$WID" --query "Status" --output text 2>/dev/null || true)
+            if [ "$STATUS" = "Success" ]; then
+              echo "Agent binary refreshed on Wavelength."
+              exit 0
+            fi
+            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "Agent refresh failed: $STATUS"
+              aws ssm get-command-invocation --region ${{ matrix.region }} --command-id "$CMD_ID" --instance-id "$WID" --query "StandardErrorContent" --output text
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "Timeout waiting for agent refresh."
+          exit 1
 
       - name: Terraform Destroy
         if: github.event.inputs.destroy == 'true'

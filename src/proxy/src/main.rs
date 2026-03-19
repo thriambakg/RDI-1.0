@@ -234,10 +234,11 @@ async fn serve_status(
     Ok(())
 }
 
-/// Message to send to the client: either binary from agent or control (e.g. ping hop).
+/// Message to send to the client: binary, text, or WebSocket Pong (for ALB keepalive).
 enum ToClient {
     Binary(Vec<u8>),
     Text(String),
+    Pong(Vec<u8>),
 }
 
 const PING_BYTES: &[u8] = b"PING";
@@ -321,6 +322,7 @@ async fn handle_ws(
             let msg = match to_client {
                 ToClient::Binary(data) => Message::Binary(data),
                 ToClient::Text(s) => Message::Text(s),
+                ToClient::Pong(data) => Message::Pong(data),
             };
             if ws_tx.send(msg).await.is_err() {
                 break;
@@ -343,10 +345,15 @@ async fn handle_ws(
                             info!("PING received session_id={} forwarding to agent", session_id_for_peer);
                             let _ = tx.send(data.to_vec());
                         } else {
-                            info!("PING received session_id={} no agent connected; replying no agent", session_id_for_peer);
-                            let _ = client_tx_peer.send(ToClient::Text(
-                                r#"{"hop":"wavelength","message":"no agent connected"}"#.to_string(),
-                            ));
+                            let ts_ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis())
+                                .unwrap_or(0);
+                            info!("PING received session_id={} no agent; replying proxy ping_ack", session_id_for_peer);
+                            let _ = client_tx_peer.send(ToClient::Text(format!(
+                                r#"{{"hop":"proxy","type":"ping_ack","server_ts_ms":{}}}"#,
+                                ts_ms
+                            )));
                         }
                     } else if role_for_peer == "agent" {
                         // Agent sent binary (e.g. PONG): forward to frontend.
@@ -363,6 +370,9 @@ async fn handle_ws(
                     }
                 }
                 Ok(Message::Text(_)) => {}
+                Ok(Message::Ping(data)) => {
+                    let _ = client_tx_peer.send(ToClient::Pong(data.to_vec()));
+                }
                 Ok(Message::Close(_)) => break,
                 Err(e) => {
                     error!("recv: {}", e);

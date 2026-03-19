@@ -22,4 +22,17 @@ locals {
   user_profiles_tbl               = var.base_state_bucket != "" ? data.terraform_remote_state.base[0].outputs.user_profiles_table_name : "rdi-user-profiles-${var.environment}"
   cognito_pool_arn                = var.base_state_bucket != "" ? "arn:aws:cognito-idp:${var.region}:${data.aws_caller_identity.current.account_id}:userpool/${data.terraform_remote_state.base[0].outputs.cognito_user_pool_id}" : ""
   api_gateway_cloudwatch_role_arn = var.base_state_bucket != "" ? data.terraform_remote_state.base[0].outputs.api_gateway_cloudwatch_role_arn : null
+
+  # Certificate for ALB WSS: custom domain cert, or var.certificate_arn, or ssl_certificate module
+  alb_certificate_arn = length(module.domain) > 0 && module.domain[0].certificate_arn != null ? module.domain[0].certificate_arn : (var.certificate_arn != "" ? var.certificate_arn : (length(module.ssl_certificate) > 0 ? module.ssl_certificate[0].certificate_arn : ""))
+
+  # Session API proxy endpoint: custom domain wss:// when set, else rdi_edge endpoint
+  proxy_endpoint = var.enable_custom_domain && var.domain_name != "" && var.subdomain != "" ? "wss://${var.subdomain}.${var.domain_name}" : (length(module.rdi_edge) > 0 ? module.rdi_edge[0].proxy_websocket_endpoint : "")
+
+  # Lambda -> proxy session-status API. Prefer HTTPS via ALB+custom domain when available.
+  proxy_status_url = length(module.rdi_edge) > 0 ? (
+    var.enable_custom_domain && var.domain_name != "" && var.subdomain != "" && var.enable_alb_wss && local.alb_certificate_arn != "" ?
+    "https://${var.subdomain}.${var.domain_name}/session-status" :
+    "http://${module.rdi_edge[0].proxy_public_ip}:8767/session-status"
+  ) : ""
 }

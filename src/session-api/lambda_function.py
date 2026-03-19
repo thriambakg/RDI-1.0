@@ -236,7 +236,7 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     _notify_proxy_session_status(session_id, "active")
 
     if not WAVELENGTH_INSTANCE_ID:
-        print(f"[RDI Session] agent not started: WAVELENGTH_INSTANCE_ID not set (no Wavelength instance); frontend/agent WebSocket will not pair until agent connects")
+        print(f"[RDI Session] proxy-only mode: no WAVELENGTH_INSTANCE_ID; frontend may connect to proxy WebSocket without an edge agent (proxy acks PING with ping_ack + server_ts_ms)")
     elif WAVELENGTH_ZONE_ID and wavelength_zone_id != WAVELENGTH_ZONE_ID:
         print(f"[RDI Session] agent not started: zone mismatch request_zone={wavelength_zone_id} deployed_zone={WAVELENGTH_ZONE_ID}")
     else:

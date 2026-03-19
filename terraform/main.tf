@@ -76,8 +76,8 @@ module "proxy_secrets" {
   }
 }
 
-# RDI Edge - VPC and proxy EC2 (and later ALB, Wavelength). No submodules.
-# Bump infra_version here (e.g. 1 -> 2) to force replacement of edge resources.
+# RDI Edge - VPC, proxy EC2, ALB (WebSocket + session-status). All-in-one.
+# Bump infra_version (e.g. 1 -> 2) to force replacement of edge resources.
 module "rdi_edge" {
   source = "./modules/rdi-edge"
   count  = 1
@@ -87,6 +87,9 @@ module "rdi_edge" {
   infra_version                 = 1
   vpc_cidr                      = "10.200.0.0/16"
   proxy_subnet_cidr             = var.proxy_subnet_cidr
+  alb_subnet_cidr               = var.enable_alb_wss ? var.alb_subnet_cidr : ""
+  certificate_arn               = local.alb_certificate_arn
+  alb_idle_timeout_seconds      = 3600
   instance_type                 = "t3.small"
   root_volume_size              = 30
   key_name                      = ""
@@ -254,8 +257,8 @@ module "session_api_lambda" {
   environment_variables = merge({
     CONNECTION_POOL_TABLE = local.connection_pool_tbl
     USER_PROFILES_TABLE   = local.user_profiles_tbl
-    PROXY_ENDPOINT        = ""
-    PROXY_STATUS_URL      = ""
+    PROXY_ENDPOINT        = local.proxy_endpoint
+    PROXY_STATUS_URL      = local.proxy_status_url
     PROXY_STATUS_SECRET   = local.proxy_status_secret_value
   }, {})
 
@@ -525,5 +528,17 @@ module "ssl_certificate" {
   tags         = {}
 }
 
-# RDI Edge bundle removed for now; can be recreated later.
-# Route53 ALB alias record disabled (no rdi_edge = no ALB).
+# Route53 ALB alias for WSS subdomain (wss.rdistaging.com -> ALB)
+resource "aws_route53_record" "wss_alias" {
+  count = var.enable_custom_domain && var.domain_name != "" && var.subdomain != "" && var.enable_alb_wss && length(module.domain) > 0 && length(module.rdi_edge) > 0 && module.rdi_edge[0].alb_dns_name != null ? 1 : 0
+
+  zone_id = module.domain[0].hosted_zone_id
+  name    = "${var.subdomain}.${var.domain_name}"
+  type    = "A"
+
+  alias {
+    name                   = module.rdi_edge[0].alb_dns_name
+    zone_id                = module.rdi_edge[0].alb_zone_id
+    evaluate_target_health = false
+  }
+}

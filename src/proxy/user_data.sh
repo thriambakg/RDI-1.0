@@ -1,5 +1,5 @@
 #!/bin/bash
-# RDI Proxy EC2 user_data - install and run proxy binary (infra_version=${infra_version})
+# RDI Proxy EC2 user_data - Rust only; wait for S3 binary, run proxy, wait for health (infra_version=${infra_version})
 set -e
 export RDI_PROXY_WS_PORT="${ws_port}"
 export RDI_PROXY_HEALTH_PORT="${health_port}"
@@ -7,22 +7,49 @@ export RDI_PROXY_STATUS_PORT="${status_port}"
 export RDI_PROXY_STATUS_SECRET="${status_secret}"
 
 yum update -y
-yum install -y aws-cli
+yum install -y aws-cli curl
 
 mkdir -p /opt/rdi-proxy
 cd /opt/rdi-proxy
 
-# Create log file before starting anything so CloudWatch agent can tail it
 touch /var/log/rdi-proxy.log
 chmod 644 /var/log/rdi-proxy.log
 
-# Download proxy binary from S3 if available
-if aws s3 cp "s3://${s3_bucket}/${s3_key}" ./rdi-proxy 2>/dev/null; then
-  chmod +x ./rdi-proxy
-  nohup ./rdi-proxy >> /var/log/rdi-proxy.log 2>&1 &
-  echo "Proxy started from S3"
-  # Script to update binary from S3 without replacing the instance (run via SSM or SSH: sudo /opt/rdi-proxy/update-from-s3.sh)
-  cat > /opt/rdi-proxy/update-from-s3.sh << UPDATEEND
+# Wait for proxy health (http://127.0.0.1:HEALTH_PORT/) with timeout
+wait_for_proxy_health() {
+  local port="${health_port}"
+  local max_attempts=24
+  local attempt=1
+  while [ "$attempt" -le "$max_attempts" ]; do
+    if curl -sf -o /dev/null --connect-timeout 2 "http://127.0.0.1:$${port}/" 2>/dev/null; then
+      echo "Proxy health check passed on port $${port} (attempt $attempt)"
+      return 0
+    fi
+    echo "Waiting for proxy health on :$${port} (attempt $attempt/$max_attempts)..."
+    sleep 5
+    attempt=$((attempt + 1))
+  done
+  echo "ERROR: Proxy health check did not pass within $((max_attempts * 5))s" >> /var/log/rdi-proxy.log
+  return 1
+}
+
+# Retry S3 download (pipeline may upload after instance starts)
+echo "Waiting for proxy binary in S3..."
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  if aws s3 cp "s3://${s3_bucket}/${s3_key}" ./rdi-proxy 2>/dev/null; then
+    break
+  fi
+  if [ "$attempt" -eq 10 ]; then
+    echo "Proxy binary not found at s3://${s3_bucket}/${s3_key} after 10 attempts. Build and upload rdi-proxy, then run: sudo /opt/rdi-proxy/update-from-s3.sh" >> /var/log/rdi-proxy.log
+    exit 1
+  fi
+  sleep 30
+done
+
+chmod +x ./rdi-proxy
+
+# Update script for pipeline/SSM (templatefile substitutes s3_bucket, s3_key at apply time)
+cat > /opt/rdi-proxy/update-from-s3.sh << UPDATEEND
 #!/bin/bash
 set -e
 BUCKET="${s3_bucket}"
@@ -35,46 +62,17 @@ chmod +x ./rdi-proxy
 nohup ./rdi-proxy >> /var/log/rdi-proxy.log 2>&1 &
 echo "Proxy updated and restarted \$(date)"
 UPDATEEND
-  chmod +x /opt/rdi-proxy/update-from-s3.sh
-else
-  echo "Proxy binary not found in S3 - build and upload rdi-proxy to s3://${s3_bucket}/${s3_key}"
-  # ALB health check needs HTTP 200 on health_port; Python relay only has WS on ws_port
-  python3 -c "
-import socket
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(('0.0.0.0', ${health_port}))
-s.listen(8)
-while True:
-    c, _ = s.accept()
-    c.recv(4096)
-    c.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
-    c.close()
-" &
-  # Placeholder: minimal Python relay for initial testing (replace with Rust binary)
-  cat > /opt/rdi-proxy/relay.py << 'PYRELAY'
-import asyncio, websockets
-async def relay(ws, path):
-    async for msg in ws:
-        await ws.send(msg)
-async def main():
-    async with websockets.serve(relay, "0.0.0.0", ${ws_port}):
-        await asyncio.Future()
-asyncio.run(main())
-PYRELAY
-  yum install -y python3 python3-pip
-  pip3 install websockets
-  nohup python3 /opt/rdi-proxy/relay.py >> /var/log/rdi-proxy.log 2>&1 &
-  echo "Python placeholder relay and health server on ${health_port} started"
-fi
+chmod +x /opt/rdi-proxy/update-from-s3.sh
 
-# Ship proxy log to CloudWatch (so you can see connection failures in CloudWatch)
-# Run without set -e so a failure here doesn't break proxy startup; log errors for debugging.
+nohup ./rdi-proxy >> /var/log/rdi-proxy.log 2>&1 &
+wait_for_proxy_health
+
+# CloudWatch logs
 if [ -n "${cloudwatch_log_group}" ]; then
   CWA_LOG="/var/log/cloudwatch-agent-setup.log"
   { set +e
     echo "=== CloudWatch agent setup $(date) ==="
-    yum install -y amazon-cloudwatch-agent || dnf install -y amazon-cloudwatch-agent || echo "WARN: install failed"
+    yum install -y amazon-cloudwatch-agent 2>/dev/null || dnf install -y amazon-cloudwatch-agent 2>/dev/null || echo "WARN: install failed"
     mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
     INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
     cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << CWCONF
@@ -99,11 +97,8 @@ CWCONF
     [ -x "$CTL" ] || CTL=$(command -v amazon-cloudwatch-agent-ctl 2>/dev/null)
     if [ -n "$CTL" ] && [ -x "$CTL" ]; then
       $CTL -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
-      echo "CloudWatch agent started (ctl=$CTL)"
-    else
-      echo "ERROR: amazon-cloudwatch-agent-ctl not found"
+      echo "CloudWatch agent started"
     fi
   } >> "$CWA_LOG" 2>&1
   set -e
-  echo "[user_data] CloudWatch agent setup done; see $CWA_LOG if no logs in CloudWatch" >> /var/log/rdi-proxy.log
 fi

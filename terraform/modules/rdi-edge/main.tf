@@ -110,6 +110,37 @@ resource "aws_security_group" "proxy" {
     cidr_blocks = var.allowed_ssh_cidrs
   }
 
+  dynamic "ingress" {
+    for_each = var.alb_subnet_cidr != "" ? [1] : []
+    content {
+      description     = "WebSocket from ALB"
+      from_port       = var.proxy_websocket_port
+      to_port         = var.proxy_websocket_port
+      protocol        = "tcp"
+      security_groups = [aws_security_group.alb[0].id]
+    }
+  }
+  dynamic "ingress" {
+    for_each = var.alb_subnet_cidr != "" ? [1] : []
+    content {
+      description     = "Health check from ALB"
+      from_port       = var.proxy_health_port
+      to_port         = var.proxy_health_port
+      protocol        = "tcp"
+      security_groups = [aws_security_group.alb[0].id]
+    }
+  }
+  dynamic "ingress" {
+    for_each = var.alb_subnet_cidr != "" && var.certificate_arn != "" ? [1] : []
+    content {
+      description     = "Session status API from ALB"
+      from_port       = var.proxy_status_port
+      to_port         = var.proxy_status_port
+      protocol        = "tcp"
+      security_groups = [aws_security_group.alb[0].id]
+    }
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -265,4 +296,208 @@ resource "aws_eip" "proxy" {
   })
 
   depends_on = [aws_instance.proxy]
+}
+
+# --- ALB (WebSocket + session-status) - count when alb_subnet_cidr set ---
+resource "aws_subnet" "alb" {
+  count = var.alb_subnet_cidr != "" ? 1 : 0
+
+  vpc_id                  = aws_vpc.proxy.id
+  cidr_block              = var.alb_subnet_cidr
+  availability_zone       = local.az_names_sorted[1 % length(local.az_names_sorted)]
+  map_public_ip_on_launch = false
+
+  tags = merge(var.tags, {
+    Name = "${var.project_name}-proxy-alb-${var.environment}-v${var.infra_version}"
+  })
+}
+
+resource "aws_route_table_association" "alb" {
+  count = var.alb_subnet_cidr != "" ? 1 : 0
+
+  subnet_id      = aws_subnet.alb[0].id
+  route_table_id = aws_route_table.proxy.id
+}
+
+resource "aws_security_group" "alb" {
+  count = var.alb_subnet_cidr != "" ? 1 : 0
+
+  name_prefix = "${var.project_name}-alb-"
+  description = "ALB for WSS and session-status"
+  vpc_id      = aws_vpc.proxy.id
+
+  ingress {
+    description = "HTTP"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTPS/WSS"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "To proxy WebSocket, health, session-status"
+    from_port   = min(var.proxy_websocket_port, var.proxy_health_port, var.proxy_status_port)
+    to_port     = max(var.proxy_websocket_port, var.proxy_health_port, var.proxy_status_port)
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.project_name}-alb-${var.environment}-v${var.infra_version}"
+  })
+
+  lifecycle { create_before_destroy = true }
+}
+
+resource "aws_lb" "proxy" {
+  count = var.alb_subnet_cidr != "" ? 1 : 0
+
+  name               = "${var.project_name}-alb-${var.environment}-v${var.infra_version}"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb[0].id]
+  subnets            = [aws_subnet.proxy.id, aws_subnet.alb[0].id]
+
+  idle_timeout               = var.alb_idle_timeout_seconds
+  enable_deletion_protection = false
+  drop_invalid_header_fields = true
+
+  tags = merge(var.tags, {
+    Name = "${var.project_name}-alb-${var.environment}-v${var.infra_version}"
+  })
+}
+
+resource "aws_lb_target_group" "proxy" {
+  count = var.alb_subnet_cidr != "" ? 1 : 0
+
+  name        = "${var.project_name}-tg-${var.environment}-v${var.infra_version}"
+  port        = var.proxy_websocket_port
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.proxy.id
+  target_type = "instance"
+
+  health_check {
+    enabled             = true
+    healthy_threshold   = 2
+    unhealthy_threshold = 5
+    interval            = 35
+    timeout             = 30
+    port                = var.proxy_health_port
+    protocol            = "HTTP"
+    path                = "/"
+    matcher             = "200"
+  }
+
+  deregistration_delay = 30
+
+  tags = merge(var.tags, {
+    Name = "${var.project_name}-tg-${var.environment}-v${var.infra_version}"
+  })
+}
+
+resource "aws_lb_target_group" "proxy_status" {
+  count = var.alb_subnet_cidr != "" && var.certificate_arn != "" ? 1 : 0
+
+  name        = "${var.project_name}-tg-st-${var.environment}-v${var.infra_version}"
+  port        = var.proxy_status_port
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.proxy.id
+  target_type = "instance"
+
+  health_check {
+    enabled             = true
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    interval            = 35
+    timeout             = 30
+    port                = var.proxy_health_port
+    protocol            = "HTTP"
+    path                = "/"
+    matcher             = "200"
+  }
+
+  deregistration_delay = 30
+
+  tags = merge(var.tags, {
+    Name = "${var.project_name}-tg-status-${var.environment}-v${var.infra_version}"
+  })
+}
+
+resource "aws_lb_target_group_attachment" "proxy" {
+  count = var.alb_subnet_cidr != "" ? 1 : 0
+
+  target_group_arn = aws_lb_target_group.proxy[0].arn
+  target_id        = aws_instance.proxy.id
+  port             = var.proxy_websocket_port
+}
+
+resource "aws_lb_target_group_attachment" "proxy_status" {
+  count = var.alb_subnet_cidr != "" && var.certificate_arn != "" ? 1 : 0
+
+  target_group_arn = aws_lb_target_group.proxy_status[0].arn
+  target_id        = aws_instance.proxy.id
+  port             = var.proxy_status_port
+}
+
+resource "aws_lb_listener" "https" {
+  count = var.alb_subnet_cidr != "" && var.certificate_arn != "" ? 1 : 0
+
+  load_balancer_arn = aws_lb.proxy[0].arn
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = var.certificate_arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.proxy[0].arn
+  }
+}
+
+resource "aws_lb_listener_rule" "proxy_session_status" {
+  count = var.alb_subnet_cidr != "" && var.certificate_arn != "" ? 1 : 0
+
+  listener_arn = aws_lb_listener.https[0].arn
+  priority     = 5
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.proxy_status[0].arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/session-status"]
+    }
+  }
+}
+
+resource "aws_lb_listener" "http" {
+  count = var.alb_subnet_cidr != "" ? 1 : 0
+
+  load_balancer_arn = aws_lb.proxy[0].arn
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type             = var.certificate_arn != "" ? "redirect" : "forward"
+    target_group_arn = var.certificate_arn == "" ? aws_lb_target_group.proxy[0].arn : null
+
+    dynamic "redirect" {
+      for_each = var.certificate_arn != "" ? [1] : []
+      content {
+        port        = "443"
+        protocol    = "HTTPS"
+        status_code = "HTTP_301"
+      }
+    }
+  }
 }
