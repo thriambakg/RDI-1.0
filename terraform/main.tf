@@ -500,6 +500,7 @@ resource "aws_cloudwatch_log_group" "rdi_agent" {
   retention_in_days = 7
 }
 
+
 # Custom domain: Route53 hosted zone + ACM DNS-validated cert (trusted in all browsers and on phones)
 module "domain" {
   count  = var.enable_custom_domain && var.domain_name != "" ? 1 : 0
