@@ -501,6 +501,7 @@ resource "aws_cloudwatch_log_group" "rdi_proxy" {
   retention_in_days = 7
 }
 
+
 resource "aws_cloudwatch_log_group" "rdi_agent" {
   name              = "/rdi/${var.environment}/agent"
   retention_in_days = 7
