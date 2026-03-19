@@ -33,24 +33,29 @@ output "api_gateway_base_url" {
   value       = length(module.session_api) > 0 ? module.session_api[0].stage_url : null
 }
 
+output "proxy_vpc_id" {
+  description = "Proxy VPC ID (from proxy-ecs)"
+  value       = length(module.proxy_ecs) > 0 ? module.proxy_ecs[0].vpc_id : null
+}
+
 output "rdi_edge_vpc_id" {
-  description = "RDI Edge VPC ID (from rdi-edge module)"
-  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].vpc_id : null
+  description = "Proxy VPC ID (alias for proxy_vpc_id)"
+  value       = length(module.proxy_ecs) > 0 ? module.proxy_ecs[0].vpc_id : null
 }
 
 output "proxy_instance_id" {
-  description = "Proxy EC2 instance ID (for SSM restart after deploy)"
-  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].proxy_instance_id : null
+  description = "Proxy EC2 instance ID (null when using ECS)"
+  value       = null
 }
 
 output "proxy_public_ip" {
-  description = "Proxy public IP (EIP)"
-  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].proxy_public_ip : null
+  description = "Proxy public IP (null when using ECS)"
+  value       = null
 }
 
 output "proxy_websocket_endpoint" {
   description = "WebSocket endpoint (wss when ALB+custom domain; use for frontend connections)"
-  value       = length(module.rdi_edge) > 0 ? local.proxy_endpoint : null
+  value       = length(module.proxy_ecs) > 0 ? local.proxy_endpoint : null
 }
 
 output "wavelength_instance_id" {
@@ -70,12 +75,17 @@ output "wss_custom_domain_name_servers" {
 
 output "alb_dns_name" {
   description = "ALB DNS name (when ALB enabled)"
-  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].alb_dns_name : null
+  value       = length(module.proxy_ecs) > 0 ? module.proxy_ecs[0].alb_dns_name : null
 }
 
 output "proxy_target_group_arn" {
-  description = "Target group ARN for proxy (WebSocket ALB); used by pipeline to check health before restart"
-  value       = length(module.rdi_edge) > 0 ? module.rdi_edge[0].target_group_arn : null
+  description = "Target group ARN for proxy (WebSocket ALB)"
+  value       = length(module.proxy_ecs) > 0 ? module.proxy_ecs[0].target_group_arn : null
+}
+
+output "proxy_ecr_repository_url" {
+  description = "ECR repository URL for proxy container (when using ECS)"
+  value       = length(aws_ecr_repository.proxy) > 0 ? aws_ecr_repository.proxy[0].repository_url : null
 }
 
 output "edge_zone_ids" {
@@ -85,11 +95,11 @@ output "edge_zone_ids" {
 
 # Keep variables in use (avoids terraform_unused_declarations)
 output "proxy_alb_subnet_cidrs" {
-  description = "Subnet CIDRs for proxy and ALB (for rdi_edge when recreated)"
+  description = "Subnet CIDRs for proxy and ALB"
   value       = { proxy_subnet_cidr = var.proxy_subnet_cidr, alb_subnet_cidr = var.alb_subnet_cidr }
 }
 
 output "mavlink_port" {
-  description = "MAVLink UDP port (for rdi_edge when recreated)"
+  description = "MAVLink UDP port"
   value       = var.mavlink_port
 }

@@ -124,3 +124,9 @@ variable "proxy_status_secret" {
   default     = ""
   sensitive   = true
 }
+
+variable "use_proxy_ecs" {
+  description = "Use ECS Fargate for proxy (true) instead of EC2 rdi_edge (false)."
+  type        = bool
+  default     = true
+}

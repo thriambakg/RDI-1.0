@@ -76,36 +76,39 @@ module "proxy_secrets" {
   }
 }
 
-# RDI Edge - VPC, proxy EC2, ALB (WebSocket + session-status). All-in-one.
-# Bump infra_version (e.g. 1 -> 2) to force replacement of edge resources.
-module "rdi_edge" {
-  source = "./modules/rdi-edge"
-  count  = 1
+# ECR for proxy container (when using ECS)
+resource "aws_ecr_repository" "proxy" {
+  count                = var.use_proxy_ecs ? 1 : 0
+  name                 = "${var.project_name}-proxy-${var.environment}"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
 
-  project_name                  = var.project_name
-  environment                   = var.environment
-  infra_version                 = 1
-  vpc_cidr                      = "10.200.0.0/16"
-  proxy_subnet_cidr             = var.proxy_subnet_cidr
-  alb_subnet_cidr               = var.enable_alb_wss ? var.alb_subnet_cidr : ""
-  certificate_arn               = local.alb_certificate_arn
-  alb_idle_timeout_seconds      = 3600
-  instance_type                 = "t3.small"
-  root_volume_size              = 30
-  key_name                      = ""
-  kms_key_arn                   = module.kms.main_key_arn
-  proxy_websocket_port          = 8765
-  proxy_health_port             = 8766
-  proxy_status_port             = 8767
-  user_data                     = local.proxy_user_data
-  proxy_binary_s3_bucket        = module.proxy_artifacts_bucket.bucket_id
-  proxy_binary_s3_key           = "proxy/rdi-proxy"
-  enable_s3_proxy_binary_access = true
-  cloudwatch_log_group_name     = "/rdi/${var.environment}/proxy"
-  tags                          = {}
+  image_scanning_configuration { scan_on_push = true }
+  encryption_configuration {
+    encryption_type = "KMS"
+    kms_key         = module.kms.main_key_arn
+  }
+  tags = { Name = "${var.project_name}-proxy-ecr-${var.environment}" }
+}
 
-  # Ensure proxy binary is in S3 before instance boots (user_data downloads it)
-  depends_on = [aws_s3_object.proxy_binary]
+# Proxy ECS - Fargate proxy for WebSocket + session-status (replaces EC2)
+module "proxy_ecs" {
+  source = "./modules/proxy-ecs"
+  count  = var.use_proxy_ecs ? 1 : 0
+
+  project_name              = var.project_name
+  environment               = var.environment
+  vpc_cidr                  = "10.200.0.0/16"
+  certificate_arn           = local.alb_certificate_arn
+  alb_idle_timeout_seconds  = 3600
+  proxy_websocket_port      = 8765
+  proxy_health_port         = 8766
+  proxy_status_port         = 8767
+  proxy_status_secret       = local.proxy_status_secret_value
+  ecr_repository_url        = aws_ecr_repository.proxy[0].repository_url
+  ecr_repository_arn        = aws_ecr_repository.proxy[0].arn
+  cloudwatch_log_group_name = "/rdi/${var.environment}/proxy"
+  tags                      = {}
 }
 
 # KMS keys - owned by RDI-1.0 (per-region; Base Infra uses default encryption, no customer keys)
@@ -184,9 +187,9 @@ module "proxy_artifacts_bucket" {
   }
 }
 
-# Build proxy binary (Rust) - skip when skip_proxy_build=true or when Rust unavailable
+# Build proxy binary (Rust) - skip when using ECS or skip_proxy_build
 resource "null_resource" "proxy_build" {
-  count = var.skip_proxy_build ? 0 : 1
+  count = var.use_proxy_ecs || var.skip_proxy_build ? 0 : 1
 
   triggers = {
     # Rebuild when proxy source changes
@@ -201,9 +204,9 @@ resource "null_resource" "proxy_build" {
   }
 }
 
-# Upload proxy binary to S3 for EC2 user_data to fetch
+# Upload proxy binary to S3 for EC2 user_data to fetch (when not using ECS)
 resource "aws_s3_object" "proxy_binary" {
-  count = var.skip_proxy_build ? 0 : 1
+  count = var.use_proxy_ecs || var.skip_proxy_build ? 0 : 1
 
   bucket       = module.proxy_artifacts_bucket.bucket_id
   key          = "proxy/rdi-proxy"
@@ -534,15 +537,15 @@ module "ssl_certificate" {
 
 # Route53 ALB alias for WSS subdomain (wss.rdistaging.com -> ALB)
 resource "aws_route53_record" "wss_alias" {
-  count = var.enable_custom_domain && var.domain_name != "" && var.subdomain != "" && var.enable_alb_wss && var.alb_subnet_cidr != "" && length(module.domain) > 0 && length(module.rdi_edge) > 0 ? 1 : 0
+  count = var.enable_custom_domain && var.domain_name != "" && var.subdomain != "" && var.enable_alb_wss && length(module.domain) > 0 && length(module.proxy_ecs) > 0 ? 1 : 0
 
   zone_id = module.domain[0].hosted_zone_id
   name    = "${var.subdomain}.${var.domain_name}"
   type    = "A"
 
   alias {
-    name                   = module.rdi_edge[0].alb_dns_name
-    zone_id                = module.rdi_edge[0].alb_zone_id
+    name                   = module.proxy_ecs[0].alb_dns_name
+    zone_id                = module.proxy_ecs[0].alb_zone_id
     evaluate_target_health = false
   }
 }

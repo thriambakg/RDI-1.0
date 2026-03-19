@@ -11,7 +11,10 @@ base_state_region = "eu-central-1"
 wavelength_zone_id = "us-east-1-wl1-chi-wlz-1"
 edge_zone_ids      = ["use1-wl1-chi-wlz1"] # Zone ID for UI display
 
-# Proxy subnet CIDRs (within 10.200.0.0/16). Bump if orphaned subnets cause InvalidSubnet.Conflict.
+# Proxy: ECS Fargate (true) or EC2 rdi_edge (false)
+use_proxy_ecs = true
+
+# Proxy subnet CIDRs (within 10.200.0.0/16). Used when use_proxy_ecs=false.
 proxy_subnet_cidr = "10.200.82.0/24"
 alb_subnet_cidr   = "10.200.83.0/24"
 

@@ -26,13 +26,13 @@ locals {
   # Certificate for ALB WSS: custom domain cert, or var.certificate_arn, or ssl_certificate module
   alb_certificate_arn = length(module.domain) > 0 && module.domain[0].certificate_arn != null ? module.domain[0].certificate_arn : (var.certificate_arn != "" ? var.certificate_arn : (length(module.ssl_certificate) > 0 ? module.ssl_certificate[0].certificate_arn : ""))
 
-  # Session API proxy endpoint: custom domain wss:// when set, else rdi_edge endpoint
-  proxy_endpoint = var.enable_custom_domain && var.domain_name != "" && var.subdomain != "" ? "wss://${var.subdomain}.${var.domain_name}" : (length(module.rdi_edge) > 0 ? module.rdi_edge[0].proxy_websocket_endpoint : "")
+  # Session API proxy endpoint: custom domain wss:// when set, else proxy ECS
+  proxy_endpoint = var.enable_custom_domain && var.domain_name != "" && var.subdomain != "" ? "wss://${var.subdomain}.${var.domain_name}" : (length(module.proxy_ecs) > 0 ? module.proxy_ecs[0].proxy_websocket_endpoint : "")
 
-  # Lambda -> proxy session-status API. Prefer HTTPS via ALB+custom domain when available.
-  proxy_status_url = length(module.rdi_edge) > 0 ? (
-    var.enable_custom_domain && var.domain_name != "" && var.subdomain != "" && var.enable_alb_wss && local.alb_certificate_arn != "" ?
+  # Lambda -> proxy session-status API. Prefer HTTPS via custom domain when available.
+  proxy_status_url = length(module.proxy_ecs) > 0 ? (
+    var.enable_custom_domain && var.domain_name != "" && var.subdomain != "" && local.alb_certificate_arn != "" ?
     "https://${var.subdomain}.${var.domain_name}/session-status" :
-    "http://${module.rdi_edge[0].proxy_public_ip}:8767/session-status"
+    module.proxy_ecs[0].session_status_url
   ) : ""
 }

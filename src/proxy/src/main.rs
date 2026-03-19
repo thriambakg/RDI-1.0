@@ -353,7 +353,7 @@ async fn handle_ws(
                                 .unwrap_or(0);
                             info!("PING received session_id={} no agent; replying proxy ping_ack", session_id_for_peer);
                             let _ = client_tx_peer.send(ToClient::Text(format!(
-                                r#"{{"hop":"proxy","type":"ping_ack","server_ts_ms":{}}}"#,
+                                r#"{{"hop":"proxy","type":"ping_ack","server_ts_ms":{},"message":"Proxy responded (no agent)"}}"#,
                                 ts_ms
                             )));
                         }

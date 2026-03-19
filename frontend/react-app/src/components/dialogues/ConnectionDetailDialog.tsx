@@ -110,8 +110,12 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
             finish('Session is idle. Reactivate this connection in the console, then ping again.')
             return
           }
-          if (obj.hop === 'proxy_ec2') {
-            add(`1. Proxy EC2: ${obj.message} (T+${ms}ms)`)
+          if (obj.hop === 'proxy' || obj.hop === 'proxy_ec2') {
+            add(`1. Proxy: ${obj.message ?? 'responded'} (T+${ms}ms)`)
+            if (obj.hop === 'proxy' && obj.type === 'ping_ack') {
+              add(`Success — proxy responded (round-trip T+${ms}ms, no agent).`)
+              finish()
+            }
           } else if (obj.hop === 'wavelength') {
             add(`2. Wavelength: ${obj.message} (T+${ms}ms)`)
             if (obj.message === 'instance responded') {
