@@ -103,6 +103,9 @@ module "rdi_edge" {
   enable_s3_proxy_binary_access = true
   cloudwatch_log_group_name     = "/rdi/${var.environment}/proxy"
   tags                          = {}
+
+  # Ensure proxy binary is in S3 before instance boots (user_data downloads it)
+  depends_on = [aws_s3_object.proxy_binary]
 }
 
 # KMS keys - owned by RDI-1.0 (per-region; Base Infra uses default encryption, no customer keys)

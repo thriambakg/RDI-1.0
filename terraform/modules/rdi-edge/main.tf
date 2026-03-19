@@ -387,7 +387,7 @@ resource "aws_lb_target_group" "proxy" {
   health_check {
     enabled             = true
     healthy_threshold   = 2
-    unhealthy_threshold = 5
+    unhealthy_threshold = 12 # 12×15s ≈ 3 min grace for user_data (yum, S3, proxy start)
     interval            = 15
     timeout             = 10
     port                = var.proxy_health_port
@@ -415,7 +415,7 @@ resource "aws_lb_target_group" "proxy_status" {
   health_check {
     enabled             = true
     healthy_threshold   = 2
-    unhealthy_threshold = 3
+    unhealthy_threshold = 12 # 12×15s ≈ 3 min grace for user_data
     interval            = 15
     timeout             = 10
     port                = var.proxy_health_port

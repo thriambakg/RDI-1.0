@@ -115,6 +115,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 async fn serve_health(mut stream: tokio::net::TcpStream) -> std::io::Result<()> {
+    let mut buf = [0u8; 1024];
+    let _ = stream.read(&mut buf).await; // Read and discard request (ALB health check)
     let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
     stream.write_all(response.as_bytes()).await
 }
