@@ -36,6 +36,13 @@ variable "proxy_status_secret_arn" {
   default     = ""
   description = "Secrets Manager ARN for proxy status secret (preferred; both Lambda and proxy use same source)"
 }
+
+variable "proxy_status_secret_kms_key_arn" {
+  type        = string
+  default     = ""
+  description = "KMS key ARN used to encrypt the proxy_status secret; required for ECS to decrypt"
+}
+
 variable "ecr_repository_url" { type = string }
 variable "ecr_repository_arn" { type = string }
 variable "cloudwatch_log_group_name" { type = string }

@@ -96,20 +96,21 @@ module "proxy_ecs" {
   source = "./modules/proxy-ecs"
   count  = var.use_proxy_ecs ? 1 : 0
 
-  project_name              = var.project_name
-  environment               = var.environment
-  vpc_cidr                  = "10.200.0.0/16"
-  certificate_arn           = local.alb_certificate_arn
-  alb_idle_timeout_seconds  = 3600
-  proxy_websocket_port      = 8765
-  proxy_health_port         = 8766
-  proxy_status_port         = 8767
-  proxy_status_secret       = local.proxy_status_secret_value
-  proxy_status_secret_arn   = module.proxy_secrets[0].secret_arns["proxy_status"]
-  ecr_repository_url        = aws_ecr_repository.proxy[0].repository_url
-  ecr_repository_arn        = aws_ecr_repository.proxy[0].arn
-  cloudwatch_log_group_name = "/rdi/${var.environment}/proxy"
-  tags                      = {}
+  project_name                    = var.project_name
+  environment                     = var.environment
+  vpc_cidr                        = "10.200.0.0/16"
+  certificate_arn                 = local.alb_certificate_arn
+  alb_idle_timeout_seconds        = 3600
+  proxy_websocket_port            = 8765
+  proxy_health_port               = 8766
+  proxy_status_port               = 8767
+  proxy_status_secret             = local.proxy_status_secret_value
+  proxy_status_secret_arn         = module.proxy_secrets[0].secret_arns["proxy_status"]
+  proxy_status_secret_kms_key_arn = module.kms.main_key_arn
+  ecr_repository_url              = aws_ecr_repository.proxy[0].repository_url
+  ecr_repository_arn              = aws_ecr_repository.proxy[0].arn
+  cloudwatch_log_group_name       = "/rdi/${var.environment}/proxy"
+  tags                            = {}
 }
 
 # KMS keys - owned by RDI-1.0 (per-region; Base Infra uses default encryption, no customer keys)

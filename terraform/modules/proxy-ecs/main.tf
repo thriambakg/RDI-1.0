@@ -303,11 +303,10 @@ resource "aws_iam_role_policy" "execution_custom" {
           Resource = "arn:aws:logs:*:*:log-group:${var.cloudwatch_log_group_name}:*"
         }
       ],
-      var.proxy_status_secret_arn != "" ? [{
-        Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
-        Resource = var.proxy_status_secret_arn
-      }] : []
+      var.proxy_status_secret_arn != "" ? concat(
+        [{ Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = var.proxy_status_secret_arn }],
+        var.proxy_status_secret_kms_key_arn != "" ? [{ Effect = "Allow", Action = ["kms:Decrypt", "kms:DescribeKey"], Resource = var.proxy_status_secret_kms_key_arn }] : []
+      ) : []
     )
   })
 }
