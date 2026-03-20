@@ -25,7 +25,8 @@ REGION = os.environ["AWS_REGION"]
 PROXY_ENDPOINT = os.environ["PROXY_ENDPOINT"]
 USER_PROFILES_TABLE = os.environ.get("USER_PROFILES_TABLE", "")
 PROXY_STATUS_URL = os.environ.get("PROXY_STATUS_URL", "")
-PROXY_STATUS_SECRET = os.environ.get("PROXY_STATUS_SECRET", "")
+PROXY_STATUS_SECRET_ARN = os.environ.get("PROXY_STATUS_SECRET_ARN", "")
+PROXY_STATUS_SECRET_ENV = os.environ.get("PROXY_STATUS_SECRET", "")  # Fallback when no ARN
 WAVELENGTH_INSTANCE_ID = os.environ.get("WAVELENGTH_INSTANCE_ID", "")
 WAVELENGTH_ZONE_ID = os.environ.get("WAVELENGTH_ZONE_ID", "")
 WAVELENGTH_CARRIER_IP = os.environ.get("WAVELENGTH_CARRIER_IP", "")
@@ -34,10 +35,32 @@ MAVLINK_PORT = os.environ.get("MAVLINK_PORT", "18570")
 
 AGENT_API_PORT = "8080"  # RDI_AGENT_API_PORT on Wavelength (agent daemon - stays running; Lambda adds/removes sessions only)
 
+_PROXY_STATUS_SECRET_CACHE: str | None = None
+
+
+def _get_proxy_status_secret() -> str:
+    """Get proxy status secret: from Secrets Manager when ARN set, else from env. Cached per cold start."""
+    global _PROXY_STATUS_SECRET_CACHE
+    if _PROXY_STATUS_SECRET_CACHE is not None:
+        return _PROXY_STATUS_SECRET_CACHE
+    if PROXY_STATUS_SECRET_ARN:
+        try:
+            sm = boto3.client("secretsmanager", region_name=REGION)
+            resp = sm.get_secret_value(SecretId=PROXY_STATUS_SECRET_ARN)
+            data = json.loads(resp.get("SecretString", "{}"))
+            _PROXY_STATUS_SECRET_CACHE = data.get("value", "")
+        except Exception as e:
+            print(f"[RDI Session] failed to fetch proxy secret from Secrets Manager: {e}")
+            _PROXY_STATUS_SECRET_CACHE = PROXY_STATUS_SECRET_ENV
+    else:
+        _PROXY_STATUS_SECRET_CACHE = PROXY_STATUS_SECRET_ENV
+    return _PROXY_STATUS_SECRET_CACHE or ""
+
+
 # Logged once per cold start (no secret values)
 print(
     f"[RDI Session] init endpoint={PROXY_ENDPOINT} has_proxy_status_url={bool(PROXY_STATUS_URL)} "
-    f"has_proxy_secret={bool(PROXY_STATUS_SECRET)} wavelength_instance_id={bool(WAVELENGTH_INSTANCE_ID)}"
+    f"has_proxy_secret_arn={bool(PROXY_STATUS_SECRET_ARN)} wavelength_instance_id={bool(WAVELENGTH_INSTANCE_ID)}"
 )
 
 
@@ -84,13 +107,14 @@ def _remove_session_from_agent(instance_id: str, session_id: str) -> None:
 
 def _notify_proxy_session_status(session_id: str, status: str) -> None:
     """Tell the proxy to set session status (active/idle). Idle => disconnect and clear from memory."""
-    if not PROXY_STATUS_URL or not PROXY_STATUS_SECRET:
+    secret = _get_proxy_status_secret()
+    if not PROXY_STATUS_URL or not secret:
         _log(
             "proxy_status skipped",
             session_id=session_id,
             status=status,
             has_url=bool(PROXY_STATUS_URL),
-            has_secret=bool(PROXY_STATUS_SECRET),
+            has_secret=bool(secret),
         )
         return
     # Log host only (no path) to avoid leaking full URL
@@ -108,7 +132,7 @@ def _notify_proxy_session_status(session_id: str, status: str) -> None:
         data=body,
         headers={
             "Content-Type": "application/json",
-            "X-Proxy-Secret": PROXY_STATUS_SECRET,
+            "X-Proxy-Secret": secret,
         },
         method="POST",
     )

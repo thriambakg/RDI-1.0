@@ -291,11 +291,11 @@ module "session_api_lambda" {
   source_dir    = "${path.module}/../src/session-api"
 
   environment_variables = merge({
-    CONNECTION_POOL_TABLE = local.connection_pool_tbl
-    USER_PROFILES_TABLE   = local.user_profiles_tbl
-    PROXY_ENDPOINT        = local.proxy_endpoint
-    PROXY_STATUS_URL      = local.proxy_status_url
-    PROXY_STATUS_SECRET   = local.proxy_status_secret_value
+    CONNECTION_POOL_TABLE   = local.connection_pool_tbl
+    USER_PROFILES_TABLE     = local.user_profiles_tbl
+    PROXY_ENDPOINT          = local.proxy_endpoint
+    PROXY_STATUS_URL        = local.proxy_status_url
+    PROXY_STATUS_SECRET_ARN = length(module.proxy_secrets) > 0 ? module.proxy_secrets[0].secret_arns["proxy_status"] : ""
     }, var.wavelength_zone_id != "" ? {
     WAVELENGTH_INSTANCE_ID = module.wavelength_ec2[0].instance_id
     WAVELENGTH_ZONE_ID     = length(var.edge_zone_ids) > 0 ? var.edge_zone_ids[0] : ""
@@ -305,12 +305,36 @@ module "session_api_lambda" {
 
   additional_policy_arns = concat(
     [aws_iam_policy.session_api_dynamodb[0].arn],
-    length(aws_iam_policy.session_api_ssm) > 0 ? [aws_iam_policy.session_api_ssm[0].arn] : []
+    length(aws_iam_policy.session_api_ssm) > 0 ? [aws_iam_policy.session_api_ssm[0].arn] : [],
+    length(aws_iam_policy.session_api_proxy_secret) > 0 ? [aws_iam_policy.session_api_proxy_secret[0].arn] : []
   )
   depends_on = [aws_iam_policy.session_api_dynamodb]
   layers     = [module.core_layer.layer_arn]
 
   tags = {}
+}
+
+# Allow Session API Lambda to read proxy status secret from Secrets Manager (same source as proxy ECS)
+resource "aws_iam_policy" "session_api_proxy_secret" {
+  count       = length(module.proxy_secrets) > 0 ? 1 : 0
+  name        = "${var.project_name}-session-api-proxy-secret-${var.environment}"
+  description = "Read proxy status secret for session-status API (Lambda + proxy share same source)"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = [module.proxy_secrets[0].secret_arns["proxy_status"]]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:DescribeKey"]
+        Resource = [module.kms.main_key_arn]
+      }
+    ]
+  })
 }
 
 # Allow Session API Lambda to start RDI agent on Wavelength instance via SSM
