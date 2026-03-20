@@ -48,7 +48,12 @@ def _get_proxy_status_secret() -> str:
             sm = boto3.client("secretsmanager", region_name=REGION)
             resp = sm.get_secret_value(SecretId=PROXY_STATUS_SECRET_ARN)
             data = json.loads(resp.get("SecretString", "{}"))
-            _PROXY_STATUS_SECRET_CACHE = data.get("value", "")
+            val = data.get("value", "")
+            if isinstance(val, str):
+                _PROXY_STATUS_SECRET_CACHE = val
+            else:
+                _PROXY_STATUS_SECRET_CACHE = str(val) if val is not None else ""
+            print(f"[RDI Session] proxy secret fetched from Secrets Manager len={len(_PROXY_STATUS_SECRET_CACHE)}")
         except Exception as e:
             print(f"[RDI Session] failed to fetch proxy secret from Secrets Manager: {e}")
             _PROXY_STATUS_SECRET_CACHE = PROXY_STATUS_SECRET_ENV

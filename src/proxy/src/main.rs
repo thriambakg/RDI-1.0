@@ -213,6 +213,11 @@ async fn serve_status(
         return Ok(());
     }
     if secret != expected_secret {
+        warn!(
+            "session-status 401: received_len={} expected_len={} (secret mismatch)",
+            secret.len(),
+            expected_secret.len()
+        );
         let body = b"{\"error\":\"unauthorized\"}";
         let resp = format!(
             "HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
