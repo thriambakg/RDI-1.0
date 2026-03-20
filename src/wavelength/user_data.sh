@@ -16,9 +16,31 @@ chmod 644 /var/log/rdi-agent.log
 if aws s3 cp "s3://${s3_bucket}/${s3_key}" ./rdi-agent --region "${aws_region}" 2>/dev/null; then
   chmod +x ./rdi-agent
   echo "RDI agent binary installed at /opt/rdi-agent/rdi-agent"
-  # Start agent daemon once at boot. Lambda adds/removes sessions via POST/DELETE http://127.0.0.1:8080/sessions
-  nohup env RDI_MAVLINK_PORT=${mavlink_port} ./rdi-agent >> /var/log/rdi-agent.log 2>&1 &
-  echo "RDI agent daemon started (API on 127.0.0.1:8080)"
+  # Systemd service: restart on crash, survive reboots
+  cat > /etc/systemd/system/rdi-agent.service << SVCEND
+[Unit]
+Description=RDI tunnel agent - WebSocket bridge to proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/rdi-agent
+ExecStart=/opt/rdi-agent/rdi-agent
+Environment="RDI_MAVLINK_PORT=${mavlink_port}"
+Environment="RDI_INSECURE_TLS=${insecure_tls}"
+StandardOutput=append:/var/log/rdi-agent.log
+StandardError=append:/var/log/rdi-agent.log
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+SVCEND
+  systemctl daemon-reload
+  systemctl enable rdi-agent
+  systemctl start rdi-agent
+  echo "RDI agent daemon started via systemd (API on 127.0.0.1:8080)"
   # Script to update binary from S3 without replacing the instance (run via SSM or SSH: sudo /opt/rdi-agent/update-from-s3.sh)
   cat > /opt/rdi-agent/update-from-s3.sh << UPDATEEND
 #!/bin/bash
@@ -27,11 +49,9 @@ BUCKET="${s3_bucket}"
 KEY="${s3_key}"
 REGION="${aws_region}"
 cd /opt/rdi-agent
-pkill -f ./rdi-agent || true
-sleep 2
 aws s3 cp "s3://\$BUCKET/\$KEY" ./rdi-agent --region "\$REGION"
 chmod +x ./rdi-agent
-nohup env RDI_MAVLINK_PORT=${mavlink_port} ./rdi-agent >> /var/log/rdi-agent.log 2>&1 &
+systemctl restart rdi-agent
 echo "Agent updated and restarted \$(date)"
 UPDATEEND
   chmod +x /opt/rdi-agent/update-from-s3.sh
@@ -46,7 +66,8 @@ if [ -n "${cloudwatch_log_group}" ]; then
     echo "=== CloudWatch agent setup $(date) ==="
     yum install -y amazon-cloudwatch-agent 2>/dev/null || dnf install -y amazon-cloudwatch-agent 2>/dev/null || echo "WARN: install failed"
     mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
-    INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+    INSTANCE_ID=$(curl -s --connect-timeout 2 http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null)
+    [ -z "$INSTANCE_ID" ] && INSTANCE_ID="wavelength-$(hostname)-$(date +%s)"
     cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << CWCONF
 {
   "agent": { "metrics_collection_interval": 60, "run_as_user": "root" },

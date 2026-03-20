@@ -192,6 +192,7 @@ module "wavelength_ec2" {
     cloudwatch_log_group = "/rdi/${var.environment}/agent"
     mavlink_port         = tostring(var.mavlink_port)
     infra_version        = var.environment
+    insecure_tls         = length(module.ssl_certificate) > 0 ? "1" : ""
   })
 
   tags       = {}

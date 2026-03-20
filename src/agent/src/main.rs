@@ -141,6 +141,51 @@ async fn remove_session(
     }
 }
 
+/// Connect to proxy WebSocket. When RDI_INSECURE_TLS=1 and url is wss://, skips TLS cert verification (for staging self-signed).
+async fn connect_to_proxy(
+    proxy_url: &str,
+) -> Result<
+    tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let insecure_tls = std::env::var("RDI_INSECURE_TLS")
+        .ok()
+        .map(|s| {
+            let s = s.to_lowercase();
+            s == "1" || s == "true" || s == "yes"
+        })
+        .unwrap_or(false);
+
+    let (stream, _) = if proxy_url.starts_with("wss://") && insecure_tls {
+        info!("RDI_INSECURE_TLS=1: skipping TLS certificate verification (staging)");
+        let tls = native_tls::TlsConnector::builder()
+            .danger_accept_invalid_certs(true)
+            .build()?;
+        let connector = tokio_tungstenite::Connector::NativeTls(tls);
+        let request = proxy_url
+            .into_client_request()
+            .map_err(|e| format!("Invalid URL: {}", e))?;
+        tokio_tungstenite::connect_async_tls_with_config(
+            request,
+            None,
+            false,
+            Some(connector),
+        )
+        .await
+        .map_err(|e| format!("WebSocket TLS connect failed: {}", e))?
+    } else {
+        tokio_tungstenite::connect_async(proxy_url)
+            .await
+            .map_err(|e| format!("WebSocket connect failed: {}", e))?
+    };
+
+    Ok(stream)
+}
+
 /// Run one session: connect to proxy, bridge WebSocket <-> UDP. Reconnects on disconnect until task is aborted.
 async fn run_session_loop(
     proxy_url: &str,
@@ -172,17 +217,8 @@ async fn run_session(
         proxy_url, session_id, mavlink_addr
     );
 
-    let ws_stream = match tokio_tungstenite::connect_async(proxy_url).await {
-        Ok((s, _)) => s,
-        Err(e) => {
-            error!(
-                "Failed to connect to proxy url={} session_id={} error={} (Wavelength EC2)",
-                proxy_url, session_id, e
-            );
-            return Err(e.into());
-        }
-    };
-    let (mut ws_tx, mut ws_rx) = ws_stream.split();
+    let ws_stream = connect_to_proxy(proxy_url).await?;
+    let (mut ws_tx, mut ws_rx) = futures_util::StreamExt::split(ws_stream);
     info!(
         "WebSocket connected to proxy session_id={} (Wavelength EC2); sending handshake agent:{}",
         session_id, session_id
