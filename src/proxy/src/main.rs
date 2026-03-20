@@ -5,16 +5,63 @@
 
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
+use std::io::Cursor;
+use std::pin::Pin;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::net::TcpStream;
 use tokio::sync::{mpsc, RwLock};
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 const DEFAULT_WS_PORT: u16 = 8765;
 const DEFAULT_HEALTH_PORT: u16 = 8766;
 const DEFAULT_STATUS_PORT: u16 = 8767;
+
+/// Wraps a pre-read buffer + stream so WebSocket handshake sees the full request.
+struct PrefixedStream {
+    prefix: Option<Cursor<Vec<u8>>>,
+    stream: TcpStream,
+}
+
+impl AsyncRead for PrefixedStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        if let Some(ref mut cursor) = self.prefix {
+            let pos = cursor.position() as usize;
+            let data = cursor.get_ref();
+            if pos < data.len() {
+                let n = (data.len() - pos).min(buf.remaining());
+                buf.put_slice(&data[pos..pos + n]);
+                cursor.set_position((pos + n) as u64);
+                return Poll::Ready(Ok(()));
+            }
+        }
+        self.prefix = None;
+        Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for PrefixedStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+}
 
 #[derive(Clone)]
 struct Peer {
@@ -245,13 +292,61 @@ enum ToClient {
 
 const PING_BYTES: &[u8] = b"PING";
 
+/// Returns true if the request looks like a WebSocket upgrade (GET with Upgrade: websocket).
+fn is_websocket_upgrade(request: &[u8]) -> bool {
+    let s = String::from_utf8_lossy(request);
+    let first_line = s.lines().next().unwrap_or("");
+    let parts: Vec<&str> = first_line.splitn(3, ' ').collect();
+    let method = parts.get(0).copied().unwrap_or("");
+    if method != "GET" {
+        return false;
+    }
+    let rest = s.to_lowercase();
+    rest.contains("upgrade: websocket") || rest.contains("upgrade:websocket")
+}
+
 async fn handle_ws(
-    stream: tokio::net::TcpStream,
+    mut stream: TcpStream,
     addr: std::net::SocketAddr,
     sessions: Arc<RwLock<Sessions>>,
     status_map: Arc<RwLock<SessionStatusMap>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let ws = accept_async(stream).await?;
+    // Pre-read to detect non-WebSocket HTTP (ALB health checks, misrouted session-status, etc.)
+    let mut buf = vec![0u8; 8192];
+    let n = stream.read(&mut buf).await?;
+    buf.truncate(n);
+    if n == 0 {
+        return Ok(());
+    }
+    if !is_websocket_upgrade(&buf) {
+        let (method, path) = {
+            let first = String::from_utf8_lossy(&buf);
+            let line = first.lines().next().unwrap_or("");
+            let p: Vec<&str> = line.splitn(3, ' ').collect();
+            (
+                p.get(0).map(|s| (*s).to_string()).unwrap_or_else(|| "?".into()),
+                p.get(1).map(|s| (*s).to_string()).unwrap_or_else(|| "?".into()),
+            )
+        };
+        let body = format!(
+            r#"{{"error":"bad_request","message":"WebSocket port only. Use path /session-status for session API.","method":"{}","path":"{}"}}"#,
+            method, path
+        );
+        let resp = format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(resp.as_bytes()).await;
+        let _ = stream.shutdown().await;
+        debug!("Rejected non-WebSocket {} {} {} (use /session-status for session API)", addr, method, path);
+        return Ok(());
+    }
+    let prefixed = PrefixedStream {
+        prefix: Some(Cursor::new(buf)),
+        stream,
+    };
+    let ws = accept_async(prefixed).await?;
     let (mut ws_tx, mut ws_rx) = ws.split();
 
     let first = ws_rx.next().await;
