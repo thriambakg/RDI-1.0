@@ -34,13 +34,19 @@ MAVLINK_PORT = os.environ.get("MAVLINK_PORT", "18570")
 
 AGENT_API_PORT = "8080"  # RDI_AGENT_API_PORT on Wavelength (agent daemon - stays running; Lambda adds/removes sessions only)
 
+# Logged once per cold start (no secret values)
+print(
+    f"[RDI Session] init endpoint={PROXY_ENDPOINT} has_proxy_status_url={bool(PROXY_STATUS_URL)} "
+    f"has_proxy_secret={bool(PROXY_STATUS_SECRET)} wavelength_instance_id={bool(WAVELENGTH_INSTANCE_ID)}"
+)
+
 
 def _add_session_to_agent(instance_id: str, proxy_url: str, session_id: str) -> None:
     """Add session to the running agent daemon. Daemon stays up; this opens a WebSocket bridge for this session."""
     if not instance_id or not proxy_url or not session_id:
-        print(f"[RDI Session] add session skipped: missing instance_id={bool(instance_id)} proxy_url={bool(proxy_url)} session_id={bool(session_id)}")
+        _log("add_session skipped", session_id=session_id, has_instance=bool(instance_id), has_proxy_url=bool(proxy_url))
         return
-    print(f"[RDI Session] add session to agent daemon session_id={session_id} proxy_url={proxy_url} instance_id={instance_id}")
+    _log("add_session to agent daemon", session_id=session_id, proxy_url=proxy_url, instance_id=instance_id)
     body = json.dumps({"session_id": session_id, "proxy_url": proxy_url})
     cmd = f"curl -s -X POST http://127.0.0.1:{AGENT_API_PORT}/sessions -H 'Content-Type: application/json' -d {shlex.quote(body)}"
     try:
@@ -51,16 +57,17 @@ def _add_session_to_agent(instance_id: str, proxy_url: str, session_id: str) -> 
             Parameters={"commands": [cmd]},
         )
         cmd_id = result.get("Command", {}).get("CommandId", "")
-        print(f"[RDI Session] SSM add session session_id={session_id} instance_id={instance_id} command_id={cmd_id}")
+        _log("SSM add_session sent", session_id=session_id, instance_id=instance_id, command_id=cmd_id)
     except Exception as e:
-        print(f"[RDI Session] SSM add session failed session_id={session_id} instance_id={instance_id} error={e}")
+        _log("SSM add_session failed", session_id=session_id, instance_id=instance_id, error=str(e))
 
 
 def _remove_session_from_agent(instance_id: str, session_id: str) -> None:
     """Remove session from the running agent daemon. Daemon stays up; this closes the WebSocket bridge for this session."""
     if not instance_id or not session_id:
+        _log("remove_session skipped", session_id=session_id, has_instance=bool(instance_id))
         return
-    print(f"[RDI Session] remove session from agent daemon session_id={session_id} instance_id={instance_id}")
+    _log("remove_session from agent", session_id=session_id, instance_id=instance_id)
     url = f"http://127.0.0.1:{AGENT_API_PORT}/sessions/{session_id}"
     cmd = f"curl -s -X DELETE {shlex.quote(url)}"
     try:
@@ -70,17 +77,31 @@ def _remove_session_from_agent(instance_id: str, session_id: str) -> None:
             DocumentName="AWS-RunShellScript",
             Parameters={"commands": [cmd]},
         )
-        print(f"[RDI Session] SSM remove session session_id={session_id} instance_id={instance_id}")
+        _log("SSM remove_session sent", session_id=session_id, instance_id=instance_id)
     except Exception as e:
-        print(f"[RDI Session] SSM remove session failed session_id={session_id} error={e}")
+        _log("SSM remove_session failed", session_id=session_id, instance_id=instance_id, error=str(e))
 
 
 def _notify_proxy_session_status(session_id: str, status: str) -> None:
     """Tell the proxy to set session status (active/idle). Idle => disconnect and clear from memory."""
     if not PROXY_STATUS_URL or not PROXY_STATUS_SECRET:
-        print(f"[RDI Session] proxy status notify skipped (no PROXY_STATUS_URL/SECRET) session_id={session_id} status={status}")
+        _log(
+            "proxy_status skipped",
+            session_id=session_id,
+            status=status,
+            has_url=bool(PROXY_STATUS_URL),
+            has_secret=bool(PROXY_STATUS_SECRET),
+        )
         return
-    print(f"[RDI Session] notifying proxy session_id={session_id} status={status} (proxy will {'accept' if status == 'active' else 'disconnect'} WebSocket connections for this session)")
+    # Log host only (no path) to avoid leaking full URL
+    url_host = PROXY_STATUS_URL.split("/")[2] if "//" in PROXY_STATUS_URL else "?"
+    _log(
+        "proxy_status notifying",
+        session_id=session_id,
+        status=status,
+        url_host=url_host,
+        action="accept" if status == "active" else "disconnect",
+    )
     body = json.dumps({"session_id": session_id, "status": status}).encode("utf-8")
     req = urllib.request.Request(
         PROXY_STATUS_URL,
@@ -94,19 +115,43 @@ def _notify_proxy_session_status(session_id: str, status: str) -> None:
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             if resp.status != 200:
-                print(f"[RDI Session] proxy status API returned {resp.status} for session {session_id}")
+                _log("proxy_status non-200", session_id=session_id, status=status, http_status=resp.status)
             else:
-                print(f"[RDI Session] proxy status acknowledged session_id={session_id} status={status}")
+                _log("proxy_status ack", session_id=session_id, status=status)
+    except urllib.error.HTTPError as e:
+        try:
+            body_preview = (e.read().decode("utf-8", errors="replace")[:200] if getattr(e, "fp", None) else "") or ""
+        except Exception:
+            body_preview = ""
+        _log(
+            "proxy_status failed",
+            session_id=session_id,
+            status=status,
+            error=str(e),
+            http_status=e.code,
+            response_preview=(body_preview[:100] if body_preview else ""),
+        )
     except urllib.error.URLError as e:
-        print(f"[RDI Session] proxy status notify failed session_id={session_id} error={e}")
+        _log("proxy_status failed", session_id=session_id, status=status, error=str(e))
     except Exception as e:
-        print(f"[RDI Session] proxy status notify error session_id={session_id}: {e}")
+        _log("proxy_status error", session_id=session_id, status=status, error=str(e))
+
+
+def _log(msg: str, **kwargs: Any) -> None:
+    """Structured log for CloudWatch; kwargs are appended as key=value."""
+    extra = " ".join(f"{k}={v}" for k, v in kwargs.items())
+    print(f"[RDI Session] {msg}" + (f" {extra}" if extra else ""))
 
 
 def lambda_handler(event: dict, context: Any) -> dict:
     """Handle API Gateway requests or scheduled idle-expiry (EventBridge)."""
+    req_id = getattr(context, "aws_request_id", None) if context else None
+    _log("request", method=event.get("httpMethod", "?"), path=event.get("path", ""), request_id=req_id or "n/a")
+
     if event.get("source") == "schedule" and event.get("action") == "idle_expired_sessions":
+        _log("scheduled job: idle_expired_sessions started")
         _idle_expired_sessions()
+        _log("scheduled job: idle_expired_sessions done")
         return {"statusCode": 200, "body": "idle_expired_sessions done"}
 
     http_method = event.get("httpMethod", "GET")
@@ -121,26 +166,33 @@ def lambda_handler(event: dict, context: Any) -> dict:
     try:
         user_id = _get_user_id(event)
         if not user_id:
+            _log("auth failed", reason="no user_id from claims")
             return _response(401, {"error": "Unauthorized"}, headers)
+        _log("auth ok", user_id=user_id[:8] + ".." if len(user_id) > 8 else user_id)
 
         if http_method == "POST" and "sessions" in path:
             body = json.loads(event.get("body") or "{}")
+            _log("route", action="create_session")
             return _create_session(user_id, body, headers)
         if http_method == "PATCH" and "sessions" in path:
             body = json.loads(event.get("body") or "{}")
+            _log("route", action="patch_session", session_id=body.get("session_id"))
             return _patch_session(user_id, body, headers)
         if http_method == "DELETE" and "sessions" in path:
             body = json.loads(event.get("body") or "{}")
             session_id = body.get("session_id")
             permanent = body.get("permanent", False)
+            _log("route", action="release_session", session_id=session_id, permanent=permanent)
             return _release_session(user_id, session_id, headers, permanent=permanent)
         if http_method == "GET" and "sessions" in path:
+            _log("route", action="get_session")
             return _get_session(user_id, event.get("queryStringParameters"), headers)
 
+        _log("route", action="not_found", method=http_method, path=path)
         return _response(404, {"error": "Not found"}, headers)
 
     except Exception as e:
-        print(f"Error: {e}")
+        _log("handler error", error=str(e))
         return _response(500, {"error": str(e)}, headers)
 
 
@@ -166,9 +218,11 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     if not isinstance(folder_path, list):
         folder_path = ["My Drones"]
     if folder_path and folder_path[0] == "Shared":
+        _log("create_session rejected", reason="Shared folder")
         return _response(400, {"error": "Cannot create connections in Shared or its subfolders"}, headers)
 
     session_id = str(uuid.uuid4())
+    _log("create_session start", session_id=session_id, folder_path=folder_path)
     now = int(time.time())
     ttl_seconds = body.get("ttl_seconds")
     if ttl_seconds is None:
@@ -216,10 +270,12 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
             Item=item,
             ConditionExpression="attribute_not_exists(session_id)",
         )
+        _log("create_session DynamoDB put ok", session_id=session_id)
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            pass  # Retry with new session_id
+            _log("create_session DynamoDB conflict, retrying", session_id=session_id)
             return _create_session(user_id, body, headers)
+        _log("create_session DynamoDB put failed", session_id=session_id, error=str(e))
         raise
 
     if USER_PROFILES_TABLE:
@@ -232,14 +288,27 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
         )
 
     # Mark session active on the proxy so it accepts UI and agent WebSocket connections for this session.
-    idle_desc = f"idle_after_ts={idle_after_ts}" if idle_after_ts else "indefinite (no TTL; only explicit release marks idle)"
-    print(f"[RDI Session] session created session_id={session_id} endpoint={PROXY_ENDPOINT} drone_id={drone_id} {idle_desc} wavelength_zone_id={wavelength_zone_id}")
+    idle_desc = f"idle_after_ts={idle_after_ts}" if idle_after_ts else "indefinite"
+    _log(
+        "session created",
+        session_id=session_id,
+        endpoint=PROXY_ENDPOINT,
+        drone_id=drone_id,
+        idle_desc=idle_desc,
+        wavelength_zone_id=wavelength_zone_id,
+    )
     _notify_proxy_session_status(session_id, "active")
 
     if not WAVELENGTH_INSTANCE_ID:
-        print(f"[RDI Session] proxy-only mode: no WAVELENGTH_INSTANCE_ID; frontend may connect to proxy WebSocket without an edge agent (proxy acks PING with ping_ack + server_ts_ms)")
+        _log("add_session skipped", reason="proxy_only_mode", session_id=session_id)
     elif WAVELENGTH_ZONE_ID and wavelength_zone_id != WAVELENGTH_ZONE_ID:
-        print(f"[RDI Session] session not added to agent: zone mismatch request_zone={wavelength_zone_id} deployed_zone={WAVELENGTH_ZONE_ID}")
+        _log(
+            "add_session skipped",
+            reason="zone_mismatch",
+            session_id=session_id,
+            request_zone=wavelength_zone_id,
+            deployed_zone=WAVELENGTH_ZONE_ID,
+        )
     else:
         _add_session_to_agent(WAVELENGTH_INSTANCE_ID, PROXY_ENDPOINT, session_id)
 
@@ -252,14 +321,17 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     if WAVELENGTH_CARRIER_IP and (not WAVELENGTH_ZONE_ID or wavelength_zone_id == WAVELENGTH_ZONE_ID):
         payload["carrier_ip"] = WAVELENGTH_CARRIER_IP
         payload["mavlink_port"] = MAVLINK_PORT
+    _log("create_session success", session_id=session_id, drone_id=drone_id)
     return _response(200, payload, headers)
 
 
 def _release_session(user_id: str, session_id: str | None, headers: dict, *, permanent: bool = False) -> dict:
     """Release session (mark idle) or permanently delete."""
     if not session_id:
+        _log("release_session rejected", reason="no session_id")
         return _response(400, {"error": "session_id required"}, headers)
 
+    _log("release_session start", session_id=session_id, permanent=permanent)
     dynamodb = boto3.client("dynamodb")
 
     if permanent:
@@ -280,6 +352,7 @@ def _release_session(user_id: str, session_id: str | None, headers: dict, *, per
                 raise
         if USER_PROFILES_TABLE:
             _upsert_profile_remove_session(dynamodb, user_id, session_id)
+        _log("release_session permanent done", session_id=session_id, existed=session_existed)
         return _response(
             200,
             {"message": "Session deleted" if session_existed else "Session removed from list"},
@@ -304,16 +377,18 @@ def _release_session(user_id: str, session_id: str | None, headers: dict, *, per
         )
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            _log("release_session not found", session_id=session_id)
             return _response(404, {"error": "Session not found"}, headers)
         raise
 
-    print(f"[RDI Session] session released (user) session_id={session_id} -> idle (proxy disconnects; session removed from agent)")
+    _log("release_session -> idle", session_id=session_id)
     if USER_PROFILES_TABLE:
         _upsert_profile_update_status(dynamodb, user_id, session_id, "idle")
     _notify_proxy_session_status(session_id, "idle")
     if WAVELENGTH_INSTANCE_ID:
         _remove_session_from_agent(WAVELENGTH_INSTANCE_ID, session_id)
 
+    _log("release_session done", session_id=session_id)
     return _response(200, {"message": "Session released"}, headers)
 
 
@@ -321,6 +396,7 @@ def _idle_expired_sessions() -> None:
     """Scheduled job: mark active sessions as idle when idle_after has passed. Does not delete.
     TTL is shared with connection lifetime: only sessions with idle_after set will transition to idle;
     sessions with ttl_seconds=0 have no idle_after and stay active until explicit release."""
+    _log("idle_expired_sessions start")
     dynamodb = boto3.client("dynamodb")
     now = int(time.time())
     paginator = dynamodb.get_paginator("scan")
@@ -337,7 +413,7 @@ def _idle_expired_sessions() -> None:
             if not user_id or not session_id:
                 continue
             try:
-                print(f"[RDI Session] idle_expired marking idle session_id={session_id} (idle_after passed; proxy disconnects; session removed from agent)")
+                _log("idle_expired marking idle", session_id=session_id)
                 dynamodb.update_item(
                     TableName=TABLE_NAME,
                     Key={"user_id": {"S": user_id}, "session_id": {"S": session_id}},
@@ -359,6 +435,7 @@ def _idle_expired_sessions() -> None:
             _notify_proxy_session_status(session_id, "idle")
             if WAVELENGTH_INSTANCE_ID:
                 _remove_session_from_agent(WAVELENGTH_INSTANCE_ID, session_id)
+    _log("idle_expired_sessions done")
 
 
 def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
@@ -366,10 +443,13 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
     session_id = body.get("session_id")
     status = (body.get("status") or "").strip().lower()
     if not session_id:
+        _log("patch_session rejected", reason="no session_id")
         return _response(400, {"error": "session_id required"}, headers)
     if status not in ("active", "idle"):
+        _log("patch_session rejected", session_id=session_id, reason="invalid status", status=status)
         return _response(400, {"error": "status must be 'active' or 'idle'"}, headers)
 
+    _log("patch_session start", session_id=session_id, status=status)
     dynamodb = boto3.client("dynamodb")
     now = int(time.time())
 
@@ -403,6 +483,7 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
         )
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            _log("patch_session not found", session_id=session_id)
             return _response(404, {"error": "Session not found"}, headers)
         raise
 
@@ -416,6 +497,7 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
     ):
         _add_session_to_agent(WAVELENGTH_INSTANCE_ID, PROXY_ENDPOINT, session_id)
 
+    _log("patch_session done", session_id=session_id, status=status)
     return _response(200, {"message": f"Session set to {status}"}, headers)
 
 
@@ -444,6 +526,7 @@ def _get_session(
 
         item = resp.get("Item")
         if not item:
+            _log("get_session not found", session_id=session_id)
             return _response(404, {"error": "Session not found"}, headers)
 
         out = {
