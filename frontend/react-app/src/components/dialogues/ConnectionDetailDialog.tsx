@@ -122,7 +122,7 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
       }
       if (typeof event.data === 'string') {
         try {
-          const obj = JSON.parse(event.data) as HopLog & { error?: string; message?: string }
+          const obj = JSON.parse(event.data) as HopLog & { error?: string; message?: string; type?: string }
           if (obj.error === 'session idle') {
             add(`Session is idle (T+${ms}ms). Reactivate in console to connect.`)
             finish('Session is idle. Reactivate this connection in the console, then ping again.')
