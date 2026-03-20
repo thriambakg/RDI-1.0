@@ -316,6 +316,8 @@ async fn handle_ws(
     sessions: Arc<RwLock<Sessions>>,
     status_map: Arc<RwLock<SessionStatusMap>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Disable Nagle for low-latency PING/PONG and MAVLink (avoids ~40-200ms batching of small packets)
+    let _ = stream.set_nodelay(true);
     // Pre-read to detect non-WebSocket HTTP (ALB health checks, misrouted session-status, etc.)
     let mut buf = vec![0u8; 8192];
     let n = stream.read(&mut buf).await?;

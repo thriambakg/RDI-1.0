@@ -96,17 +96,28 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
     add(`Pinging over existing connection…`)
 
     const prevOnMessage = ws.onmessage
-    ws.onmessage = async (event: MessageEvent) => {
+    ws.onmessage = (event: MessageEvent) => {
       const ms = elapsed()
-      // Binary PONG from proxy (same round-trip as "instance responded" text)
-      if (event.data instanceof Blob) {
-        const buf = await event.data.arrayBuffer()
+      // Binary PONG from proxy (same round-trip as "instance responded" text). Use arraybuffer (set in SessionWebSocketContext) for sync timing.
+      const buf = event.data instanceof ArrayBuffer ? event.data : (event.data instanceof Blob ? null : null)
+      if (buf) {
         const arr = new Uint8Array(buf)
         if (arr.length === PONG_BYTES.length && arr.every((b, i) => b === PONG_BYTES[i])) {
           add(`2. Wavelength: instance responded (T+${ms}ms)`)
           add(`Success — full round-trip (client → proxy → Wavelength instance → proxy → client) (T+${ms}ms).`)
           finish()
         }
+        return
+      }
+      if (event.data instanceof Blob) {
+        event.data.arrayBuffer().then((ab) => {
+          const arr = new Uint8Array(ab)
+          if (arr.length === PONG_BYTES.length && arr.every((b, i) => b === PONG_BYTES[i])) {
+            add(`2. Wavelength: instance responded (T+${ms}ms)`)
+            add(`Success — full round-trip (T+${ms}ms).`)
+            finish()
+          }
+        })
         return
       }
       if (typeof event.data === 'string') {

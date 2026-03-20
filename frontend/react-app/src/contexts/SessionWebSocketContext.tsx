@@ -84,6 +84,7 @@ export function SessionWebSocketProvider({ children }: { children: ReactNode }) 
     let ws: WebSocket
     try {
       ws = new WebSocket(wsUrl)
+      ws.binaryType = 'arraybuffer' // Synchronous binary receive for accurate ping timing (avoids Blob->ArrayBuffer async)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       console.error(LOG_PREFIX, 'openSession: WebSocket constructor threw', { sessionId, error: msg })

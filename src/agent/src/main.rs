@@ -172,7 +172,7 @@ async fn connect_to_proxy(
         tokio_tungstenite::connect_async_tls_with_config(
             request,
             None,
-            false,
+            true,  // disable_nagle: reduce PING/PONG and MAVLink latency variance
             Some(connector),
         )
         .await
