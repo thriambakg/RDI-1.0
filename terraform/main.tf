@@ -105,6 +105,7 @@ module "proxy_ecs" {
   proxy_health_port         = 8766
   proxy_status_port         = 8767
   proxy_status_secret       = local.proxy_status_secret_value
+  proxy_status_secret_arn   = module.proxy_secrets[0].secret_arns["proxy_status"]
   ecr_repository_url        = aws_ecr_repository.proxy[0].repository_url
   ecr_repository_arn        = aws_ecr_repository.proxy[0].arn
   cloudwatch_log_group_name = "/rdi/${var.environment}/proxy"

@@ -25,8 +25,16 @@ variable "proxy_status_port" {
   default = 8767
 }
 variable "proxy_status_secret" {
-  type      = string
-  sensitive = true
+  type        = string
+  sensitive   = true
+  description = "Fallback when proxy_status_secret_arn not set"
+  default     = ""
+}
+
+variable "proxy_status_secret_arn" {
+  type        = string
+  default     = ""
+  description = "Secrets Manager ARN for proxy status secret (preferred; both Lambda and proxy use same source)"
 }
 variable "ecr_repository_url" { type = string }
 variable "ecr_repository_arn" { type = string }

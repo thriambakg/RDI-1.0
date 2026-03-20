@@ -138,6 +138,11 @@ resource "aws_lb_target_group" "proxy" {
     protocol            = "HTTP"
     matcher             = "200"
   }
+  stickiness {
+    type            = "lb_cookie"
+    cookie_duration = 86400 # 24h - matches WebSocket long-lived sessions
+    enabled         = true
+  }
   deregistration_delay = 30
   tags                 = merge(var.tags, { Name = "${var.project_name}-proxy-tg-${var.environment}" })
 }
@@ -274,29 +279,36 @@ resource "aws_iam_role_policy_attachment" "execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# ECR and CloudWatch access for proxy image
+# ECR, CloudWatch, and Secrets Manager (for proxy_status_secret) access
 resource "aws_iam_role_policy" "execution_custom" {
   name = "${var.project_name}-proxy-exec-custom-${var.environment}"
   role = aws_iam_role.execution.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
+    Statement = concat(
+      [
+        {
+          Effect   = "Allow"
+          Action   = ["ecr:GetAuthorizationToken"]
+          Resource = "*"
+        },
+        {
+          Effect   = "Allow"
+          Action   = ["ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"]
+          Resource = var.ecr_repository_arn
+        },
+        {
+          Effect   = "Allow"
+          Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+          Resource = "arn:aws:logs:*:*:log-group:${var.cloudwatch_log_group_name}:*"
+        }
+      ],
+      var.proxy_status_secret_arn != "" ? [{
         Effect   = "Allow"
-        Action   = ["ecr:GetAuthorizationToken"]
-        Resource = "*"
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"]
-        Resource = "${var.ecr_repository_arn}"
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-        Resource = "arn:aws:logs:*:*:log-group:${var.cloudwatch_log_group_name}:*"
-      }
-    ]
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = var.proxy_status_secret_arn
+      }] : []
+    )
   })
 }
 
@@ -319,12 +331,18 @@ resource "aws_ecs_task_definition" "proxy" {
       { containerPort = var.proxy_status_port, protocol = "tcp" }
     ]
 
-    environment = [
-      { name = "RDI_PROXY_WS_PORT", value = tostring(var.proxy_websocket_port) },
-      { name = "RDI_PROXY_HEALTH_PORT", value = tostring(var.proxy_health_port) },
-      { name = "RDI_PROXY_STATUS_PORT", value = tostring(var.proxy_status_port) },
-      { name = "RDI_PROXY_STATUS_SECRET", value = var.proxy_status_secret }
-    ]
+    environment = concat(
+      [
+        { name = "RDI_PROXY_WS_PORT", value = tostring(var.proxy_websocket_port) },
+        { name = "RDI_PROXY_HEALTH_PORT", value = tostring(var.proxy_health_port) },
+        { name = "RDI_PROXY_STATUS_PORT", value = tostring(var.proxy_status_port) },
+      ],
+      var.proxy_status_secret_arn != "" ? [] : [{ name = "RDI_PROXY_STATUS_SECRET", value = var.proxy_status_secret }]
+    )
+    # Prefer Secrets Manager so Lambda and proxy share the same secret (avoids 401 on session-status)
+    secrets = var.proxy_status_secret_arn != "" ? [
+      { name = "RDI_PROXY_STATUS_SECRET", valueFrom = "${var.proxy_status_secret_arn}:value::" }
+    ] : []
 
     logConfiguration = {
       logDriver = "awslogs"
