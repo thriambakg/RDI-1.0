@@ -230,9 +230,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       has_proxy: ${{ steps.check.outputs.has_proxy }}
+      use_proxy_ecs: ${{ steps.check.outputs.use_proxy_ecs }}
     steps:
       - uses: actions/checkout@v4
-      - name: Check for proxy source
+      - name: Check for proxy source and mode
         id: check
         run: |
           if [ -f "src/proxy/Cargo.toml" ]; then
@@ -240,6 +241,8 @@ jobs:
           else
             echo "has_proxy=false" >> $GITHUB_OUTPUT
           fi
+          USE_ECS=$(grep -E '^\s*use_proxy_ecs\s*=' terraform/environments/${{ needs.determine-environment.outputs.environment }}.auto.tfvars 2>/dev/null | sed 's/.*=\s*//' | tr -d ' "' || echo "true")
+          echo "use_proxy_ecs=${USE_ECS}" >> $GITHUB_OUTPUT
 
   check-agent:
     name: 'Check Agent'
@@ -261,32 +264,23 @@ jobs:
   build-proxy:
     name: 'Build Proxy Binary'
     needs: [determine-environment, check-proxy]
-    if: needs.check-proxy.outputs.has_proxy == 'true'
+    if: needs.check-proxy.outputs.has_proxy == 'true' && needs.check-proxy.outputs.use_proxy_ecs != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check use_proxy_ecs
-        id: ecs
-        run: |
-          USE_ECS=$(grep -E '^\s*use_proxy_ecs\s*=' terraform/environments/${{ needs.determine-environment.outputs.environment }}.auto.tfvars 2>/dev/null | sed 's/.*=\s*//' | tr -d ' "' || echo "true")
-          echo "use_ecs=${USE_ECS}" >> $GITHUB_OUTPUT
-
-      - name: Build proxy binary (EC2 only)
-        if: steps.ecs.outputs.use_ecs != 'true'
+      - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
 
       - name: Build proxy
-        if: steps.ecs.outputs.use_ecs != 'true'
         run: |
           cd src/proxy
           cargo build --release
           ls -la target/release/rdi-proxy
 
       - name: Upload Proxy Artifact
-        if: steps.ecs.outputs.use_ecs != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: proxy-binary-${{ needs.determine-environment.outputs.environment }}
@@ -529,6 +523,28 @@ jobs:
           CLUSTER="rdi-proxy-${{ needs.determine-environment.outputs.environment }}"
           SERVICE="rdi-proxy-${{ needs.determine-environment.outputs.environment }}"
           aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --force-new-deployment --region ${{ matrix.region }} || echo "ECS service not found, skipping"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Update agent on Wavelength instance
+        if: >
+          github.event.inputs.destroy != 'true' &&
+          needs.check-agent.outputs.has_agent == 'true'
+        run: |
+          cd terraform
+          INSTANCE_ID=$(terraform output -raw wavelength_instance_id 2>/dev/null || true)
+          if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "null" ]; then
+            echo "Updating agent on Wavelength instance $INSTANCE_ID..."
+            aws ssm send-command \
+              --instance-ids "$INSTANCE_ID" \
+              --document-name "AWS-RunShellScript" \
+              --parameters 'commands=["sudo /opt/rdi-agent/update-from-s3.sh"]' \
+              --region ${{ matrix.region }} \
+              --output text --query 'Command.CommandId' || echo "SSM send-command failed (instance may still be starting or pipeline lacks ssm:SendCommand)"
+          else
+            echo "No Wavelength instance (wavelength_instance_id empty); skipping agent update"
+          fi
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

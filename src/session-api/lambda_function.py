@@ -32,17 +32,16 @@ WAVELENGTH_CARRIER_IP = os.environ.get("WAVELENGTH_CARRIER_IP", "")
 MAVLINK_PORT = os.environ.get("MAVLINK_PORT", "18570")
 
 
-AGENT_API_PORT = "8080"  # RDI_AGENT_API_PORT on Wavelength (agent daemon)
+AGENT_API_PORT = "8080"  # RDI_AGENT_API_PORT on Wavelength (agent daemon - stays running; Lambda adds/removes sessions only)
 
 
-def _start_agent_on_wavelength(instance_id: str, proxy_url: str, session_id: str) -> None:
-    """Tell the agent daemon on Wavelength to add this session (open proxy connection). Option A: daemon + local API."""
+def _add_session_to_agent(instance_id: str, proxy_url: str, session_id: str) -> None:
+    """Add session to the running agent daemon. Daemon stays up; this opens a WebSocket bridge for this session."""
     if not instance_id or not proxy_url or not session_id:
-        print(f"[RDI Session] agent add skipped: missing instance_id={bool(instance_id)} proxy_url={bool(proxy_url)} session_id={bool(session_id)}")
+        print(f"[RDI Session] add session skipped: missing instance_id={bool(instance_id)} proxy_url={bool(proxy_url)} session_id={bool(session_id)}")
         return
-    print(f"[RDI Session] starting agent on Wavelength session_id={session_id} proxy_url={proxy_url} instance_id={instance_id} (agent will open WebSocket to proxy)")
+    print(f"[RDI Session] add session to agent daemon session_id={session_id} proxy_url={proxy_url} instance_id={instance_id}")
     body = json.dumps({"session_id": session_id, "proxy_url": proxy_url})
-    # One shell command: curl to local agent API (daemon must already be running on the instance)
     cmd = f"curl -s -X POST http://127.0.0.1:{AGENT_API_PORT}/sessions -H 'Content-Type: application/json' -d {shlex.quote(body)}"
     try:
         ssm = boto3.client("ssm", region_name=REGION)
@@ -52,16 +51,16 @@ def _start_agent_on_wavelength(instance_id: str, proxy_url: str, session_id: str
             Parameters={"commands": [cmd]},
         )
         cmd_id = result.get("Command", {}).get("CommandId", "")
-        print(f"[RDI Session] SSM agent add session_id={session_id} instance_id={instance_id} command_id={cmd_id} (WebSocket connection will appear in proxy/agent logs)")
+        print(f"[RDI Session] SSM add session session_id={session_id} instance_id={instance_id} command_id={cmd_id}")
     except Exception as e:
-        print(f"[RDI Session] SSM agent add failed session_id={session_id} instance_id={instance_id} error={e}")
+        print(f"[RDI Session] SSM add session failed session_id={session_id} instance_id={instance_id} error={e}")
 
 
-def _stop_agent_on_wavelength(instance_id: str, session_id: str) -> None:
-    """Tell the agent daemon on Wavelength to remove this session (close proxy connection)."""
+def _remove_session_from_agent(instance_id: str, session_id: str) -> None:
+    """Remove session from the running agent daemon. Daemon stays up; this closes the WebSocket bridge for this session."""
     if not instance_id or not session_id:
         return
-    print(f"[RDI Session] stopping agent on Wavelength session_id={session_id} instance_id={instance_id} (WebSocket to proxy will close)")
+    print(f"[RDI Session] remove session from agent daemon session_id={session_id} instance_id={instance_id}")
     url = f"http://127.0.0.1:{AGENT_API_PORT}/sessions/{session_id}"
     cmd = f"curl -s -X DELETE {shlex.quote(url)}"
     try:
@@ -71,9 +70,9 @@ def _stop_agent_on_wavelength(instance_id: str, session_id: str) -> None:
             DocumentName="AWS-RunShellScript",
             Parameters={"commands": [cmd]},
         )
-        print(f"[RDI Session] SSM agent remove session_id={session_id} instance_id={instance_id}")
+        print(f"[RDI Session] SSM remove session session_id={session_id} instance_id={instance_id}")
     except Exception as e:
-        print(f"[RDI Session] SSM agent remove failed session_id={session_id} error={e}")
+        print(f"[RDI Session] SSM remove session failed session_id={session_id} error={e}")
 
 
 def _notify_proxy_session_status(session_id: str, status: str) -> None:
@@ -240,9 +239,9 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     if not WAVELENGTH_INSTANCE_ID:
         print(f"[RDI Session] proxy-only mode: no WAVELENGTH_INSTANCE_ID; frontend may connect to proxy WebSocket without an edge agent (proxy acks PING with ping_ack + server_ts_ms)")
     elif WAVELENGTH_ZONE_ID and wavelength_zone_id != WAVELENGTH_ZONE_ID:
-        print(f"[RDI Session] agent not started: zone mismatch request_zone={wavelength_zone_id} deployed_zone={WAVELENGTH_ZONE_ID}")
+        print(f"[RDI Session] session not added to agent: zone mismatch request_zone={wavelength_zone_id} deployed_zone={WAVELENGTH_ZONE_ID}")
     else:
-        _start_agent_on_wavelength(WAVELENGTH_INSTANCE_ID, PROXY_ENDPOINT, session_id)
+        _add_session_to_agent(WAVELENGTH_INSTANCE_ID, PROXY_ENDPOINT, session_id)
 
     payload = {
         "session_id": session_id,
@@ -308,12 +307,12 @@ def _release_session(user_id: str, session_id: str | None, headers: dict, *, per
             return _response(404, {"error": "Session not found"}, headers)
         raise
 
-    print(f"[RDI Session] session released (user) session_id={session_id} -> idle (proxy will disconnect WebSocket; agent will close)")
+    print(f"[RDI Session] session released (user) session_id={session_id} -> idle (proxy disconnects; session removed from agent)")
     if USER_PROFILES_TABLE:
         _upsert_profile_update_status(dynamodb, user_id, session_id, "idle")
     _notify_proxy_session_status(session_id, "idle")
     if WAVELENGTH_INSTANCE_ID:
-        _stop_agent_on_wavelength(WAVELENGTH_INSTANCE_ID, session_id)
+        _remove_session_from_agent(WAVELENGTH_INSTANCE_ID, session_id)
 
     return _response(200, {"message": "Session released"}, headers)
 
@@ -338,7 +337,7 @@ def _idle_expired_sessions() -> None:
             if not user_id or not session_id:
                 continue
             try:
-                print(f"[RDI Session] idle_expired marking idle session_id={session_id} (idle_after passed; proxy/agent will disconnect)")
+                print(f"[RDI Session] idle_expired marking idle session_id={session_id} (idle_after passed; proxy disconnects; session removed from agent)")
                 dynamodb.update_item(
                     TableName=TABLE_NAME,
                     Key={"user_id": {"S": user_id}, "session_id": {"S": session_id}},
@@ -359,7 +358,7 @@ def _idle_expired_sessions() -> None:
                 _upsert_profile_update_status(dynamodb, user_id, session_id, "idle")
             _notify_proxy_session_status(session_id, "idle")
             if WAVELENGTH_INSTANCE_ID:
-                _stop_agent_on_wavelength(WAVELENGTH_INSTANCE_ID, session_id)
+                _remove_session_from_agent(WAVELENGTH_INSTANCE_ID, session_id)
 
 
 def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
@@ -373,6 +372,20 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
 
     dynamodb = boto3.client("dynamodb")
     now = int(time.time())
+
+    # When reactivating, we need wavelength_zone_id to start the agent
+    wavelength_zone_id = None
+    if status == "active" and WAVELENGTH_INSTANCE_ID:
+        try:
+            resp = dynamodb.get_item(
+                TableName=TABLE_NAME,
+                Key={"user_id": {"S": user_id}, "session_id": {"S": session_id}},
+                ProjectionExpression="wavelength_zone_id",
+            )
+            wavelength_zone_id = (resp.get("Item") or {}).get("wavelength_zone_id", {}).get("S")
+        except ClientError:
+            pass
+
     try:
         dynamodb.update_item(
             TableName=TABLE_NAME,
@@ -397,7 +410,11 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
         _upsert_profile_update_status(dynamodb, user_id, session_id, status)
     _notify_proxy_session_status(session_id, status)
     if status == "idle" and WAVELENGTH_INSTANCE_ID:
-        _stop_agent_on_wavelength(WAVELENGTH_INSTANCE_ID, session_id)
+        _remove_session_from_agent(WAVELENGTH_INSTANCE_ID, session_id)
+    elif status == "active" and WAVELENGTH_INSTANCE_ID and (
+        not WAVELENGTH_ZONE_ID or wavelength_zone_id == WAVELENGTH_ZONE_ID
+    ):
+        _add_session_to_agent(WAVELENGTH_INSTANCE_ID, PROXY_ENDPOINT, session_id)
 
     return _response(200, {"message": f"Session set to {status}"}, headers)
 
