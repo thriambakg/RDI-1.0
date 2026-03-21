@@ -14,6 +14,21 @@ import type { RelayRef } from '../../services/profileApi'
 
 const PING_BYTES = new Uint8Array([0x50, 0x49, 0x4e, 0x47]) // "PING"
 const PONG_BYTES = new Uint8Array([0x50, 0x4f, 0x4e, 0x47]) // "PONG"
+const RLOG_PREFIX = new Uint8Array([0x52, 0x4c, 0x4f, 0x47]) // "RLOG"
+const CTRL_PREFIX = new TextEncoder().encode('CTRL')
+
+function isRlogMessage(arr: Uint8Array): boolean {
+  return arr.length >= 4 && arr[0] === RLOG_PREFIX[0] && arr[1] === RLOG_PREFIX[1] && arr[2] === RLOG_PREFIX[2] && arr[3] === RLOG_PREFIX[3]
+}
+
+function sendDroneCommand(ws: WebSocket, cmd: string, alt?: number): void {
+  const payload = alt != null ? { cmd, alt } : { cmd }
+  const json = JSON.stringify(payload)
+  const full = new Uint8Array(CTRL_PREFIX.length + json.length)
+  full.set(CTRL_PREFIX)
+  full.set(new TextEncoder().encode(json), CTRL_PREFIX.length)
+  ws.send(full.buffer)
+}
 
 interface ConnectionDetailDialogProps {
   sessionId: string | null
@@ -40,18 +55,42 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
   } | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [pingLog, setPingLog] = useState<string[]>([])
+  const [logLines, setLogLines] = useState<string[]>([])
   const [pingRunning, setPingRunning] = useState(false)
   const [pingError, setPingError] = useState<string | null>(null)
+  const [ctrlError, setCtrlError] = useState<string | null>(null)
 
   const { getWs, openSession, connectionState, connectionError } = useSessionWebSocket()
+
+  const addLog = useCallback((line: string) => {
+    setLogLines((prev) => [...prev.slice(-98), line])
+  }, [])
+
+  const sendCommand = useCallback(
+    (cmd: 'takeoff' | 'land', alt?: number) => {
+      if (!data?.session_id) return
+      const ws = getWs(data.session_id)
+      if (!ws) {
+        setCtrlError('Connection not ready. Wait for the connection to establish.')
+        return
+      }
+      setCtrlError(null)
+      try {
+        sendDroneCommand(ws, cmd, alt)
+      } catch (e) {
+        setCtrlError(e instanceof Error ? e.message : 'Failed to send command')
+      }
+    },
+    [data?.session_id, getWs]
+  )
 
   useEffect(() => {
     if (!open || !sessionId) {
       setData(null)
       setError(null)
-      setPingLog([])
+      setLogLines([])
       setPingError(null)
+      setCtrlError(null)
       return
     }
     setLoading(true)
@@ -68,6 +107,31 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
     openSession(sessionId, data.endpoint)
   }, [open, sessionId, data?.endpoint, data?.status, openSession])
 
+  // Listen for agent log messages (RLOG) when WebSocket is connected
+  useEffect(() => {
+    if (!open || !sessionId || !data?.session_id) return
+    const ws = getWs(data.session_id)
+    if (!ws) return
+    const handler = (event: MessageEvent) => {
+      if (event.data instanceof ArrayBuffer) {
+        const arr = new Uint8Array(event.data)
+        if (isRlogMessage(arr)) {
+          try {
+            const json = JSON.parse(new TextDecoder().decode(arr.subarray(4)))
+            const msg = typeof json?.msg === 'string' ? json.msg : new TextDecoder().decode(arr.subarray(4))
+            addLog(msg)
+          } catch {
+            addLog(new TextDecoder().decode(arr.subarray(4)))
+          }
+        }
+      }
+    }
+    ws.onmessage = handler
+    return () => {
+      ws.onmessage = () => {}
+    }
+  }, [open, sessionId, data?.session_id, connectionState(sessionId ?? ''), getWs, addLog])
+
   const runPing = useCallback(() => {
     if (!data?.session_id) return
     const ws = getWs(data.session_id)
@@ -78,40 +142,41 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
 
     setPingRunning(true)
     setPingError(null)
-    setPingLog([])
 
     const start = performance.now()
-    const logs: string[] = []
-    const add = (line: string) => {
-      logs.push(line)
-      setPingLog([...logs])
-    }
+    const add = (line: string) => addLog(line)
     const elapsed = () => Math.round(performance.now() - start)
 
     let closed = false
+    const prevOnMessage = ws.onmessage
     const finish = (err?: string) => {
       if (closed) return
       closed = true
       setPingRunning(false)
       if (err) setPingError(err)
-      ws.onmessage = () => {}
+      ws.onmessage = prevOnMessage ?? (() => {})
     }
 
     add(`Pinging over existing connection…`)
-
-    const prevOnMessage = ws.onmessage
     ws.onmessage = (event: MessageEvent) => {
       const ms = elapsed()
-      // Binary PONG from proxy (same round-trip as "instance responded" text). Use arraybuffer (set in SessionWebSocketContext) for sync timing.
       const buf = event.data instanceof ArrayBuffer ? event.data : (event.data instanceof Blob ? null : null)
       if (buf) {
         const arr = new Uint8Array(buf)
+        if (isRlogMessage(arr)) {
+          try {
+            const json = JSON.parse(new TextDecoder().decode(arr.subarray(4)))
+            const msg = typeof json?.msg === 'string' ? json.msg : new TextDecoder().decode(arr.subarray(4))
+            addLog(msg)
+          } catch {
+            addLog(new TextDecoder().decode(arr.subarray(4)))
+          }
+        }
         if (arr.length === PONG_BYTES.length && arr.every((b, i) => b === PONG_BYTES[i])) {
           add(`2. Wavelength: instance responded (T+${ms}ms)`)
           add(`Success — full round-trip (client → proxy → Wavelength instance → proxy → client) (T+${ms}ms).`)
           finish()
         }
-        return
       }
       if (event.data instanceof Blob) {
         event.data.arrayBuffer().then((ab) => {
@@ -171,7 +236,7 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
       clearTimeout(t)
       if (!closed) ws.onmessage = prevOnMessage || (() => {})
     }
-  }, [data?.session_id, getWs])
+  }, [data?.session_id, getWs, addLog])
 
   const name = data?.drone_id ? data.drone_id.split('-').slice(0, -1).join('-') || data.drone_id : ''
   const wsState = sessionId ? connectionState(sessionId) : 'closed'
@@ -304,10 +369,18 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
                 <strong>Endpoint:</strong> {data.endpoint}
               </Typography>
               {(data.mavlink_host || data.mavlink_port != null) && (
-                <Typography sx={{ fontSize: '0.875rem', mt: 1, color: '#22c55e' }}>
-                  <strong>MAVLink target:</strong>{' '}
-                  {data.mavlink_host ?? '127.0.0.1'}:{data.mavlink_port ?? '—'}
-                </Typography>
+                <>
+                  <Typography sx={{ fontSize: '0.875rem', mt: 1, color: '#22c55e' }}>
+                    <strong>MAVLink target:</strong>{' '}
+                    {data.mavlink_host ?? '127.0.0.1'}:{data.mavlink_port ?? '—'}
+                  </Typography>
+                  {(data.mavlink_host === '127.0.0.1' || !data.mavlink_host) && (
+                    <Typography sx={{ fontSize: '0.75rem', mt: 0.5, color: '#94a3b8' }}>
+                      PX4 must run on the same machine as the agent (Wavelength instance). Local PX4 on your laptop
+                      will not receive commands — run PX4 SITL on the Wavelength EC2 instead.
+                    </Typography>
+                  )}
+                </>
               )}
               {data.carrier_ip && (
                 <Typography sx={{ fontSize: '0.875rem', mt: 0.5, color: '#94a3b8' }}>
@@ -324,6 +397,7 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
               size="small"
               onClick={runPing}
               disabled={pingRunning}
+              disableRipple
               sx={{
                 color: '#3b82f6',
                 borderColor: '#475569',
@@ -337,7 +411,43 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
             {pingError && (
               <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mb: 1 }}>{pingError}</Typography>
             )}
-            {pingLog.length > 0 && (
+            <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 1, mt: 2 }}>
+              Drone controls
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => sendCommand('takeoff', 2.5)}
+                disableRipple
+                sx={{
+                  color: '#22c55e',
+                  borderColor: '#475569',
+                  textTransform: 'none',
+                  '&:hover': { borderColor: '#22c55e' },
+                }}
+              >
+                Takeoff
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => sendCommand('land')}
+                disableRipple
+                sx={{
+                  color: '#eab308',
+                  borderColor: '#475569',
+                  textTransform: 'none',
+                  '&:hover': { borderColor: '#eab308' },
+                }}
+              >
+                Land
+              </Button>
+            </Box>
+            {ctrlError && (
+              <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mb: 1 }}>{ctrlError}</Typography>
+            )}
+            {logLines.length > 0 && (
               <Box
                 component="pre"
                 sx={{
@@ -353,7 +463,7 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
                   overflow: 'auto',
                 }}
               >
-                {pingLog.join('\n')}
+                {logLines.join('\n')}
               </Box>
             )}
           </>

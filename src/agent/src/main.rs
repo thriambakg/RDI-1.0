@@ -30,6 +30,7 @@ const DEFAULT_AGENT_API_PORT: u16 = 8080;
 const PING_BYTES: &[u8] = b"PING";
 const PONG_BYTES: &[u8] = b"PONG";
 const CTRL_PREFIX: &[u8] = b"CTRL";
+const RLOG_PREFIX: &[u8] = b"RLOG";
 const RECONNECT_DELAY_SECS: u64 = 5;
 const TARGET_SYSTEM: u8 = 1;
 const TARGET_COMPONENT: u8 = 1;
@@ -287,6 +288,7 @@ async fn run_session(
     let udp_send = Arc::clone(&udp);
 
     let (pong_tx, mut pong_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
     let to_ws = tokio::spawn(async move {
         let mut buf = [0u8; 2048];
@@ -305,6 +307,19 @@ async fn run_session(
                 pong = pong_rx.recv() => {
                     if let Some(data) = pong {
                         if ws_tx.send(Message::Binary(data)).await.is_err() {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                log_msg = log_rx.recv() => {
+                    if let Some(msg) = log_msg {
+                        let json = serde_json::json!({ "msg": msg }).to_string();
+                        let mut payload = Vec::with_capacity(RLOG_PREFIX.len() + json.len());
+                        payload.extend_from_slice(RLOG_PREFIX);
+                        payload.extend_from_slice(json.as_bytes());
+                        if ws_tx.send(Message::Binary(payload)).await.is_err() {
                             break;
                         }
                     } else {
@@ -332,8 +347,10 @@ async fn run_session(
                                 );
                                 if conn.send(&mavlink::MavHeader::default(), &MavMessage::COMMAND_LONG(arm_data)).await.is_err() {
                                     warn!("CTRL arm (pre-takeoff) send error");
+                                    let _ = log_tx.send("CTRL arm (pre-takeoff) send error".to_string());
                                 } else {
                                     info!("CTRL sent: arm (pre-takeoff)");
+                                    let _ = log_tx.send("CTRL sent: arm (pre-takeoff)".to_string());
                                 }
                                 tokio::time::sleep(Duration::from_millis(500)).await;
                                 let alt = ctrl.alt.unwrap_or(2.5);
@@ -343,8 +360,10 @@ async fn run_session(
                                 );
                                 if let Err(e) = conn.send(&mavlink::MavHeader::default(), &MavMessage::COMMAND_LONG(takeoff_data)).await {
                                     warn!("CTRL takeoff send error: {}", e);
+                                    let _ = log_tx.send(format!("CTRL takeoff send error: {}", e));
                                 } else {
                                     info!("CTRL sent: takeoff (alt={})", alt);
+                                    let _ = log_tx.send(format!("CTRL sent: takeoff (alt={})", alt));
                                 }
                             } else {
                                 let data = match cmd_lower.as_str() {
@@ -372,8 +391,10 @@ async fn run_session(
                                 let msg = MavMessage::COMMAND_LONG(data);
                                 if let Err(e) = conn.send(&mavlink::MavHeader::default(), &msg).await {
                                     warn!("CTRL send error: {}", e);
+                                    let _ = log_tx.send(format!("CTRL send error: {}", e));
                                 } else {
                                     info!("CTRL sent: {}", ctrl.cmd);
+                                    let _ = log_tx.send(format!("CTRL sent: {}", ctrl.cmd));
                                 }
                             }
                         } else {
