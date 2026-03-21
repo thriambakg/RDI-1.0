@@ -26,7 +26,7 @@ import { Delete as DeleteIcon, ExpandLess, ExpandMore, Folder, FolderOpen, MoreV
 import { useAuth } from '../../contexts/AuthContext'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import { getEnvironmentRegions } from '../../config'
-import { CreateConnectionDialog, CreateFolderDialog, ConnectionDetailDialog, RegisterRelayDialog } from '../../components/dialogues'
+import { CreateConnectionDialog, CreateFolderDialog, ConnectionDetailDialog, RegisterRelayDialog, RelayDetailDialog } from '../../components/dialogues'
 import { useProfile } from '../../contexts/ProfileContext'
 import {
   deleteFolder,
@@ -41,6 +41,7 @@ import {
   type RelayRef,
 } from '../../services/profileApi'
 import { deleteSession, releaseSession, activateSession, getSession } from '../../services/sessionApi'
+import { deleteRelay, updateRelayStatus } from '../../services/relayApi'
 import type { CreateSessionResponse } from '../../services/sessionApi'
 import './Console.css'
 
@@ -211,6 +212,11 @@ export default function Console() {
   const [connectionMenuAnchor, setConnectionMenuAnchor] = useState<{ sessionId: string; el: HTMLElement } | null>(null)
   const [confirmDeleteConnection, setConfirmDeleteConnection] = useState<string | null>(null)
   const [confirmDeleteFolderPath, setConfirmDeleteFolderPath] = useState<string[] | null>(null)
+  const [confirmDeleteRelay, setConfirmDeleteRelay] = useState<{ relay_id: string; wavelength_zone_id: string; name: string } | null>(null)
+  const [relayMenuAnchor, setRelayMenuAnchor] = useState<{ relay: RelayRef; el: HTMLElement } | null>(null)
+  const [selectedRelayId, setSelectedRelayId] = useState<string | null>(null)
+  const [detailRelay, setDetailRelay] = useState<RelayRef | null>(null)
+  const [relayDetailDialogOpen, setRelayDetailDialogOpen] = useState(false)
   const [detailSessionId, setDetailSessionId] = useState<string | null>(null)
   const [detailDialogOpen, setDetailDialogOpen] = useState(false)
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
@@ -234,7 +240,12 @@ export default function Console() {
   }
   const { logout } = useAuth()
 
-  const connections = collectSessions(hierarchy, selectedFolderPath)
+  const allConnections = collectSessions(hierarchy, selectedFolderPath)
+  const connections = selectedRelayId
+    ? allConnections.filter((c) => c.relay_id === selectedRelayId)
+    : allConnections
+  const relays = (profile?.relays ?? []).filter((r: RelayRef) => r.wavelength_zone_id === selectedZone.id)
+  const selectedRelay = selectedRelayId ? relays.find((r) => r.relay_id === selectedRelayId) : null
 
   const effectiveParentForNewFolder = selectedFolderPath.length > 0 ? selectedFolderPath : ['My Drones']
   const canCreateFolderUnderSelection = effectiveParentForNewFolder[0] !== 'Shared'
@@ -242,6 +253,16 @@ export default function Console() {
   const canCreateConnectionUnderSelection = effectiveParentForNewConnection[0] !== 'Shared'
 
   const { openSession: openSessionWs, closeSession: closeSessionWs, connectionState } = useSessionWebSocket()
+
+  const handleRelayClick = (relayId: string) => {
+    setSelectedRelayId((prev) => (prev === relayId ? null : relayId))
+  }
+
+  const handleRelayDoubleClick = (relay: RelayRef) => {
+    setDetailRelay(relay)
+    setSelectedRelayId(relay.relay_id)
+    setRelayDetailDialogOpen(true)
+  }
 
   // Keep WebSockets open for all active sessions. Connect as soon as hierarchy loads and on any hierarchy change.
   useEffect(() => {
@@ -274,8 +295,9 @@ export default function Console() {
         })
       )
       openSessionWs(res.session_id, res.endpoint)
+      if (res.relay_id) fetchProfile({ silent: true })
     },
-    [effectiveParentForNewConnection, updateHierarchy, openSessionWs]
+    [effectiveParentForNewConnection, updateHierarchy, openSessionWs, fetchProfile]
   )
 
   const handleFolderCreated = useCallback(
@@ -333,6 +355,7 @@ export default function Console() {
   const handleActivateConnection = async (sessionId: string) => {
     setConnectionMenuAnchor(null)
     setDeleteLoading(sessionId)
+    const session = allConnections.find((c) => c.session_id === sessionId)
     updateHierarchy((h) => updateSessionStatusInHierarchy(h, sessionId, 'active'))
     try {
       await activateSession(sessionId)
@@ -340,6 +363,7 @@ export default function Console() {
       if (data.status === 'active' && data.endpoint) {
         openSessionWs(sessionId, data.endpoint)
       }
+      if (session?.relay_id) await fetchProfile({ silent: true })
     } catch (err) {
       console.error('[RDI Console] Activate failed', err)
       const isNotFound = err instanceof Error && /not found/i.test(err.message)
@@ -371,6 +395,48 @@ export default function Console() {
     }
   }
 
+  const handleSetRelayIdle = async (relay: RelayRef) => {
+    setRelayMenuAnchor(null)
+    const childSessions = allConnections.filter((c) => c.relay_id === relay.relay_id && c.status === 'active')
+    setDeleteLoading(relay.relay_id)
+    try {
+      for (const s of childSessions) {
+        closeSessionWs(s.session_id)
+        updateHierarchy((h) => updateSessionStatusInHierarchy(h, s.session_id, 'idle'))
+        await releaseSession(s.session_id)
+      }
+      await updateRelayStatus(relay.relay_id, relay.wavelength_zone_id, 'idle')
+      await fetchProfile({ silent: false })
+    } catch (err) {
+      console.error('[RDI Console] Set relay idle failed', err)
+      showSessionError(err instanceof Error ? err.message : 'Set relay idle failed')
+    } finally {
+      setDeleteLoading(null)
+    }
+  }
+
+  const handleDeleteRelay = async () => {
+    if (!confirmDeleteRelay) return
+    const { relay_id, wavelength_zone_id } = confirmDeleteRelay
+    setConfirmDeleteRelay(null)
+    setRelayMenuAnchor(null)
+    if (selectedRelayId === relay_id) setSelectedRelayId(null)
+    if (detailRelay?.relay_id === relay_id) {
+      setDetailRelay(null)
+      setRelayDetailDialogOpen(false)
+    }
+    setDeleteLoading(relay_id)
+    try {
+      await deleteRelay(relay_id, wavelength_zone_id)
+      await fetchProfile({ silent: false })
+    } catch (err) {
+      console.error('[RDI Console] Delete relay failed', err)
+      showSessionError(err instanceof Error ? err.message : 'Delete relay failed')
+    } finally {
+      setDeleteLoading(null)
+    }
+  }
+
   const handleConnectionClick = (sessionId: string) => {
     setDetailSessionId(sessionId)
     setDetailDialogOpen(true)
@@ -383,7 +449,9 @@ export default function Console() {
 
   const handleZoneChange = (e: SelectChangeEvent<string>) => {
     const z = EDGE_ZONES.find((x) => x.id === e.target.value)
-    if (z) return // keep selectedZone for now
+    if (z) {
+      setSelectedRelayId(null)
+    }
   }
 
   return (
@@ -553,10 +621,16 @@ export default function Console() {
               fetchProfile({ silent: true })
             }}
           />
+          <RelayDetailDialog
+            relay={detailRelay}
+            open={relayDetailDialogOpen}
+            onClose={() => { setRelayDetailDialogOpen(false); setDetailRelay(null) }}
+          />
           <ConnectionDetailDialog
             sessionId={detailSessionId}
             open={detailDialogOpen}
             onClose={() => { setDetailDialogOpen(false); setDetailSessionId(null) }}
+            relays={relays}
           />
 
           <Menu
@@ -628,6 +702,75 @@ export default function Console() {
             </DialogActions>
           </Dialog>
 
+          <Menu
+            open={relayMenuAnchor !== null}
+            anchorEl={relayMenuAnchor?.el ?? null}
+            onClose={() => setRelayMenuAnchor(null)}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+            PaperProps={{
+              sx: {
+                backgroundColor: '#1e293b',
+                border: '1px solid #334155',
+                '& .MuiMenuItem-root': { color: '#e2e8f0' },
+              },
+            }}
+          >
+            <MenuItem
+              onClick={() => relayMenuAnchor && handleSetRelayIdle(relayMenuAnchor.relay)}
+            >
+              <PauseCircleOutline sx={{ fontSize: 18, mr: 1 }} /> Set idle (idle all connections)
+            </MenuItem>
+            <MenuItem
+              onClick={() => {
+                if (relayMenuAnchor) {
+                  setConfirmDeleteRelay({
+                    relay_id: relayMenuAnchor.relay.relay_id,
+                    wavelength_zone_id: relayMenuAnchor.relay.wavelength_zone_id,
+                    name: relayMenuAnchor.relay.name,
+                  })
+                  setRelayMenuAnchor(null)
+                }
+              }}
+              sx={{ color: '#f87171' }}
+            >
+              <DeleteIcon sx={{ fontSize: 18, mr: 1 }} /> Delete
+            </MenuItem>
+          </Menu>
+
+          <Dialog
+            open={confirmDeleteRelay !== null}
+            onClose={() => setConfirmDeleteRelay(null)}
+            PaperProps={{
+              sx: {
+                backgroundColor: '#1e293b',
+                border: '1px solid #334155',
+                color: '#f8fafc',
+              },
+            }}
+          >
+            <DialogTitle>Delete relay</DialogTitle>
+            <DialogContent>
+              <Typography>
+                Are you sure you want to delete the relay &quot;{confirmDeleteRelay?.name ?? ''}&quot;?
+                Connections using this relay will need to be updated.
+              </Typography>
+            </DialogContent>
+            <DialogActions sx={{ borderTop: '1px solid #334155', p: 2 }}>
+              <Button onClick={() => setConfirmDeleteRelay(null)} sx={{ color: '#94a3b8' }} disableRipple>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleDeleteRelay}
+                sx={{ color: '#f87171' }}
+                disableRipple
+                disabled={confirmDeleteRelay !== null && deleteLoading === confirmDeleteRelay.relay_id}
+              >
+                Delete
+              </Button>
+            </DialogActions>
+          </Dialog>
+
           <Dialog
             open={confirmDeleteFolderPath !== null && confirmDeleteFolderPath.length > 0}
             onClose={() => setConfirmDeleteFolderPath(null)}
@@ -657,12 +800,76 @@ export default function Console() {
           </Dialog>
 
           <Typography component="h2" variant="subtitle2" sx={{ color: '#64748b', mb: 1, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Connections
+            Relays
           </Typography>
+          <div className="drones-grid">
+            {relays.length === 0 ? (
+              <Typography sx={{ color: '#94a3b8', fontSize: '0.875rem' }}>
+                No relays for this zone
+              </Typography>
+            ) : (
+              relays.map((r) => (
+                <Box
+                  key={r.relay_id}
+                  className="drone-card"
+                  sx={{
+                    position: 'relative',
+                    cursor: 'pointer',
+                    borderColor: selectedRelayId === r.relay_id ? '#3b82f6' : undefined,
+                    borderWidth: selectedRelayId === r.relay_id ? 2 : undefined,
+                    backgroundColor: selectedRelayId === r.relay_id ? 'rgba(59, 130, 246, 0.1)' : undefined,
+                  }}
+                  onClick={() => handleRelayClick(r.relay_id)}
+                  onDoubleClick={() => handleRelayDoubleClick(r)}
+                >
+                  <IconButton
+                    aria-label="Relay options"
+                    onClick={(e) => { e.stopPropagation(); setRelayMenuAnchor({ relay: r, el: e.currentTarget }) }}
+                    disabled={deleteLoading === r.relay_id}
+                    sx={{
+                      position: 'absolute',
+                      top: 4,
+                      right: 4,
+                      color: '#94a3b8',
+                      p: 0.5,
+                      '&:hover': { color: '#e2e8f0', backgroundColor: 'rgba(148, 163, 184, 0.1)' },
+                    }}
+                    size="small"
+                  >
+                    <MoreVert sx={{ fontSize: 18 }} />
+                  </IconButton>
+                  <div className={`status-dot ${r.status === 'online' ? 'connected' : r.status === 'idle' ? 'idle' : 'offline'}`} />
+                  <Typography variant="subtitle1" sx={{ m: '0.5rem 0 0.25rem', color: '#f8fafc', pr: 3 }}>{r.name}</Typography>
+                  <Typography component="span" sx={{ fontSize: '0.8rem', color: r.status === 'online' ? '#22c55e' : r.status === 'idle' ? '#eab308' : '#94a3b8' }}>
+                    {r.status === 'online' ? 'Online' : r.status === 'idle' ? 'Idle' : 'Offline'}
+                  </Typography>
+                  <Typography component="span" sx={{ fontSize: '0.75rem', color: '#64748b', display: 'block', mt: 0.25 }}>
+                    {r.relay_type}
+                  </Typography>
+                </Box>
+              ))
+            )}
+          </div>
+
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 3, mb: 1, flexWrap: 'wrap' }}>
+            <Typography component="h2" variant="subtitle2" sx={{ color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {selectedRelay ? `Connections for ${selectedRelay.name}` : 'Connections'}
+            </Typography>
+            {selectedRelay && (
+              <Button
+                size="small"
+                onClick={() => setSelectedRelayId(null)}
+                disableRipple
+                sx={{ color: '#64748b', textTransform: 'none', fontSize: '0.75rem', minWidth: 'auto', p: 0 }}
+              >
+                Show all
+              </Button>
+            )}
+          </Box>
           <div className="drones-grid">
             {connections.length === 0 ? (
               <Typography sx={{ color: '#94a3b8', fontSize: '0.875rem' }}>
-                No connections in this folder
+                {selectedRelay ? 'No connections for this relay' : 'No connections in this folder'}
               </Typography>
             ) : (
               connections.map((c) => (
@@ -693,6 +900,14 @@ export default function Console() {
                   <Typography component="span" sx={{ fontSize: '0.8rem', color: c.status === 'idle' ? '#eab308' : '#94a3b8' }}>
                     {c.status === 'active' ? 'Active' : c.status === 'idle' ? 'Idle' : c.status}
                   </Typography>
+                  {c.relay_id && (() => {
+                    const relay = relays.find((r) => r.relay_id === c.relay_id)
+                    return relay ? (
+                      <Typography component="span" sx={{ fontSize: '0.75rem', color: '#64748b', display: 'block', mt: 0.25 }}>
+                        Relay: {relay.name}
+                      </Typography>
+                    ) : null
+                  })()}
                 </Box>
               ))
             )}

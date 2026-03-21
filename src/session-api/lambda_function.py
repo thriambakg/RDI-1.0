@@ -106,6 +106,58 @@ def _fetch_relay_config(dynamodb, user_id: str, relay_id: str, wavelength_zone_i
     return out if out else None
 
 
+def _update_relay_status(
+    dynamodb, user_id: str, relay_id: str, wavelength_zone_id: str, status: str
+) -> None:
+    """Set relay status in registry and user profile. Status: online, idle, or offline."""
+    if not RELAY_REGISTRY_TABLE or not relay_id or status not in ("online", "idle", "offline"):
+        return
+    try:
+        dynamodb.update_item(
+            TableName=RELAY_REGISTRY_TABLE,
+            Key={
+                "wavelength_zone_id": {"S": wavelength_zone_id},
+                "relay_id": {"S": relay_id},
+            },
+            UpdateExpression="SET #status = :s, last_seen = :now",
+            ConditionExpression="user_id = :uid",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={
+                ":s": {"S": status},
+                ":now": {"N": str(int(time.time()))},
+                ":uid": {"S": user_id},
+            },
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            _log("update_relay_status skipped", relay_id=relay_id, reason="not found or wrong user")
+        return
+    if USER_PROFILES_TABLE:
+        try:
+            resp = dynamodb.get_item(
+                TableName=USER_PROFILES_TABLE,
+                Key={"user_id": {"S": user_id}},
+                ProjectionExpression="relays",
+            )
+            relays = _from_dynamo((resp.get("Item") or {}).get("relays")) or []
+            if not isinstance(relays, list):
+                relays = []
+            out = []
+            for r in relays:
+                if isinstance(r, dict) and r.get("relay_id") == relay_id and r.get("wavelength_zone_id") == wavelength_zone_id:
+                    r = {**r, "status": status}
+                out.append(r)
+            dynamodb.update_item(
+                TableName=USER_PROFILES_TABLE,
+                Key={"user_id": {"S": user_id}},
+                UpdateExpression="SET relays = :r",
+                ExpressionAttributeValues={":r": _to_dynamo(out)},
+            )
+        except ClientError:
+            pass
+    _log("relay status updated", relay_id=relay_id, status=status)
+
+
 def _add_session_to_agent(
     instance_id: str, proxy_url: str, session_id: str, relay_config: dict | None = None
 ) -> None:
@@ -390,6 +442,8 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
         )
     else:
         _add_session_to_agent(WAVELENGTH_INSTANCE_ID, PROXY_ENDPOINT, session_id, relay_config)
+    if relay_id and wavelength_zone_id:
+        _update_relay_status(dynamodb, user_id, relay_id, wavelength_zone_id, "online")
 
     payload = {
         "session_id": session_id,
@@ -536,16 +590,19 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
     dynamodb = boto3.client("dynamodb")
     now = int(time.time())
 
-    # When reactivating, we need wavelength_zone_id to start the agent
+    # When reactivating, we need wavelength_zone_id to start the agent, and relay_id to update relay status
     wavelength_zone_id = None
-    if status == "active" and WAVELENGTH_INSTANCE_ID:
+    session_relay_id = None
+    if status == "active":
         try:
             resp = dynamodb.get_item(
                 TableName=TABLE_NAME,
                 Key={"user_id": {"S": user_id}, "session_id": {"S": session_id}},
-                ProjectionExpression="wavelength_zone_id",
+                ProjectionExpression="wavelength_zone_id, relay_id",
             )
-            wavelength_zone_id = (resp.get("Item") or {}).get("wavelength_zone_id", {}).get("S")
+            item = resp.get("Item") or {}
+            wavelength_zone_id = item.get("wavelength_zone_id", {}).get("S")
+            session_relay_id = item.get("relay_id", {}).get("S")
         except ClientError:
             pass
 
@@ -579,6 +636,8 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
         not WAVELENGTH_ZONE_ID or wavelength_zone_id == WAVELENGTH_ZONE_ID
     ):
         _add_session_to_agent(WAVELENGTH_INSTANCE_ID, PROXY_ENDPOINT, session_id)
+    if status == "active" and session_relay_id and wavelength_zone_id:
+        _update_relay_status(dynamodb, user_id, session_relay_id, wavelength_zone_id, "online")
 
     _log("patch_session done", session_id=session_id, status=status)
     return _response(200, {"message": f"Session set to {status}"}, headers)

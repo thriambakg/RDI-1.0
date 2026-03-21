@@ -59,6 +59,24 @@ export async function listRelays(wavelengthZoneId?: string): Promise<{ relays: R
   return res.json()
 }
 
+export async function updateRelayStatus(
+  relay_id: string,
+  wavelength_zone_id: string,
+  status: 'online' | 'idle' | 'offline'
+): Promise<void> {
+  const url = `${getApiBaseUrl()}/relays`
+  const headers = await getAuthHeaders()
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ relay_id, wavelength_zone_id, status }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as { error?: string }).error || `Update relay status failed: ${res.status}`)
+  }
+}
+
 export async function deleteRelay(relay_id: string, wavelength_zone_id: string): Promise<void> {
   const url = `${getApiBaseUrl()}/relays`
   const headers = await getAuthHeaders()

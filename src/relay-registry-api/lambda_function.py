@@ -234,6 +234,12 @@ def _update_relay(user_id: str, body: dict, headers: dict) -> dict:
         config = body["config"] if isinstance(body["config"], dict) else {}
         updates.append("config = :config")
         values[":config"] = {"S": json.dumps(config)}
+    if "status" in body:
+        status = (body.get("status") or "").strip().lower()
+        if status in ("online", "idle", "offline"):
+            updates.append("status = :status")
+            values[":status"] = {"S": status}
+            updates.append("last_seen = :now")
 
     if len(updates) <= 1:
         return _response(200, {"message": "No updates"}, headers)
@@ -251,14 +257,22 @@ def _update_relay(user_id: str, body: dict, headers: dict) -> dict:
     except ClientError:
         raise
 
-    if USER_PROFILES_TABLE and "name" in body:
-        _upsert_profile_update_relay(
-            dynamodb,
-            user_id,
-            relay_id=relay_id,
-            wavelength_zone_id=wavelength_zone_id,
-            updates={"name": (body.get("name") or "").strip() or "relay"},
-        )
+    if USER_PROFILES_TABLE:
+        profile_updates = {}
+        if "name" in body:
+            profile_updates["name"] = (body.get("name") or "").strip() or "relay"
+        if "status" in body:
+            status = (body.get("status") or "").strip().lower()
+            if status in ("online", "idle", "offline"):
+                profile_updates["status"] = status
+        if profile_updates:
+            _upsert_profile_update_relay(
+                dynamodb,
+                user_id,
+                relay_id=relay_id,
+                wavelength_zone_id=wavelength_zone_id,
+                updates=profile_updates,
+            )
 
     _log("relay updated", relay_id=relay_id)
     return _response(200, {"message": "Relay updated"}, headers)

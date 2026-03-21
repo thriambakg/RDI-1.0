@@ -10,6 +10,7 @@ import {
 import { useCallback, useEffect, useState } from 'react'
 import { getSession } from '../../services/sessionApi'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
+import type { RelayRef } from '../../services/profileApi'
 
 const PING_BYTES = new Uint8Array([0x50, 0x49, 0x4e, 0x47]) // "PING"
 const PONG_BYTES = new Uint8Array([0x50, 0x4f, 0x4e, 0x47]) // "PONG"
@@ -18,6 +19,7 @@ interface ConnectionDetailDialogProps {
   sessionId: string | null
   open: boolean
   onClose: () => void
+  relays?: RelayRef[]
 }
 
 interface HopLog {
@@ -25,12 +27,13 @@ interface HopLog {
   message: string
 }
 
-export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionDetailDialogProps) {
+export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }: ConnectionDetailDialogProps) {
   const [data, setData] = useState<{
     session_id: string
     drone_id: string
     endpoint: string
     status: string
+    relay_id?: string
     carrier_ip?: string
     mavlink_port?: string
   } | null>(null)
@@ -284,6 +287,18 @@ export function ConnectionDetailDialog({ sessionId, open, onClose }: ConnectionD
               <Typography sx={{ fontSize: '0.875rem', mb: 1 }}>
                 <strong>Status:</strong> {data.status}
               </Typography>
+              {data.relay_id && (() => {
+                const relay = relays.find((r) => r.relay_id === data.relay_id)
+                return relay ? (
+                  <Typography sx={{ fontSize: '0.875rem', mb: 1 }}>
+                    <strong>Relay:</strong> {relay.name}
+                  </Typography>
+                ) : (
+                  <Typography sx={{ fontSize: '0.875rem', mb: 1 }}>
+                    <strong>Relay ID:</strong> {data.relay_id}
+                  </Typography>
+                )
+              })()}
               <Typography sx={{ fontSize: '0.875rem', color: '#94a3b8' }}>
                 <strong>Endpoint:</strong> {data.endpoint}
               </Typography>

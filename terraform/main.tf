@@ -398,7 +398,7 @@ resource "aws_iam_policy" "session_api_dynamodb" {
       },
       {
         Effect   = "Allow"
-        Action   = ["dynamodb:GetItem"]
+        Action   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
         Resource = ["arn:aws:dynamodb:${local.region}:${data.aws_caller_identity.current.account_id}:table/${local.relay_registry_tbl}"]
       }
     ]
