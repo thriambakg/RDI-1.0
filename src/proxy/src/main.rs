@@ -3,6 +3,9 @@
 //! Respects session status from Lambda: only active sessions are allowed;
 //! idle sessions are disconnected and cleared from memory.
 
+mod connection_routing;
+
+use connection_routing::{resolve_agent_tx, resolve_frontend_tx};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -118,17 +121,17 @@ impl AsyncWrite for PrefixedStream {
 }
 
 #[derive(Clone)]
-struct Peer {
-    tx: mpsc::UnboundedSender<Vec<u8>>,
+pub(crate) struct Peer {
+    pub(crate) tx: mpsc::UnboundedSender<Vec<u8>>,
 }
 
 /// Per-connection close signal: when sent, the WS handler exits and removes from Sessions.
 type CloseTx = mpsc::Sender<()>;
 
 #[derive(Default)]
-struct Sessions {
-    agents: HashMap<String, (Peer, CloseTx)>,
-    frontends: HashMap<String, (Peer, CloseTx)>,
+pub(crate) struct Sessions {
+    pub(crate) agents: HashMap<String, (Peer, CloseTx)>,
+    pub(crate) frontends: HashMap<String, (Peer, CloseTx)>,
 }
 
 /// Session status from Lambda: active = allow traffic, idle = reject new and disconnect existing.
@@ -498,7 +501,7 @@ async fn handle_ws(
                 Ok(Message::Binary(data)) => {
                     if data == PING_BYTES {
                         // Frontend sent PING: forward to agent (or reply no agent).
-                        let peer_tx = sessions_for_peer.read().await.agents.get(&session_id_for_peer).map(|(p, _)| p.tx.clone());
+                        let peer_tx = resolve_agent_tx(&*sessions_for_peer.read().await, &session_id_for_peer);
                         if let Some(tx) = peer_tx {
                             info!("PING received session_id={} forwarding to agent", session_id_for_peer);
                             let _ = tx.send(data.to_vec());
@@ -515,7 +518,7 @@ async fn handle_ws(
                         }
                     } else if role_for_peer == "agent" {
                         // Agent sent binary (e.g. PONG, RLOG): forward to frontend.
-                        let peer_tx = sessions_for_peer.read().await.frontends.get(&session_id_for_peer).map(|(p, _)| p.tx.clone());
+                        let peer_tx = resolve_frontend_tx(&*sessions_for_peer.read().await, &session_id_for_peer);
                         if let Some(tx) = peer_tx {
                             let _ = tx.send(data);
                         }
@@ -523,7 +526,7 @@ async fn handle_ws(
                         // Frontend sent CTRL: proxy handles (convert to MAVLink), agent just forwards.
                         if let Ok(json) = std::str::from_utf8(&data[CTRL_PREFIX.len()..]) {
                             if let Ok(ctrl) = serde_json::from_str::<CtrlCmd>(json) {
-                                let agent_tx = sessions_for_peer.read().await.agents.get(&session_id_for_peer).map(|(p, _)| p.tx.clone());
+                                let agent_tx = resolve_agent_tx(&*sessions_for_peer.read().await, &session_id_for_peer);
                                 if let Some(tx) = agent_tx {
                                     let cmd_lower = ctrl.cmd.to_lowercase();
                                     if cmd_lower == "takeoff" {
@@ -578,7 +581,7 @@ async fn handle_ws(
                         }
                     } else {
                         // Frontend sent other binary (e.g. MAVLink): forward to agent.
-                        let peer_tx = sessions_for_peer.read().await.agents.get(&session_id_for_peer).map(|(p, _)| p.tx.clone());
+                        let peer_tx = resolve_agent_tx(&*sessions_for_peer.read().await, &session_id_for_peer);
                         if let Some(tx) = peer_tx {
                             let _ = tx.send(data);
                         }

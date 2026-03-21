@@ -1,7 +1,8 @@
-//! RDI Agent daemon - long-lived process on Wavelength EC2.
-//! Exposes HTTP API (localhost) to add/remove sessions. Each session maintains a WebSocket
-//! connection to the proxy and bridges to local MAVLink UDP.
-//! Lambda uses SSM to call POST /sessions (add) and DELETE /sessions/:id (remove).
+//! RDI Agent - bridges proxy WebSocket to local PX4 MAVLink UDP.
+//!
+//! Modes:
+//! - Daemon (Wavelength EC2): HTTP API; Lambda uses SSM to add/remove sessions.
+//! - Standalone (local Path 1): env RDI_SESSION_ID + RDI_PROXY_URL; single session, no HTTP.
 //!
 //! Agent is a byte-level forwarder: proxy handles CTRL->MAVLink conversion; agent forwards
 //! all binary (except PING->PONG) to PX4 UDP.
@@ -51,6 +52,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
+
+    // Standalone mode: RDI_SESSION_ID + RDI_PROXY_URL => run single session, no HTTP API.
+    let session_id = env::var("RDI_SESSION_ID").ok();
+    let proxy_url = env::var("RDI_PROXY_URL").ok().and_then(|s| {
+        let s = s.trim();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
+    });
+    if let (Some(sid), Some(url)) = (session_id, proxy_url) {
+        let mavlink_host: String = env::var("RDI_MAVLINK_HOST")
+            .unwrap_or_else(|_| "127.0.0.1".to_string());
+        let mavlink_port: u16 = env::var("RDI_MAVLINK_PORT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_MAVLINK_PORT);
+        let mavlink_addr = format!("{}:{}", mavlink_host, mavlink_port);
+        let ws_url = if url.starts_with("wss://") || url.starts_with("ws://") {
+            url
+        } else {
+            format!("wss://{}", url)
+        };
+        info!(
+            "RDI agent standalone mode: session_id={} proxy={} mavlink={}",
+            sid, ws_url, mavlink_addr
+        );
+        run_session_loop(&ws_url, &sid, &mavlink_addr).await;
+        return Ok(());
+    }
 
     let api_port: u16 = env::var("RDI_AGENT_API_PORT")
         .ok()

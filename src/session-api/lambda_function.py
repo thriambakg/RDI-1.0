@@ -71,7 +71,7 @@ print(
 
 
 def _fetch_relay_config(dynamodb, user_id: str, relay_id: str, wavelength_zone_id: str) -> dict | None:
-    """Fetch relay from registry; return config (mavlink_host, mavlink_port) if user owns it and has MAVLink config."""
+    """Fetch relay from registry; return config (relay_type, mavlink_host) if user owns it."""
     if not RELAY_REGISTRY_TABLE or not relay_id:
         return None
     try:
@@ -89,19 +89,18 @@ def _fetch_relay_config(dynamodb, user_id: str, relay_id: str, wavelength_zone_i
         return None
     if item.get("user_id", {}).get("S") != user_id:
         return None
+    out: dict = {
+        "relay_type": (item.get("relay_type", {}).get("S") or "local").strip().lower(),
+    }
     config_raw = item.get("config", {}).get("S")
-    if not config_raw:
-        return None
-    try:
-        config = json.loads(config_raw)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    if not isinstance(config, dict):
-        return None
-    out = {}
-    if config.get("mavlink_host"):
-        out["mavlink_host"] = str(config["mavlink_host"])
-    return out if out else None
+    if config_raw:
+        try:
+            config = json.loads(config_raw)
+            if isinstance(config, dict) and config.get("mavlink_host"):
+                out["mavlink_host"] = str(config["mavlink_host"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return out
 
 
 def _update_relay_status(
@@ -451,6 +450,8 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
             request_zone=wavelength_zone_id,
             deployed_zone=WAVELENGTH_ZONE_ID,
         )
+    elif (relay_config or {}).get("relay_type") == "local":
+        _log("add_session skipped", reason="local_relay", session_id=session_id)
     else:
         _add_session_to_agent(
             WAVELENGTH_INSTANCE_ID,
@@ -472,6 +473,8 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
         payload["relay_id"] = relay_id
     if relay_config:
         payload["relay_config"] = relay_config
+    if relay_config and relay_config.get("relay_type"):
+        payload["relay_type"] = relay_config["relay_type"]
     # Effective mavlink target: host from relay, port from session metadata (per-connection)
     metadata = body.get("metadata")
     eff_port = None
@@ -620,9 +623,11 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
     dynamodb = boto3.client("dynamodb")
     now = int(time.time())
 
-    # When reactivating, we need wavelength_zone_id to start the agent, and relay_id to update relay status
+    # When reactivating, we need wavelength_zone_id to start the agent, relay_id to update relay status,
+    # and relay_type to skip Wavelength for local relays.
     wavelength_zone_id = None
     session_relay_id = None
+    session_relay_config = None
     if status == "active":
         try:
             resp = dynamodb.get_item(
@@ -633,6 +638,10 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
             item = resp.get("Item") or {}
             wavelength_zone_id = item.get("wavelength_zone_id", {}).get("S")
             session_relay_id = item.get("relay_id", {}).get("S")
+            if session_relay_id and wavelength_zone_id and RELAY_REGISTRY_TABLE:
+                session_relay_config = _fetch_relay_config(
+                    dynamodb, user_id, session_relay_id, wavelength_zone_id
+                )
         except ClientError:
             pass
 
@@ -665,7 +674,12 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
     elif status == "active" and WAVELENGTH_INSTANCE_ID and (
         not WAVELENGTH_ZONE_ID or wavelength_zone_id == WAVELENGTH_ZONE_ID
     ):
-        _add_session_to_agent(WAVELENGTH_INSTANCE_ID, PROXY_ENDPOINT, session_id)
+        # Skip Wavelength for local relays; add for sim_relay or legacy (no relay_id)
+        relay_type = (session_relay_config or {}).get("relay_type")
+        if session_relay_id and relay_type == "local":
+            _log("add_session skipped", reason="local_relay", session_id=session_id)
+        else:
+            _add_session_to_agent(WAVELENGTH_INSTANCE_ID, PROXY_ENDPOINT, session_id)
     if status == "active" and session_relay_id and wavelength_zone_id:
         _update_relay_status(dynamodb, user_id, session_relay_id, wavelength_zone_id, "online")
 
