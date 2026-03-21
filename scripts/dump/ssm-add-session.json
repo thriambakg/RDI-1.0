@@ -1,0 +1,6 @@
+{
+  "commands": [
+    "echo '{\"session_id\":\"6f649230-b6c7-4190-9c88-f51e79078833\",\"proxy_url\":\"wss://wss.rdistaging.com\"}' > /tmp/session-add.json",
+    "curl -s -X POST http://127.0.0.1:8080/sessions -H 'Content-Type: application/json' -d @/tmp/session-add.json"
+  ]
+}

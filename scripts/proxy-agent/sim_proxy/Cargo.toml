@@ -1,0 +1,13 @@
+[package]
+name = "sim-proxy"
+version = "0.1.0"
+edition = "2021"
+description = "Local sim of RDI proxy (ports 8765 WS, 8766 health, 8767 status API)"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde_json = "1"

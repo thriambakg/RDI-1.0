@@ -1,32 +1,35 @@
-import { getRegionsForEnvironment } from './config/environment-regions'
-
-function getDefaultEnvironment(): string {
-  if (import.meta.env.VITE_ENVIRONMENT) return import.meta.env.VITE_ENVIRONMENT
-  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-    return 'production'
-  }
-  return 'staging'
-}
+import { getEdgeZonesForEnvironment } from './config/environment-regions'
+import {
+  getApiGatewayUrl,
+  getAwsRegion,
+  getEnvironmentConfig,
+  getCognitoUserPoolId,
+  getCognitoClientId,
+  getCognitoDomain,
+  getDefaultRedirectSignIn,
+  getDefaultRedirectSignOut,
+} from './config/environment'
 
 export function getConfig(): RDIConfig {
-  const cfg = (typeof window !== 'undefined' && window.__RDI_CONFIG__) || {
-    AWS_REGION: import.meta.env.VITE_AWS_REGION || 'us-east-1',
-    COGNITO_USER_POOL_ID: import.meta.env.VITE_COGNITO_USER_POOL_ID || '',
-    COGNITO_CLIENT_ID: import.meta.env.VITE_COGNITO_USER_POOL_CLIENT_ID || '',
-    COGNITO_DOMAIN: import.meta.env.VITE_COGNITO_DOMAIN || '',
-    REDIRECT_SIGN_IN: import.meta.env.VITE_REDIRECT_SIGN_IN || 'http://localhost:5173/auth/callback',
-    REDIRECT_SIGN_OUT: import.meta.env.VITE_REDIRECT_SIGN_OUT || 'http://localhost:5173',
-    API_GATEWAY_URL: import.meta.env.VITE_API_GATEWAY_URL || '',
-    WEBSOCKET_URL: import.meta.env.VITE_WEBSOCKET_URL || '',
-    ENVIRONMENT: getDefaultEnvironment(),
-    ENABLE_GOOGLE_AUTH: import.meta.env.VITE_ENABLE_GOOGLE_AUTH === 'true' || false,
+  const envConfig = getEnvironmentConfig();
+  const runtime = typeof window !== 'undefined' ? window.__RDI_CONFIG__ : undefined;
+  return {
+    AWS_REGION: getAwsRegion(),
+    COGNITO_USER_POOL_ID: getCognitoUserPoolId(),
+    COGNITO_CLIENT_ID: getCognitoClientId(),
+    COGNITO_DOMAIN: getCognitoDomain(),
+    REDIRECT_SIGN_IN: runtime?.REDIRECT_SIGN_IN ?? import.meta.env.VITE_REDIRECT_SIGN_IN ?? getDefaultRedirectSignIn(),
+    REDIRECT_SIGN_OUT: runtime?.REDIRECT_SIGN_OUT ?? import.meta.env.VITE_REDIRECT_SIGN_OUT ?? getDefaultRedirectSignOut(),
+    API_GATEWAY_URL: getApiGatewayUrl(),
+    WEBSOCKET_URL: '', // Not used; WebSocket endpoint is per-session from POST /sessions (ALB/Proxy)
+    ENVIRONMENT: envConfig.environment,
+    ENABLE_GOOGLE_AUTH: runtime?.ENABLE_GOOGLE_AUTH ?? (import.meta.env.VITE_ENABLE_GOOGLE_AUTH === 'true'),
   };
-  return cfg;
 }
 
-export function getEnvironmentRegions(): { environment: string; regions: ReturnType<typeof getRegionsForEnvironment> } {
+export function getEnvironmentRegions(): { environment: string; regions: ReturnType<typeof getEdgeZonesForEnvironment> } {
   const config = getConfig()
-  const environment = config.ENVIRONMENT || getDefaultEnvironment()
-  const regions = getRegionsForEnvironment(environment)
+  const environment = config.ENVIRONMENT || getEnvironmentConfig().environment
+  const regions = getEdgeZonesForEnvironment(environment)
   return { environment, regions }
 }

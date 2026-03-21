@@ -1,9 +1,7 @@
 import { useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
-import '@aws-amplify/ui-react/styles.css'
 import Landing from './pages/landing'
-import Console from './pages/console'
-import { AuthModal } from './components/authmodals'
+import AuthCallbackPage from './pages/AuthCallbackPage'
 import { ConsoleRoute } from './components/ConsoleRoute'
 import { getConfig, getEnvironmentRegions } from './config'
 
@@ -31,9 +29,7 @@ export default function App() {
         path="/auth/callback"
         element={
           hasAuth ? (
-            <AuthModal socialProviders={socialProviders} variation="modal">
-              <Console />
-            </AuthModal>
+            <AuthCallbackPage />
           ) : (
             <Navigate to="/" replace />
           )

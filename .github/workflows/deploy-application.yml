@@ -14,6 +14,7 @@ on:
       - 'terraform/**'
       - 'backend_app/**'
       - 'scripts/**'
+      - 'src/**'
       - '.github/workflows/**'
   pull_request:
     branches:
@@ -25,6 +26,7 @@ on:
       - 'terraform/**'
       - 'backend_app/**'
       - 'scripts/**'
+      - 'src/**'
       - '.github/workflows/**'
   workflow_dispatch:
     inputs:
@@ -222,6 +224,95 @@ jobs:
         id: validate
         run: echo "passed=true" >> $GITHUB_OUTPUT
 
+  check-proxy:
+    name: 'Check Proxy'
+    needs: [determine-environment, terraform-validate-and-scan]
+    runs-on: ubuntu-latest
+    outputs:
+      has_proxy: ${{ steps.check.outputs.has_proxy }}
+      use_proxy_ecs: ${{ steps.check.outputs.use_proxy_ecs }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for proxy source and mode
+        id: check
+        run: |
+          if [ -f "src/proxy/Cargo.toml" ]; then
+            echo "has_proxy=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_proxy=false" >> $GITHUB_OUTPUT
+          fi
+          USE_ECS=$(grep -E '^\s*use_proxy_ecs\s*=' terraform/environments/${{ needs.determine-environment.outputs.environment }}.auto.tfvars 2>/dev/null | sed 's/.*=\s*//' | tr -d ' "' || echo "true")
+          echo "use_proxy_ecs=${USE_ECS}" >> $GITHUB_OUTPUT
+
+  check-agent:
+    name: 'Check Agent'
+    needs: [determine-environment, terraform-validate-and-scan]
+    runs-on: ubuntu-latest
+    outputs:
+      has_agent: ${{ steps.check.outputs.has_agent }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for agent source
+        id: check
+        run: |
+          if [ -f "src/agent/Cargo.toml" ]; then
+            echo "has_agent=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_agent=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-proxy:
+    name: 'Build Proxy Binary'
+    needs: [determine-environment, check-proxy]
+    if: needs.check-proxy.outputs.has_proxy == 'true' && needs.check-proxy.outputs.use_proxy_ecs != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Build proxy
+        run: |
+          cd src/proxy
+          cargo build --release
+          ls -la target/release/rdi-proxy
+
+      - name: Upload Proxy Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-binary-${{ needs.determine-environment.outputs.environment }}
+          path: src/proxy/target/release/rdi-proxy
+          retention-days: 7
+
+  build-agent:
+    name: 'Build Agent Binary'
+    needs: [determine-environment, check-agent]
+    if: needs.check-agent.outputs.has_agent == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Build agent
+        run: |
+          cd src/agent
+          cargo build --release
+          ls -la target/release/rdi-agent
+
+      - name: Upload Agent Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-binary-${{ needs.determine-environment.outputs.environment }}
+          path: src/agent/target/release/rdi-agent
+          retention-days: 7
+
   check-lambda-layer:
     name: 'Check Lambda Layer'
     needs: [determine-environment, terraform-validate-and-scan]
@@ -310,10 +401,172 @@ jobs:
           path: terraform/modules/lambda-layer/layer-*.zip
           retention-days: 7
 
+  # Inline deploy when proxy exists - downloads proxy (and agent) artifacts so Terraform can upload to S3
+  deploy-application-inline:
+    name: Deploy (with proxy) ${{ matrix.region }}
+    needs: [determine-environment, terraform-validate-and-scan, check-proxy, check-agent, check-lambda-layer, build-proxy, build-agent, build-lambda-layers]
+    if: >-
+      always() &&
+      needs.terraform-validate-and-scan.result == 'success' &&
+      needs.check-proxy.outputs.has_proxy == 'true' &&
+      (needs.build-proxy.result == 'success' || needs.build-proxy.result == 'skipped') &&
+      (needs.build-agent.result == 'success' || needs.build-agent.result == 'skipped') &&
+      (needs.build-lambda-layers.result == 'success' || needs.build-lambda-layers.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        region: ${{ fromJson(needs.determine-environment.outputs.regions) }}
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check use_proxy_ecs
+        id: ecs
+        run: |
+          USE_ECS=$(grep -E '^\s*use_proxy_ecs\s*=' terraform/environments/${{ needs.determine-environment.outputs.environment }}.auto.tfvars 2>/dev/null | sed 's/.*=\s*//' | tr -d ' "' || echo "true")
+          echo "use_ecs=${USE_ECS}" >> $GITHUB_OUTPUT
+
+      - name: Download Proxy Artifact
+        if: steps.ecs.outputs.use_ecs != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: proxy-binary-${{ needs.determine-environment.outputs.environment }}
+
+      - name: Place Proxy Binary
+        if: steps.ecs.outputs.use_ecs != 'true'
+        run: |
+          mkdir -p src/proxy/target/release
+          BINARY=$(find . -name "rdi-proxy" -type f | head -1)
+          cp "$BINARY" src/proxy/target/release/
+          chmod +x src/proxy/target/release/rdi-proxy
+          ls -la src/proxy/target/release/rdi-proxy
+
+      - name: Download Agent Artifact
+        if: needs.check-agent.outputs.has_agent == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-binary-${{ needs.determine-environment.outputs.environment }}
+
+      - name: Place Agent Binary
+        if: needs.check-agent.outputs.has_agent == 'true'
+        run: |
+          mkdir -p src/agent/target/release
+          BINARY=$(find . -name "rdi-agent" -type f | head -1)
+          cp "$BINARY" src/agent/target/release/
+          chmod +x src/agent/target/release/rdi-agent
+          ls -la src/agent/target/release/rdi-agent
+
+      - name: Download Lambda Layers
+        if: needs.check-lambda-layer.outputs.has_lambda_layer == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-layers-${{ needs.determine-environment.outputs.environment }}
+
+      - name: Place Lambda Layers
+        if: needs.check-lambda-layer.outputs.has_lambda_layer == 'true'
+        run: |
+          mkdir -p terraform/modules/lambda-layer
+          mv layer-*.zip terraform/modules/lambda-layer/ 2>/dev/null || true
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.5"
+
+      - name: Terraform Init
+        run: |
+          terraform init -backend-config="backend-configs/${{ needs.determine-environment.outputs.environment }}-${{ matrix.region }}.tfbackend"
+        working-directory: terraform
+
+      - name: Terraform Apply
+        if: github.event.inputs.destroy != 'true'
+        run: |
+          EXTRA_VARS=""
+          if [ "${{ needs.check-agent.outputs.has_agent }}" != "true" ]; then
+            EXTRA_VARS='-var="skip_agent_build=true"'
+          fi
+          terraform apply -auto-approve -input=false \
+            -var-file="environments/${{ needs.determine-environment.outputs.environment }}.auto.tfvars" \
+            -var="region=${{ matrix.region }}" \
+            -var='regions=${{ needs.determine-environment.outputs.regions }}' \
+            $EXTRA_VARS
+        working-directory: terraform
+
+      - name: Get ECR URL
+        if: steps.ecs.outputs.use_ecs == 'true' && github.event.inputs.destroy != 'true'
+        id: ecr
+        run: |
+          cd terraform
+          REPO=$(terraform output -raw proxy_ecr_repository_url 2>/dev/null || true)
+          echo "repository=$REPO" >> $GITHUB_OUTPUT
+          echo "registry=${REPO%/*}" >> $GITHUB_OUTPUT
+
+      - name: Login to Amazon ECR
+        if: steps.ecs.outputs.use_ecs == 'true' && github.event.inputs.destroy != 'true' && steps.ecr.outputs.repository != ''
+        run: |
+          aws ecr get-login-password --region ${{ matrix.region }} | docker login --username AWS --password-stdin ${{ steps.ecr.outputs.registry }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Build and push proxy Docker image
+        if: steps.ecs.outputs.use_ecs == 'true' && github.event.inputs.destroy != 'true' && steps.ecr.outputs.repository != ''
+        run: |
+          docker build -t ${{ steps.ecr.outputs.repository }}:latest ./src/proxy
+          docker push ${{ steps.ecr.outputs.repository }}:latest
+
+      - name: Force ECS proxy deployment
+        if: steps.ecs.outputs.use_ecs == 'true' && github.event.inputs.destroy != 'true'
+        run: |
+          CLUSTER="rdi-proxy-${{ needs.determine-environment.outputs.environment }}"
+          SERVICE="rdi-proxy-${{ needs.determine-environment.outputs.environment }}"
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --force-new-deployment --region ${{ matrix.region }} || echo "ECS service not found, skipping"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Update agent on Wavelength instance
+        if: >
+          github.event.inputs.destroy != 'true' &&
+          needs.check-agent.outputs.has_agent == 'true'
+        run: |
+          cd terraform
+          INSTANCE_ID=$(terraform output -raw wavelength_instance_id 2>/dev/null || true)
+          if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "null" ]; then
+            echo "Updating agent on Wavelength instance $INSTANCE_ID..."
+            aws ssm send-command \
+              --instance-ids "$INSTANCE_ID" \
+              --document-name "AWS-RunShellScript" \
+              --parameters 'commands=["sudo /opt/rdi-agent/update-from-s3.sh"]' \
+              --region ${{ matrix.region }} \
+              --output text --query 'Command.CommandId' || echo "SSM send-command failed (instance may still be starting or pipeline lacks ssm:SendCommand)"
+          else
+            echo "No Wavelength instance (wavelength_instance_id empty); skipping agent update"
+          fi
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Terraform Destroy
+        if: github.event.inputs.destroy == 'true'
+        run: |
+          terraform destroy -auto-approve -input=false \
+            -var-file="environments/${{ needs.determine-environment.outputs.environment }}.auto.tfvars" \
+            -var="region=${{ matrix.region }}" \
+            -var='regions=${{ needs.determine-environment.outputs.regions }}'
+        working-directory: terraform
+
+  # Reusable workflow when no proxy (e.g. proxy removed from repo)
   deploy-application:
     name: Deploy ${{ matrix.region }}
-    needs: [determine-environment, terraform-validate-and-scan, check-lambda-layer, build-lambda-layers]
-    if: always() && needs.terraform-validate-and-scan.result == 'success' && (needs.build-lambda-layers.result == 'success' || needs.build-lambda-layers.result == 'skipped')
+    needs: [determine-environment, terraform-validate-and-scan, check-proxy, check-lambda-layer, build-lambda-layers]
+    if: >-
+      always() &&
+      needs.terraform-validate-and-scan.result == 'success' &&
+      needs.check-proxy.outputs.has_proxy != 'true' &&
+      (needs.build-lambda-layers.result == 'success' || needs.build-lambda-layers.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
@@ -335,8 +588,11 @@ jobs:
   deployment-summary:
     name: 'Deployment Summary'
     runs-on: ubuntu-latest
-    needs: [determine-environment, deploy-application]
-    if: always() && (needs.deploy-application.result == 'success' || needs.deploy-application.result == 'failure')
+    needs: [determine-environment, deploy-application-inline, deploy-application]
+    if: >-
+      always() &&
+      ((needs.deploy-application-inline.result == 'success' || needs.deploy-application-inline.result == 'failure' || needs.deploy-application-inline.result == 'skipped') ||
+       (needs.deploy-application.result == 'success' || needs.deploy-application.result == 'failure' || needs.deploy-application.result == 'skipped'))
     steps:
       - name: Generate Summary
         run: |
@@ -344,14 +600,15 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Environment:** ${{ needs.determine-environment.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Regions:** ${{ needs.determine-environment.outputs.regions }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Status:** ${{ needs.deploy-application.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Inline (with proxy):** ${{ needs.deploy-application-inline.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Reusable workflow:** ${{ needs.deploy-application.result }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Review the per-region jobs above for detailed apply results." >> $GITHUB_STEP_SUMMARY
 
   comment-pr:
     name: 'Comment on PR'
     runs-on: ubuntu-latest
-    needs: [determine-environment, terraform-validate-and-scan, deploy-application]
+    needs: [determine-environment, terraform-validate-and-scan, deploy-application-inline, deploy-application]
     if: github.event_name == 'pull_request'
     steps:
       - name: Comment PR with Results

@@ -1,26 +1,38 @@
-/** Region entry for the console region selector */
-export interface RegionConfig {
-  id: string
+/** Edge (Wavelength) zone entry for the console selector */
+export interface EdgeZoneConfig {
+  id: string       // Wavelength Zone ID (e.g. use1-wl1-chi-wlz1)
   city: string
   country: string
+  carrier: string
 }
 
 /**
- * Regions per environment — Wavelength zones only
- * staging: us-east-1 (N. Virginia)
- * production: eu-central-1 (Frankfurt), eu-west-2 (London)
+ * Edge zones per environment — Wavelength zones only
+ * staging: Chicago (Verizon)
+ * production: Europe (Frankfurt), Europe (London)
  */
-export const ENVIRONMENT_REGIONS: Record<string, RegionConfig[]> = {
+export const ENVIRONMENT_EDGE_ZONES: Record<string, EdgeZoneConfig[]> = {
   staging: [
-    { id: 'us-east-1', city: 'N. Virginia', country: 'USA' },
+    { id: 'use1-wl1-chi-wlz1', city: 'Chicago', country: 'USA', carrier: 'Verizon' },
   ],
   production: [
-    { id: 'eu-central-1', city: 'Frankfurt', country: 'Germany' },
-    { id: 'eu-west-2', city: 'London', country: 'UK' },
+    // Europe (Frankfurt) — Vodafone
+    { id: 'euc1-wl1-ber-wlz1', city: 'Berlin', country: 'Germany', carrier: 'Vodafone' },
+    { id: 'euc1-wl1-dtm-wlz1', city: 'Dortmund', country: 'Germany', carrier: 'Vodafone' },
+    { id: 'euc1-wl1-muc-wlz1', city: 'Munich', country: 'Germany', carrier: 'Vodafone' },
+    // Europe (London) — Vodafone, BT
+    { id: 'euw2-wl1-lon-wlz1', city: 'London', country: 'UK', carrier: 'Vodafone' },
+    { id: 'euw2-wl1-man-wlz1', city: 'Manchester', country: 'UK', carrier: 'Vodafone' },
+    { id: 'euw2-wl2-man-wlz1', city: 'Manchester', country: 'UK', carrier: 'British Telecom' },
   ],
 }
 
-/** Returns regions for the given environment; defaults to staging if unknown */
-export function getRegionsForEnvironment(environment: string): RegionConfig[] {
-  return ENVIRONMENT_REGIONS[environment] ?? ENVIRONMENT_REGIONS.staging
+/** Returns edge zones for the given environment; defaults to staging if unknown */
+export function getEdgeZonesForEnvironment(environment: string): EdgeZoneConfig[] {
+  return ENVIRONMENT_EDGE_ZONES[environment] ?? ENVIRONMENT_EDGE_ZONES.staging
+}
+
+/** @deprecated Use getEdgeZonesForEnvironment */
+export function getRegionsForEnvironment(environment: string): EdgeZoneConfig[] {
+  return getEdgeZonesForEnvironment(environment)
 }

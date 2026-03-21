@@ -18,8 +18,10 @@ provider "aws" {
   region = var.state_region
 }
 
+data "aws_caller_identity" "current" {}
+
 locals {
-  base_region = var.environment == "staging" ? "us-east-2" : "eu-central-1"
+  base_region = var.environment == "staging" ? "us-east-1" : "eu-central-1"
   state_key   = "base-infra/${var.environment}/${local.base_region}/terraform.tfstate"
 }
 
@@ -52,4 +54,14 @@ output "frontend_url" {
 output "build_environment_variables" {
   description = "JSON object of build env vars for frontend"
   value       = data.terraform_remote_state.base.outputs.build_environment_variables
+}
+
+output "connection_pool_table_name" {
+  description = "DynamoDB connection pool table name"
+  value       = data.terraform_remote_state.base.outputs.connection_pool_table_name
+}
+
+output "cognito_user_pool_arn" {
+  description = "Cognito User Pool ARN"
+  value       = "arn:aws:cognito-idp:${local.base_region}:${data.aws_caller_identity.current.account_id}:userpool/${data.terraform_remote_state.base.outputs.cognito_user_pool_id}"
 }

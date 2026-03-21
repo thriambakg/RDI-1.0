@@ -166,7 +166,7 @@ resource "aws_api_gateway_integration_response" "this" {
 
   response_parameters = {
     "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With'"
-    "method.response.header.Access-Control-Allow-Methods" = "'POST,OPTIONS,GET,DELETE,PUT'"
+    "method.response.header.Access-Control-Allow-Methods" = "'PATCH,POST,OPTIONS,GET,DELETE,PUT'"
     # Note: Integration response parameters don't support dynamic header mapping
     # For AWS_PROXY, Lambda functions must return CORS headers in their response
     # This is just a placeholder - actual CORS headers come from Lambda
@@ -292,7 +292,7 @@ resource "aws_api_gateway_integration_response" "options_integration_responses" 
 
   response_parameters = {
     "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With'"
-    "method.response.header.Access-Control-Allow-Methods" = "'POST,OPTIONS,GET,DELETE,PUT'"
+    "method.response.header.Access-Control-Allow-Methods" = "'PATCH,POST,OPTIONS,GET,DELETE,PUT'"
     # Note: Integration response parameters don't support dynamic header mapping
     # Using '*' for preflight - browsers accept this for OPTIONS requests
     # Actual API responses will need CORS headers from Lambda functions
@@ -326,7 +326,7 @@ resource "aws_api_gateway_method_settings" "protected_endpoints" {
     throttling_burst_limit = var.throttle_burst_limit
     throttling_rate_limit  = var.throttle_rate_limit
 
-    # Logging
+    # Logging (requires API Gateway CloudWatch role from base infra)
     logging_level      = "ERROR"
     data_trace_enabled = false
     metrics_enabled    = true
@@ -387,7 +387,7 @@ resource "aws_api_gateway_gateway_response" "cors_4xx" {
   response_parameters = {
     "gatewayresponse.header.Access-Control-Allow-Origin"  = "'*'"
     "gatewayresponse.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With'"
-    "gatewayresponse.header.Access-Control-Allow-Methods" = "'POST,OPTIONS,GET,DELETE,PUT'"
+    "gatewayresponse.header.Access-Control-Allow-Methods" = "'PATCH,POST,OPTIONS,GET,DELETE,PUT'"
     # Note: Cannot use credentials with '*' origin - browsers will reject it
     # Preflight OPTIONS requests handle credentials correctly via integration responses
   }
@@ -404,7 +404,7 @@ resource "aws_api_gateway_gateway_response" "cors_5xx" {
   response_parameters = {
     "gatewayresponse.header.Access-Control-Allow-Origin"  = "'*'"
     "gatewayresponse.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With'"
-    "gatewayresponse.header.Access-Control-Allow-Methods" = "'POST,OPTIONS,GET,DELETE,PUT'"
+    "gatewayresponse.header.Access-Control-Allow-Methods" = "'PATCH,POST,OPTIONS,GET,DELETE,PUT'"
   }
 
   response_templates = {
@@ -420,7 +420,7 @@ resource "aws_api_gateway_gateway_response" "cors_401" {
   response_parameters = {
     "gatewayresponse.header.Access-Control-Allow-Origin"  = "'*'"
     "gatewayresponse.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With'"
-    "gatewayresponse.header.Access-Control-Allow-Methods" = "'POST,OPTIONS,GET,DELETE,PUT'"
+    "gatewayresponse.header.Access-Control-Allow-Methods" = "'PATCH,POST,OPTIONS,GET,DELETE,PUT'"
   }
 
   response_templates = {
@@ -436,7 +436,7 @@ resource "aws_api_gateway_gateway_response" "cors_403" {
   response_parameters = {
     "gatewayresponse.header.Access-Control-Allow-Origin"  = "'*'"
     "gatewayresponse.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With'"
-    "gatewayresponse.header.Access-Control-Allow-Methods" = "'POST,OPTIONS,GET,DELETE,PUT'"
+    "gatewayresponse.header.Access-Control-Allow-Methods" = "'PATCH,POST,OPTIONS,GET,DELETE,PUT'"
   }
 
   response_templates = {

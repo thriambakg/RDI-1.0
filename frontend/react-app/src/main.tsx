@@ -1,8 +1,14 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
+import { ThemeProvider } from '@mui/material/styles'
+import CssBaseline from '@mui/material/CssBaseline'
 import { Amplify } from 'aws-amplify'
 import { getConfig } from './config'
+import { rdiTheme } from './theme'
+import { AuthProvider } from './contexts/AuthContext'
+import { ProfileProvider } from './contexts/ProfileContext'
+import { SessionWebSocketProvider } from './contexts/SessionWebSocketContext'
 import './index.css'
 import App from './App'
 
@@ -37,8 +43,17 @@ if (config.COGNITO_USER_POOL_ID && config.COGNITO_CLIENT_ID) {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
+    <ThemeProvider theme={rdiTheme}>
+      <CssBaseline />
+      <AuthProvider>
+        <ProfileProvider>
+          <SessionWebSocketProvider>
+            <BrowserRouter>
+              <App />
+            </BrowserRouter>
+          </SessionWebSocketProvider>
+        </ProfileProvider>
+      </AuthProvider>
+    </ThemeProvider>
   </StrictMode>,
 )

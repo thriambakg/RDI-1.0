@@ -62,6 +62,12 @@ variable "allowed_mavlink_cidrs" {
   default     = ["0.0.0.0/0"]
 }
 
+variable "mavlink_port" {
+  description = "MAVLink UDP port for PX4 (14540 legacy, 18570 v1.13+). Used in user_data / agent env."
+  type        = number
+  default     = 18570
+}
+
 variable "allowed_api_cidrs" {
   description = "CIDR blocks allowed for HTTP API (8080)"
   type        = list(string)
@@ -74,8 +80,32 @@ variable "user_data" {
   default     = ""
 }
 
+variable "agent_binary_s3_bucket" {
+  description = "S3 bucket containing RDI agent binary (optional)"
+  type        = string
+  default     = ""
+}
+
+variable "agent_binary_s3_key" {
+  description = "S3 key for agent binary"
+  type        = string
+  default     = "agent/rdi-agent"
+}
+
+variable "enable_agent_binary_s3_access" {
+  description = "Enable IAM policy for EC2 to download agent binary from S3"
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   description = "Tags to apply to resources"
   type        = map(string)
   default     = {}
+}
+
+variable "cloudwatch_log_group_name" {
+  description = "CloudWatch Log group name for agent logs (e.g. /rdi/staging/agent). When set, instance role gets write access and user_data ships /var/log/rdi-agent.log."
+  type        = string
+  default     = ""
 }

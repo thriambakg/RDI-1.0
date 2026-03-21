@@ -1,0 +1,2 @@
+# Session API Lambda - boto3 is provided by runtime
+# No additional dependencies needed for DynamoDB

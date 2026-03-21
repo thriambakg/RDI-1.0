@@ -1,0 +1,12 @@
+[package]
+name = "rdi-drone-test"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal MAVLink drone control for PX4 Gazebo - keyboard input to move drone"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+mavlink = { version = "0.17", features = ["common", "tokio-1"] }
+crossterm = "0.28"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

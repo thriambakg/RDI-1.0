@@ -1,0 +1,8 @@
+{
+  "commands": [
+    "echo '=== rdi-agent process ==='",
+    "pgrep -a rdi-agent || echo 'no rdi-agent process'",
+    "echo '=== last 40 lines rdi-agent.log ==='",
+    "tail -40 /var/log/rdi-agent.log 2>/dev/null || echo 'no log'"
+  ]
+}

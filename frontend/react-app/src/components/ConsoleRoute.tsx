@@ -1,36 +1,27 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getCurrentUser } from 'aws-amplify/auth'
-import { AuthModal } from './authmodals'
+import { useAuth } from '../contexts/AuthContext'
 import Console from '../pages/console'
 
 interface ConsoleRouteProps {
-  socialProviders: ('google' | 'amazon' | 'apple' | 'facebook')[]
+  socialProviders?: ('google' | 'amazon' | 'apple' | 'facebook')[]
 }
 
 /**
  * Protects /console: unauthenticated users are redirected to /?auth=signin
- * so they get the blurred landing + auth modal experience, not the standalone auth page.
  */
-export function ConsoleRoute({ socialProviders }: ConsoleRouteProps) {
+export function ConsoleRoute(_props: ConsoleRouteProps) {
   const navigate = useNavigate()
-  const [checked, setChecked] = useState(false)
-  const [authenticated, setAuthenticated] = useState(false)
+  const { isAuthenticated, isLoading } = useAuth()
 
   useEffect(() => {
-    getCurrentUser()
-      .then(() => setAuthenticated(true))
-      .catch(() => navigate('/?auth=signin', { replace: true }))
-      .finally(() => setChecked(true))
-  }, [navigate])
+    if (!isLoading && !isAuthenticated) {
+      navigate('/?auth=signin', { replace: true })
+    }
+  }, [isLoading, isAuthenticated, navigate])
 
-  if (!checked || !authenticated) {
-    return null
-  }
+  if (isLoading) return null
+  if (!isAuthenticated) return null
 
-  return (
-    <AuthModal socialProviders={socialProviders} variation="modal">
-      <Console />
-    </AuthModal>
-  )
+  return <Console />
 }

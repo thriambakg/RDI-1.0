@@ -18,7 +18,7 @@ output "alb_zone_id" {
 
 output "target_group_arn" {
   description = "ARN of the target group"
-  value       = aws_lb_target_group.frontend.arn
+  value       = aws_lb_target_group.main.arn
 }
 
 output "security_group_id" {
@@ -28,12 +28,12 @@ output "security_group_id" {
 
 output "waf_arn" {
   description = "ARN of the WAF Web ACL"
-  value       = aws_wafv2_web_acl.main.arn
+  value       = var.enable_waf ? aws_wafv2_web_acl.main[0].arn : null
 }
 
 output "waf_id" {
   description = "ID of the WAF Web ACL"
-  value       = aws_wafv2_web_acl.main.id
+  value       = var.enable_waf ? aws_wafv2_web_acl.main[0].id : null
 }
 
 output "listener_arn" {
