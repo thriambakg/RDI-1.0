@@ -5,7 +5,7 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { useAuth } from './AuthContext'
-import { getProfile, type UserProfile, type ConnectionHierarchy } from '../services/profileApi'
+import { getProfile, type UserProfile, type ConnectionHierarchy, type RelayRef } from '../services/profileApi'
 
 export interface ProfileContextType {
   profile: UserProfile | null
@@ -15,6 +15,8 @@ export interface ProfileContextType {
   refetch: (opts?: { silent?: boolean }) => Promise<void>
   /** Apply an optimistic update to hierarchy; then refetch with silent to sync with backend. */
   updateHierarchy: (updater: (h: ConnectionHierarchy) => ConnectionHierarchy) => void
+  /** Apply an optimistic update to relays array (e.g. status changes). */
+  updateRelays: (updater: (relays: RelayRef[]) => RelayRef[]) => void
 }
 
 const ProfileContext = createContext<ProfileContextType | undefined>(undefined)
@@ -52,6 +54,12 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     )
   }, [])
 
+  const updateRelays = useCallback((updater: (relays: RelayRef[]) => RelayRef[]) => {
+    setProfile((prev) =>
+      prev ? { ...prev, relays: updater(prev.relays ?? []) } : null
+    )
+  }, [])
+
   useEffect(() => {
     if (isAuthenticated) {
       fetchProfile()
@@ -68,6 +76,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     error,
     refetch: fetchProfile,
     updateHierarchy,
+    updateRelays,
   }
 
   return (

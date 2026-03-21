@@ -178,6 +178,18 @@ export function addFolderAtPath(h: ConnectionHierarchy, parentPath: string[], fo
   return { ...h, [first]: { ...node, subfolders: updatedSub } }
 }
 
+/** Immutable: update a relay's status in the relays array. */
+export function updateRelayStatusInRelays(
+  relays: RelayRef[],
+  relay_id: string,
+  wavelength_zone_id: string,
+  status: string
+): RelayRef[] {
+  return relays.map((r) =>
+    r.relay_id === relay_id && r.wavelength_zone_id === wavelength_zone_id ? { ...r, status } : r
+  )
+}
+
 /** Immutable: add a session to the folder at parentPath. Creates path if missing. */
 export function addSessionAtPath(h: ConnectionHierarchy, parentPath: string[], session: SessionRef): ConnectionHierarchy {
   if (parentPath.length === 0) return h

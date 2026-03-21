@@ -2,6 +2,9 @@
 //! Exposes HTTP API (localhost) to add/remove sessions. Each session maintains a WebSocket
 //! connection to the proxy and bridges to local MAVLink UDP.
 //! Lambda uses SSM to call POST /sessions (add) and DELETE /sessions/:id (remove).
+//!
+//! Control protocol: frontend sends binary "CTRL" + JSON e.g. {"cmd":"takeoff","alt":2.5}.
+//! Agent parses and sends MAVLink COMMAND_LONG to PX4; non-CTRL binary is forwarded as-is.
 
 use axum::{
     extract::{Path, State},
@@ -19,16 +22,52 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
+use mavlink::common::{MavCmd, MavMessage};
 use tracing::{error, info, warn};
 
 const DEFAULT_MAVLINK_PORT: u16 = 14540;
 const DEFAULT_AGENT_API_PORT: u16 = 8080;
 const PING_BYTES: &[u8] = b"PING";
 const PONG_BYTES: &[u8] = b"PONG";
+const CTRL_PREFIX: &[u8] = b"CTRL";
 const RECONNECT_DELAY_SECS: u64 = 5;
+const TARGET_SYSTEM: u8 = 1;
+const TARGET_COMPONENT: u8 = 1;
 
 /// Session state: session_id -> task handle (abort on drop / DELETE).
 type SessionsState = Arc<RwLock<HashMap<String, JoinHandle<()>>>>;
+
+#[derive(Deserialize)]
+struct CtrlCmd {
+    cmd: String,
+    #[serde(default)]
+    alt: Option<f32>,
+}
+
+fn build_command_long(
+    command: MavCmd,
+    param1: f32,
+    param2: f32,
+    param3: f32,
+    param4: f32,
+    param5: f32,
+    param6: f32,
+    param7: f32,
+) -> mavlink::common::COMMAND_LONG_DATA {
+    mavlink::common::COMMAND_LONG_DATA {
+        param1,
+        param2,
+        param3,
+        param4,
+        param5,
+        param6,
+        param7,
+        command,
+        target_system: TARGET_SYSTEM,
+        target_component: TARGET_COMPONENT,
+        confirmation: 0,
+    }
+}
 
 #[derive(Deserialize)]
 struct AddSessionBody {
@@ -237,8 +276,12 @@ async fn run_session(
         .send(Message::Text(format!("agent:{}", session_id)))
         .await?;
 
+    let mavlink_out = format!("udpout:{}", mavlink_addr);
+    let conn = mavlink::connect_async::<mavlink::common::MavMessage>(&mavlink_out).await?;
+    info!("MAVLink control connection to {} (for CTRL commands)", mavlink_addr);
+
     let udp = Arc::new(tokio::net::UdpSocket::bind("0.0.0.0:0").await?);
-    let mavlink: std::net::SocketAddr = mavlink_addr.parse()?;
+    let mavlink_socket: std::net::SocketAddr = mavlink_addr.parse()?;
 
     let udp_recv = Arc::clone(&udp);
     let udp_send = Arc::clone(&udp);
@@ -277,8 +320,68 @@ async fn run_session(
             if let Ok(Message::Binary(data)) = msg {
                 if data == PING_BYTES {
                     let _ = pong_tx.send(PONG_BYTES.to_vec());
+                } else if data.starts_with(CTRL_PREFIX) && data.len() > CTRL_PREFIX.len() {
+                    if let Ok(json) = std::str::from_utf8(&data[CTRL_PREFIX.len()..]) {
+                        if let Ok(ctrl) = serde_json::from_str::<CtrlCmd>(json) {
+                            let cmd_lower = ctrl.cmd.to_lowercase();
+                            if cmd_lower == "takeoff" {
+                                // PX4 requires arm before takeoff. Send arm first, then takeoff after a brief delay.
+                                let arm_data = build_command_long(
+                                    MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+                                    1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                );
+                                if conn.send(&mavlink::MavHeader::default(), &MavMessage::COMMAND_LONG(arm_data)).await.is_err() {
+                                    warn!("CTRL arm (pre-takeoff) send error");
+                                } else {
+                                    info!("CTRL sent: arm (pre-takeoff)");
+                                }
+                                tokio::time::sleep(Duration::from_millis(500)).await;
+                                let alt = ctrl.alt.unwrap_or(2.5);
+                                let takeoff_data = build_command_long(
+                                    MavCmd::MAV_CMD_NAV_TAKEOFF,
+                                    0.0, 0.0, 0.0, f32::NAN, f32::NAN, f32::NAN, alt,
+                                );
+                                if let Err(e) = conn.send(&mavlink::MavHeader::default(), &MavMessage::COMMAND_LONG(takeoff_data)).await {
+                                    warn!("CTRL takeoff send error: {}", e);
+                                } else {
+                                    info!("CTRL sent: takeoff (alt={})", alt);
+                                }
+                            } else {
+                                let data = match cmd_lower.as_str() {
+                                    "arm" => build_command_long(
+                                        MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+                                        1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                    ),
+                                    "disarm" => build_command_long(
+                                        MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+                                        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                    ),
+                                    "land" => build_command_long(
+                                        MavCmd::MAV_CMD_NAV_LAND,
+                                        0.0, 0.0, 0.0, f32::NAN, f32::NAN, f32::NAN, f32::NAN,
+                                    ),
+                                    "rtl" => build_command_long(
+                                        MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH,
+                                        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                    ),
+                                    _ => {
+                                        warn!("Unknown CTRL cmd: {}", ctrl.cmd);
+                                        continue;
+                                    }
+                                };
+                                let msg = MavMessage::COMMAND_LONG(data);
+                                if let Err(e) = conn.send(&mavlink::MavHeader::default(), &msg).await {
+                                    warn!("CTRL send error: {}", e);
+                                } else {
+                                    info!("CTRL sent: {}", ctrl.cmd);
+                                }
+                            }
+                        } else {
+                            warn!("CTRL invalid JSON: {}", json);
+                        }
+                    }
                 } else {
-                    let _ = udp_send.send_to(&data, mavlink).await;
+                    let _ = udp_send.send_to(&data, mavlink_socket).await;
                 }
             }
         }

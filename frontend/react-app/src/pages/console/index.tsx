@@ -35,6 +35,7 @@ import {
   addFolderAtPath,
   addSessionAtPath,
   updateSessionStatusInHierarchy,
+  updateRelayStatusInRelays,
   type FolderNode,
   type SessionRef,
   type ConnectionHierarchy,
@@ -206,7 +207,7 @@ export default function Console() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false)
   const [registerRelayDialogOpen, setRegisterRelayDialogOpen] = useState(false)
-  const { profile, hierarchy, isLoading: profileLoading, refetch: fetchProfile, updateHierarchy } = useProfile()
+  const { profile, hierarchy, isLoading: profileLoading, refetch: fetchProfile, updateHierarchy, updateRelays } = useProfile()
   const [selectedFolderPath, setSelectedFolderPath] = useState<string[]>([])
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null)
   const [connectionMenuAnchor, setConnectionMenuAnchor] = useState<{ sessionId: string; el: HTMLElement } | null>(null)
@@ -295,9 +296,13 @@ export default function Console() {
         })
       )
       openSessionWs(res.session_id, res.endpoint)
-      if (res.relay_id) fetchProfile({ silent: true })
+      if (res.relay_id) {
+        updateRelays((r) =>
+          updateRelayStatusInRelays(r, res.relay_id!, selectedZone.id, 'online')
+        )
+      }
     },
-    [effectiveParentForNewConnection, updateHierarchy, openSessionWs, fetchProfile]
+    [effectiveParentForNewConnection, selectedZone.id, updateHierarchy, openSessionWs, updateRelays]
   )
 
   const handleFolderCreated = useCallback(
@@ -357,13 +362,16 @@ export default function Console() {
     setDeleteLoading(sessionId)
     const session = allConnections.find((c) => c.session_id === sessionId)
     updateHierarchy((h) => updateSessionStatusInHierarchy(h, sessionId, 'active'))
+    if (session?.relay_id) {
+      const relay = relays.find((r) => r.relay_id === session.relay_id)
+      if (relay) updateRelays((r) => updateRelayStatusInRelays(r, relay.relay_id, relay.wavelength_zone_id, 'online'))
+    }
     try {
       await activateSession(sessionId)
       const data = await getSession(sessionId)
       if (data.status === 'active' && data.endpoint) {
         openSessionWs(sessionId, data.endpoint)
       }
-      if (session?.relay_id) await fetchProfile({ silent: true })
     } catch (err) {
       console.error('[RDI Console] Activate failed', err)
       const isNotFound = err instanceof Error && /not found/i.test(err.message)
@@ -371,6 +379,10 @@ export default function Console() {
         updateHierarchy((h) => removeSessionFromHierarchy(h, sessionId))
       } else {
         updateHierarchy((h) => updateSessionStatusInHierarchy(h, sessionId, 'idle'))
+        if (session?.relay_id) {
+          const relay = relays.find((r) => r.relay_id === session.relay_id)
+          if (relay) updateRelays((r) => updateRelayStatusInRelays(r, relay.relay_id, relay.wavelength_zone_id, 'idle'))
+        }
       }
       showSessionError(getSessionErrorMessage(err, 'activate'))
     } finally {
@@ -399,16 +411,20 @@ export default function Console() {
     setRelayMenuAnchor(null)
     const childSessions = allConnections.filter((c) => c.relay_id === relay.relay_id && c.status === 'active')
     setDeleteLoading(relay.relay_id)
+    childSessions.forEach((s) => closeSessionWs(s.session_id))
+    childSessions.forEach((s) => updateHierarchy((h) => updateSessionStatusInHierarchy(h, s.session_id, 'idle')))
+    updateRelays((r) => updateRelayStatusInRelays(r, relay.relay_id, relay.wavelength_zone_id, 'idle'))
     try {
       for (const s of childSessions) {
-        closeSessionWs(s.session_id)
-        updateHierarchy((h) => updateSessionStatusInHierarchy(h, s.session_id, 'idle'))
         await releaseSession(s.session_id)
       }
-      await updateRelayStatus(relay.relay_id, relay.wavelength_zone_id, 'idle')
-      await fetchProfile({ silent: false })
+      updateRelayStatus(relay.relay_id, relay.wavelength_zone_id, 'idle').catch((err) => {
+        console.error('[RDI Console] Relay status persist failed', err)
+      })
     } catch (err) {
       console.error('[RDI Console] Set relay idle failed', err)
+      childSessions.forEach((s) => updateHierarchy((h) => updateSessionStatusInHierarchy(h, s.session_id, 'active')))
+      updateRelays((r) => updateRelayStatusInRelays(r, relay.relay_id, relay.wavelength_zone_id, 'online'))
       showSessionError(err instanceof Error ? err.message : 'Set relay idle failed')
     } finally {
       setDeleteLoading(null)
