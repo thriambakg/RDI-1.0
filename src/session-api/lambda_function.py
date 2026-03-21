@@ -101,8 +101,6 @@ def _fetch_relay_config(dynamodb, user_id: str, relay_id: str, wavelength_zone_i
     out = {}
     if config.get("mavlink_host"):
         out["mavlink_host"] = str(config["mavlink_host"])
-    if config.get("mavlink_port") is not None:
-        out["mavlink_port"] = int(config["mavlink_port"])
     return out if out else None
 
 
@@ -159,19 +157,32 @@ def _update_relay_status(
 
 
 def _add_session_to_agent(
-    instance_id: str, proxy_url: str, session_id: str, relay_config: dict | None = None
+    instance_id: str,
+    proxy_url: str,
+    session_id: str,
+    relay_config: dict | None = None,
+    session_metadata: dict | None = None,
 ) -> None:
-    """Add session to the running agent daemon. Daemon stays up; this opens a WebSocket bridge for this session."""
+    """Add session to the running agent daemon. Daemon stays up; this opens a WebSocket bridge for this session.
+    mavlink_host from relay; mavlink_port from session metadata (per-connection).
+    """
     if not instance_id or not proxy_url or not session_id:
         _log("add_session skipped", session_id=session_id, has_instance=bool(instance_id), has_proxy_url=bool(proxy_url))
         return
     _log("add_session to agent daemon", session_id=session_id, proxy_url=proxy_url, instance_id=instance_id)
     body = {"session_id": session_id, "proxy_url": proxy_url}
-    if relay_config:
-        if relay_config.get("mavlink_host"):
-            body["mavlink_host"] = relay_config["mavlink_host"]
-        if relay_config.get("mavlink_port") is not None:
-            body["mavlink_port"] = relay_config["mavlink_port"]
+    if relay_config and relay_config.get("mavlink_host"):
+        body["mavlink_host"] = relay_config["mavlink_host"]
+    elif session_metadata and session_metadata.get("mavlink_host"):
+        body["mavlink_host"] = str(session_metadata["mavlink_host"])
+    port = None
+    if session_metadata and session_metadata.get("mavlink_port") is not None:
+        try:
+            port = int(session_metadata["mavlink_port"])
+        except (TypeError, ValueError):
+            pass
+    if port is not None:
+        body["mavlink_port"] = port
     body = json.dumps(body)
     cmd = f"curl -s -X POST http://127.0.0.1:{AGENT_API_PORT}/sessions -H 'Content-Type: application/json' -d {shlex.quote(body)}"
     try:
@@ -441,7 +452,13 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
             deployed_zone=WAVELENGTH_ZONE_ID,
         )
     else:
-        _add_session_to_agent(WAVELENGTH_INSTANCE_ID, PROXY_ENDPOINT, session_id, relay_config)
+        _add_session_to_agent(
+            WAVELENGTH_INSTANCE_ID,
+            PROXY_ENDPOINT,
+            session_id,
+            relay_config,
+            session_metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else None,
+        )
     if relay_id and wavelength_zone_id:
         _update_relay_status(dynamodb, user_id, relay_id, wavelength_zone_id, "online")
 
@@ -455,9 +472,22 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
         payload["relay_id"] = relay_id
     if relay_config:
         payload["relay_config"] = relay_config
+    # Effective mavlink target: host from relay, port from session metadata (per-connection)
+    metadata = body.get("metadata")
+    eff_port = None
+    if isinstance(metadata, dict) and metadata.get("mavlink_port") is not None:
+        try:
+            eff_port = int(metadata["mavlink_port"])
+        except (TypeError, ValueError):
+            pass
+    if eff_port is None:
+        eff_port = int(MAVLINK_PORT) if MAVLINK_PORT else 14540
+    payload["mavlink_port"] = eff_port
+    payload["mavlink_host"] = (
+        (relay_config or {}).get("mavlink_host") or "127.0.0.1"
+    )
     if WAVELENGTH_CARRIER_IP and (not WAVELENGTH_ZONE_ID or wavelength_zone_id == WAVELENGTH_ZONE_ID):
         payload["carrier_ip"] = WAVELENGTH_CARRIER_IP
-        payload["mavlink_port"] = MAVLINK_PORT
     _log("create_session success", session_id=session_id, drone_id=drone_id)
     return _response(200, payload, headers)
 
@@ -677,13 +707,38 @@ def _get_session(
             "endpoint": item.get("endpoint", {}).get("S"),
             "status": item.get("status", {}).get("S"),
         }
-        if item.get("relay_id", {}).get("S"):
-            out["relay_id"] = item["relay_id"]["S"]
-        if WAVELENGTH_CARRIER_IP:
-            wl_zone = item.get("wavelength_zone_id", {}).get("S")
-            if not WAVELENGTH_ZONE_ID or wl_zone == WAVELENGTH_ZONE_ID:
-                out["carrier_ip"] = WAVELENGTH_CARRIER_IP
-                out["mavlink_port"] = MAVLINK_PORT
+        relay_id = item.get("relay_id", {}).get("S")
+        wl_zone = item.get("wavelength_zone_id", {}).get("S")
+        if relay_id:
+            out["relay_id"] = relay_id
+        # Effective mavlink: host from relay, port from session metadata
+        relay_config = (
+            _fetch_relay_config(dynamodb, user_id, relay_id, wl_zone or "")
+            if relay_id and RELAY_REGISTRY_TABLE
+            else None
+        )
+        metadata_raw = item.get("metadata", {}).get("S")
+        metadata = {}
+        if metadata_raw:
+            try:
+                metadata = json.loads(metadata_raw)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        eff_port = None
+        if isinstance(metadata, dict) and metadata.get("mavlink_port") is not None:
+            try:
+                eff_port = int(metadata["mavlink_port"])
+            except (TypeError, ValueError):
+                pass
+        if eff_port is None:
+            eff_port = int(MAVLINK_PORT) if MAVLINK_PORT else 14540
+        if relay_config and relay_config.get("mavlink_host"):
+            out["mavlink_host"] = relay_config["mavlink_host"]
+        else:
+            out["mavlink_host"] = "127.0.0.1"
+        out["mavlink_port"] = eff_port
+        if WAVELENGTH_CARRIER_IP and wl_zone and (not WAVELENGTH_ZONE_ID or wl_zone == WAVELENGTH_ZONE_ID):
+            out["carrier_ip"] = WAVELENGTH_CARRIER_IP
         return _response(200, out, headers)
 
     # List sessions for user
@@ -731,11 +786,20 @@ def _get_session(
         }
         if item.get("relay_id", {}).get("S"):
             sess["relay_id"] = item["relay_id"]["S"]
+        metadata_raw = item.get("metadata", {}).get("S")
+        eff_port = int(MAVLINK_PORT) if MAVLINK_PORT else 14540
+        if metadata_raw:
+            try:
+                metadata = json.loads(metadata_raw)
+                if isinstance(metadata, dict) and metadata.get("mavlink_port") is not None:
+                    eff_port = int(metadata["mavlink_port"])
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+        sess["mavlink_port"] = eff_port
         if WAVELENGTH_CARRIER_IP:
             wl_zone = item.get("wavelength_zone_id", {}).get("S")
             if not WAVELENGTH_ZONE_ID or wl_zone == WAVELENGTH_ZONE_ID:
                 sess["carrier_ip"] = WAVELENGTH_CARRIER_IP
-                sess["mavlink_port"] = MAVLINK_PORT
         sessions.append(sess)
 
     return _response(200, {"sessions": sessions}, headers)

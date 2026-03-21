@@ -78,9 +78,11 @@
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `mavlink_port` | number | PX4 MAVLink UDP port; 14540 (legacy) or 18570 (v1.13+) |
-| `mavlink_host` | string | Local tunnel host; default `127.0.0.1` |
+| `mavlink_port` | number | **Per-connection** PX4 MAVLink UDP port; 14540 (legacy) or 18570 (v1.13+). Allows multiple connections to same relay with different ports. |
+| `mavlink_host` | string | Optional override; usually comes from relay config. Default `127.0.0.1`. |
 | `px4_version` | string | Hint: `legacy` or `v1.13+` |
+
+**Data split:** Relay stores `mavlink_host` (IP); connection metadata stores `mavlink_port`. Effective target = relay host + session port.
 
 ---
 

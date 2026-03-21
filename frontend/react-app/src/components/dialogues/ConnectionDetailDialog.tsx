@@ -35,7 +35,8 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
     status: string
     relay_id?: string
     carrier_ip?: string
-    mavlink_port?: string
+    mavlink_host?: string
+    mavlink_port?: string | number
   } | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -302,9 +303,15 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
               <Typography sx={{ fontSize: '0.875rem', color: '#94a3b8' }}>
                 <strong>Endpoint:</strong> {data.endpoint}
               </Typography>
-              {data.carrier_ip && data.mavlink_port && (
+              {(data.mavlink_host || data.mavlink_port != null) && (
                 <Typography sx={{ fontSize: '0.875rem', mt: 1, color: '#22c55e' }}>
-                  <strong>MAVLink UDP:</strong> {data.carrier_ip}:{data.mavlink_port}
+                  <strong>MAVLink target:</strong>{' '}
+                  {data.mavlink_host ?? '127.0.0.1'}:{data.mavlink_port ?? '—'}
+                </Typography>
+              )}
+              {data.carrier_ip && (
+                <Typography sx={{ fontSize: '0.875rem', mt: 0.5, color: '#94a3b8' }}>
+                  <strong>Wavelength instance:</strong> {data.carrier_ip}
                 </Typography>
               )}
             </Box>

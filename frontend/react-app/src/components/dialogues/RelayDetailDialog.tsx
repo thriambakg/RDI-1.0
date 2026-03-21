@@ -18,7 +18,7 @@ interface RelayDetailDialogProps {
 }
 
 interface RelayDetails extends RelayRef {
-  config?: { mavlink_host?: string; mavlink_port?: number; mavlink_remote_port?: number }
+  config?: { mavlink_host?: string }
 }
 
 export function RelayDetailDialog({ relay, open, onClose }: RelayDetailDialogProps) {
@@ -46,7 +46,7 @@ export function RelayDetailDialog({ relay, open, onClose }: RelayDetailDialogPro
   if (!relay) return null
 
   const config = details?.config
-  const hasMavlinkConfig = config && (config.mavlink_host || config.mavlink_port != null)
+  const hasMavlinkConfig = config && config.mavlink_host
 
   return (
     <Dialog
@@ -117,11 +117,10 @@ export function RelayDetailDialog({ relay, open, onClose }: RelayDetailDialogPro
             {hasMavlinkConfig && (
               <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid #334155' }}>
                 <Typography sx={{ fontSize: '0.875rem', color: '#94a3b8', mb: 0.5 }}>
-                  MAVLink config
+                  MAVLink host
                 </Typography>
                 <Typography sx={{ fontSize: '0.875rem' }}>
-                  {config.mavlink_host ?? '127.0.0.1'}:{config.mavlink_port ?? '—'}
-                  {config.mavlink_remote_port != null && ` (remote: ${config.mavlink_remote_port})`}
+                  {config.mavlink_host ?? '127.0.0.1'} (port set per connection)
                 </Typography>
               </Box>
             )}

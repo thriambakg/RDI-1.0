@@ -44,6 +44,7 @@ export interface CreateSessionResponse {
   relay_id?: string
   relay_config?: RelayConfig
   carrier_ip?: string
+  mavlink_host?: string
   mavlink_port?: number
 }
 

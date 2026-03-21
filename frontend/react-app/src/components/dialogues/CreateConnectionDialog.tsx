@@ -187,9 +187,9 @@ export function CreateConnectionDialog({
               <strong>Endpoint:</strong> {result.endpoint}
             </Typography>
             <Typography sx={{ color: '#94a3b8', fontSize: '0.8rem' }}>
-              {result.relay_config
-                ? `Run the agent with RDI_SESSION_ID=${result.session_id} RDI_MAVLINK_HOST=${result.relay_config.mavlink_host ?? '127.0.0.1'} RDI_MAVLINK_PORT=${result.relay_config.mavlink_port ?? mavlinkPort}`
-                : `Run the agent with RDI_SESSION_ID=${result.session_id} RDI_MAVLINK_PORT=${result.mavlink_port ?? mavlinkPort}`}
+              Run the agent with RDI_SESSION_ID={result.session_id} RDI_MAVLINK_HOST=
+              {result.mavlink_host ?? result.relay_config?.mavlink_host ?? '127.0.0.1'}{' '}
+              RDI_MAVLINK_PORT={result.mavlink_port ?? mavlinkPort}
             </Typography>
           </Box>
           <DialogActions sx={{ px: 0, backgroundColor: '#1e293b' }}>
@@ -275,6 +275,7 @@ export function CreateConnectionDialog({
               margin="normal"
               sx={inputSx}
               SelectProps={{ MenuProps: menuProps }}
+              helperText="Per-connection port; multiple connections can use different ports on the same relay"
             >
               {MAVLINK_PORT_OPTIONS.map((o) => (
                 <MenuItem key={o.value} value={o.value} disableRipple>

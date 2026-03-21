@@ -68,8 +68,6 @@ export function RegisterRelayDialog({
   const [name, setName] = useState('')
   const [relayType, setRelayType] = useState<'local' | 'sim_relay'>('local')
   const [mavlinkHost, setMavlinkHost] = useState('127.0.0.1')
-  const [mavlinkPort, setMavlinkPort] = useState('18570')
-  const [mavlinkRemotePort, setMavlinkRemotePort] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<RegisterRelayResponse | null>(null)
@@ -82,10 +80,6 @@ export function RegisterRelayDialog({
       const config: Record<string, unknown> = {}
       if (relayType === 'local') {
         config.mavlink_host = mavlinkHost.trim() || '127.0.0.1'
-        config.mavlink_port = parseInt(mavlinkPort, 10) || 18570
-        if (mavlinkRemotePort.trim()) {
-          config.mavlink_remote_port = parseInt(mavlinkRemotePort.trim(), 10)
-        }
       }
       const res = await registerRelay({
         wavelength_zone_id: wavelengthZoneId,
@@ -106,8 +100,6 @@ export function RegisterRelayDialog({
     setName('')
     setRelayType('local')
     setMavlinkHost('127.0.0.1')
-    setMavlinkPort('18570')
-    setMavlinkRemotePort('')
     setError(null)
     setResult(null)
     onClose()
@@ -169,10 +161,9 @@ export function RegisterRelayDialog({
             <Typography sx={{ color: '#f8fafc', fontSize: '0.875rem', mb: 1 }}>
               <strong>Name:</strong> {result.name}
             </Typography>
-            {relayType === 'local' && (mavlinkHost || mavlinkPort) && (
+            {relayType === 'local' && mavlinkHost && (
               <Typography sx={{ color: '#f8fafc', fontSize: '0.875rem', mb: 1 }}>
-                <strong>MAVLink:</strong> {mavlinkHost}:{mavlinkPort}
-                {mavlinkRemotePort ? ` (remote: ${mavlinkRemotePort})` : ''}
+                <strong>MAVLink host:</strong> {mavlinkHost} (port is set per connection)
               </Typography>
             )}
             <Typography sx={{ color: '#94a3b8', fontSize: '0.8rem' }}>
@@ -223,7 +214,7 @@ export function RegisterRelayDialog({
             {relayType === 'local' && (
               <Box sx={{ mt: 1, p: 1.5, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '0.375rem' }}>
                 <Typography sx={{ color: '#94a3b8', fontSize: '0.75rem', mb: 1.5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  MAVLink Connection
+                  MAVLink host
                 </Typography>
                 <TextField
                   fullWidth
@@ -234,31 +225,7 @@ export function RegisterRelayDialog({
                   margin="dense"
                   size="small"
                   sx={inputSx}
-                  helperText="IP where PX4/sim listens (e.g. 127.0.0.1)"
-                />
-                <TextField
-                  fullWidth
-                  label="MAVLink port"
-                  placeholder="18570"
-                  value={mavlinkPort}
-                  onChange={(e) => setMavlinkPort(e.target.value)}
-                  margin="dense"
-                  size="small"
-                  type="number"
-                  sx={inputSx}
-                  helperText="Primary UDP port (18570 PX4 v1.13+, 14550 legacy)"
-                />
-                <TextField
-                  fullWidth
-                  label="Remote port (optional)"
-                  placeholder="e.g. 14550"
-                  value={mavlinkRemotePort}
-                  onChange={(e) => setMavlinkRemotePort(e.target.value)}
-                  margin="dense"
-                  size="small"
-                  type="number"
-                  sx={inputSx}
-                  helperText="Port PX4 expects for replies; omit to use same as MAVLink port"
+                  helperText="IP where PX4/sim listens. Port is set per connection."
                 />
               </Box>
             )}
