@@ -225,11 +225,13 @@ def _update_relay(user_id: str, body: dict, headers: dict) -> dict:
     now = int(time.time())
     updates = ["updated_at = :now"]
     values = {":now": {"N": str(now)}}
+    names = {}
 
     if "name" in body:
         name = (body.get("name") or "").strip() or "relay"
-        updates.append("name = :name")
+        updates.append("#name = :name")
         values[":name"] = {"S": name}
+        names["#name"] = "name"
     if "config" in body:
         config = body["config"] if isinstance(body["config"], dict) else {}
         updates.append("config = :config")
@@ -237,23 +239,27 @@ def _update_relay(user_id: str, body: dict, headers: dict) -> dict:
     if "status" in body:
         status = (body.get("status") or "").strip().lower()
         if status in ("online", "idle", "offline"):
-            updates.append("status = :status")
+            updates.append("#status = :status")
             values[":status"] = {"S": status}
+            names["#status"] = "status"
             updates.append("last_seen = :now")
 
     if len(updates) <= 1:
         return _response(200, {"message": "No updates"}, headers)
 
+    kwargs = {
+        "TableName": TABLE_NAME,
+        "Key": {
+            "wavelength_zone_id": {"S": wavelength_zone_id},
+            "relay_id": {"S": relay_id},
+        },
+        "UpdateExpression": "SET " + ", ".join(updates),
+        "ExpressionAttributeValues": values,
+    }
+    if names:
+        kwargs["ExpressionAttributeNames"] = names
     try:
-        dynamodb.update_item(
-            TableName=TABLE_NAME,
-            Key={
-                "wavelength_zone_id": {"S": wavelength_zone_id},
-                "relay_id": {"S": relay_id},
-            },
-            UpdateExpression="SET " + ", ".join(updates),
-            ExpressionAttributeValues=values,
-        )
+        dynamodb.update_item(**kwargs)
     except ClientError:
         raise
 
