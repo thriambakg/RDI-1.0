@@ -1,3 +1,4 @@
 export { CreateConnectionDialog } from './CreateConnectionDialog'
 export { CreateFolderDialog } from './CreateFolderDialog'
 export { ConnectionDetailDialog } from './ConnectionDetailDialog'
+export { RegisterRelayDialog } from './RegisterRelayDialog'

@@ -294,6 +294,7 @@ module "session_api_lambda" {
   environment_variables = merge({
     CONNECTION_POOL_TABLE   = local.connection_pool_tbl
     USER_PROFILES_TABLE     = local.user_profiles_tbl
+    RELAY_REGISTRY_TABLE    = local.relay_registry_tbl
     PROXY_ENDPOINT          = local.proxy_endpoint
     PROXY_STATUS_URL        = local.proxy_status_url
     PROXY_STATUS_SECRET_ARN = length(module.proxy_secrets) > 0 ? module.proxy_secrets[0].secret_arns["proxy_status"] : ""
@@ -362,7 +363,7 @@ resource "aws_iam_policy" "session_api_ssm" {
 resource "aws_iam_policy" "session_api_dynamodb" {
   count       = var.base_state_bucket != "" ? 1 : 0
   name        = "${var.project_name}-session-api-dynamodb-${var.environment}"
-  description = "DynamoDB access for session API (connection pool + user profiles)"
+  description = "DynamoDB access for session API (connection pool, user profiles, relay registry)"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -394,6 +395,11 @@ resource "aws_iam_policy" "session_api_dynamodb" {
         Resource = [
           "arn:aws:dynamodb:${local.region}:${data.aws_caller_identity.current.account_id}:table/${local.user_profiles_tbl}"
         ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem"]
+        Resource = ["arn:aws:dynamodb:${local.region}:${data.aws_caller_identity.current.account_id}:table/${local.relay_registry_tbl}"]
       }
     ]
   })
@@ -447,6 +453,82 @@ resource "aws_iam_policy" "user_profile_api_dynamodb" {
   })
 }
 
+# Relay Registry API Lambda - POST/GET/PATCH/DELETE /relays
+module "relay_registry_api_lambda" {
+  count  = var.base_state_bucket != "" ? 1 : 0
+  source = "./modules/lambda"
+
+  function_name = "${var.project_name}-relay-registry-api-${var.environment}-${local.region}"
+  description   = "Relay registry API - register and manage relay devices per Wavelength zone"
+  handler       = "lambda_function.lambda_handler"
+  runtime       = "python3.12"
+  timeout       = 10
+  memory_size   = 128
+  source_dir    = "${path.module}/../src/relay-registry-api"
+
+  environment_variables = {
+    RELAY_REGISTRY_TABLE = local.relay_registry_tbl
+    USER_PROFILES_TABLE  = local.user_profiles_tbl
+  }
+
+  additional_policy_arns = [
+    aws_iam_policy.relay_registry_api_dynamodb[0].arn,
+    aws_iam_policy.relay_registry_api_user_profiles[0].arn,
+  ]
+  depends_on = [aws_iam_policy.relay_registry_api_dynamodb, aws_iam_policy.relay_registry_api_user_profiles]
+  layers     = [module.core_layer.layer_arn]
+
+  tags = {}
+}
+
+resource "aws_iam_policy" "relay_registry_api_dynamodb" {
+  count       = var.base_state_bucket != "" ? 1 : 0
+  name        = "${var.project_name}-relay-registry-api-dynamodb-${var.environment}"
+  description = "DynamoDB access for relay registry API"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query"
+        ]
+        Resource = [
+          "arn:aws:dynamodb:${local.region}:${data.aws_caller_identity.current.account_id}:table/${local.relay_registry_tbl}",
+          "arn:aws:dynamodb:${local.region}:${data.aws_caller_identity.current.account_id}:table/${local.relay_registry_tbl}/index/*"
+        ]
+      }
+    ]
+  })
+}
+
+resource "aws_iam_policy" "relay_registry_api_user_profiles" {
+  count       = var.base_state_bucket != "" ? 1 : 0
+  name        = "${var.project_name}-relay-registry-api-user-profiles-${var.environment}"
+  description = "User profiles access for relay registry API (sync relays to profile)"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem"
+        ]
+        Resource = [
+          "arn:aws:dynamodb:${local.region}:${data.aws_caller_identity.current.account_id}:table/${local.user_profiles_tbl}"
+        ]
+      }
+    ]
+  })
+}
+
 # API Gateway account settings - CloudWatch execution logging (per-region; uses role from base infra)
 resource "aws_api_gateway_account" "this" {
   count = var.base_state_bucket != "" && local.api_gateway_cloudwatch_role_arn != null ? 1 : 0
@@ -470,6 +552,7 @@ module "session_api" {
   resources = {
     sessions     = { path_part = "sessions" }
     user_profile = { path_part = "user-profile" }
+    relays       = { path_part = "relays" }
   }
 
   methods = {
@@ -521,6 +604,38 @@ module "session_api" {
       lambda_arn              = module.user_profile_api_lambda[0].function_arn
       authorization_type      = "COGNITO_USER_POOLS"
     }
+    post_relays = {
+      resource_key            = "relays"
+      http_method             = "POST"
+      integration_type        = "AWS_PROXY"
+      integration_http_method = "POST"
+      lambda_arn              = module.relay_registry_api_lambda[0].function_arn
+      authorization_type      = "COGNITO_USER_POOLS"
+    }
+    get_relays = {
+      resource_key            = "relays"
+      http_method             = "GET"
+      integration_type        = "AWS_PROXY"
+      integration_http_method = "POST"
+      lambda_arn              = module.relay_registry_api_lambda[0].function_arn
+      authorization_type      = "COGNITO_USER_POOLS"
+    }
+    patch_relays = {
+      resource_key            = "relays"
+      http_method             = "PATCH"
+      integration_type        = "AWS_PROXY"
+      integration_http_method = "POST"
+      lambda_arn              = module.relay_registry_api_lambda[0].function_arn
+      authorization_type      = "COGNITO_USER_POOLS"
+    }
+    delete_relays = {
+      resource_key            = "relays"
+      http_method             = "DELETE"
+      integration_type        = "AWS_PROXY"
+      integration_http_method = "POST"
+      lambda_arn              = module.relay_registry_api_lambda[0].function_arn
+      authorization_type      = "COGNITO_USER_POOLS"
+    }
   }
 
   lambda_permissions = {
@@ -530,10 +645,14 @@ module "session_api" {
     patch              = { function_arn = module.session_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "sessions" }
     get_user_profile   = { function_arn = module.user_profile_api_lambda[0].function_arn, http_method = "GET", resource_path = "user-profile" }
     patch_user_profile = { function_arn = module.user_profile_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "user-profile" }
+    post_relays        = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "POST", resource_path = "relays" }
+    get_relays         = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "GET", resource_path = "relays" }
+    patch_relays       = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "relays" }
+    delete_relays      = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "DELETE", resource_path = "relays" }
   }
 
   # Combine Lambda hash (auto) with manual trigger (bump local.session_api_deployment_trigger to force redeploy)
-  deployment_trigger = "1"
+  deployment_trigger = "2"
 }
 
 # Scheduled idle-expiry: mark sessions idle when idle_after has passed (no DynamoDB TTL delete)

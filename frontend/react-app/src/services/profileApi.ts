@@ -49,6 +49,15 @@ export interface SessionRef {
   session_id: string
   name: string
   status: string
+  relay_id?: string
+}
+
+export interface RelayRef {
+  relay_id: string
+  wavelength_zone_id: string
+  name: string
+  relay_type: string
+  status: string
 }
 
 export interface FolderNode {
@@ -61,6 +70,7 @@ export type ConnectionHierarchy = Record<string, FolderNode>
 export interface UserProfile {
   user_id: string
   connection_hierarchy: ConnectionHierarchy
+  relays?: RelayRef[]
 }
 
 export async function getProfile(): Promise<UserProfile> {

@@ -13,6 +13,7 @@ Stores per-user profile data including connection hierarchy (folder organization
 | **PK** | `user_id` (S) | Cognito sub — primary key |
 | `email` | S | User email (optional) |
 | `connection_hierarchy` | M or S | Folder hierarchy; see below. Stored as DynamoDB Map or JSON string. |
+| `relays` | L | Array of relay refs `{relay_id, wavelength_zone_id, name, relay_type, status}`. Synced by Relay Registry API. |
 
 ## GSIs
 
@@ -64,6 +65,7 @@ Maps folder names to folder objects. Each folder contains `sessions` (array of `
 | `session_id` | string | References connection pool table |
 | `name` | string | Display name (from drone_id prefix) |
 | `status` | string | `active` \| `idle` |
+| `relay_id` | string | Optional. Which relay this session routes through. |
 
 ### Default folders
 

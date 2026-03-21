@@ -43,12 +43,12 @@ RDI exposes two distinct APIs:
              ② wss://<alb-dns>:443  ·  ALB terminates TLS; first msg: "frontend:{session_id}" or "agent:{session_id}"          │
                                                                                                                                ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  AWS CLOUD  ·  WebSocket API (ALB + Proxy EC2)                                                                                │
+│  AWS CLOUD  ·  WebSocket API (ALB + ECS Fargate proxy)                                                                        │
 │                                                                                                                              │
 │  ┌─────────────────────┐     ┌─────────────────────────────────────┐          ┌──────────────────────────────────────┐     │
-│  │  ALB                │     │  Proxy EC2 (regional)               │          │  Wavelength EC2                      │     │
-│  │  TLS (wss) on 443   │────►│  WebSocket on 8765                  │─────────►│  Receives from proxy (VPC)           │     │
-│  │  Target: Proxy      │     │  Pairs frontend↔agent; bridges bytes│  forward │  Agent + PX4 at carrier edge         │     │
+│  │  ALB                │     │  ECS Fargate · Proxy container      │          │  Wavelength EC2                      │     │
+│  │  TLS (wss) on 443   │────►│  WebSocket 8765; health 8766;       │─────────►│  Agent + PX4 at carrier edge         │     │
+│  │  /session-status →  │     │  session-status 8767 (Lambda→proxy) │  outbound│  Agent connects out to proxy         │     │
 │  └─────────────────────┘     └─────────────────────────────────────┘          └──────────────────┬───────────────────┘     │
 │                                                                       │                                                      │
 └───────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────┘
@@ -71,7 +71,7 @@ RDI exposes two distinct APIs:
 
 ### Proxy does NOT connect to PX4
 
-The **Proxy** (EC2) is a dumb relay. It forwards binary between two WebSocket peers:
+The **Proxy** (Rust service on **ECS Fargate** behind an ALB) is a dumb relay. It forwards binary between two WebSocket peers:
 - **Frontend** (browser) – sends MAVLink bytes
 - **Agent** (runs with PX4) – receives from proxy, sends to PX4 via UDP
 
@@ -84,13 +84,13 @@ The **Agent** runs where PX4 is: your laptop, a Pi, or Wavelength EC2. It connec
 | **Local dev** (drone-test) | Script talks directly to PX4 via UDP. No proxy. |
 | **Via proxy** | Frontend → Proxy → Agent → PX4. Agent runs on same machine as PX4. |
 
-Proxy EC2 never talks to PX4. Only the agent does.
+The proxy never talks to PX4. Only the agent does.
 
 ### Proxy → Wavelength (always chained)
 
 The flow is **always** sequential:
-- **Proxy EC2** (regional): Gateway reachable from the internet. Receives WebSocket from users.
-- **Wavelength EC2**: Receives from proxy (VPC/private path). Runs agent + PX4 at carrier edge.
+- **Proxy (ECS Fargate)** in a dedicated VPC: Internet-facing ALB terminates TLS (`wss://`); Fargate tasks run the WebSocket relay (ports 8765 WebSocket, 8766 health, 8767 session-status API for Lambda).
+- **Wavelength EC2**: Agent connects **outbound** from the carrier edge to the same `wss://` endpoint; runs agent + PX4.
 
 There is no "proxy OR wavelength" — it is always **Proxy → Wavelength** for production traffic from the internet.
 
@@ -121,7 +121,7 @@ RDI uses two APIs with different protocols and responsibilities:
 |---------|----------|------|
 | Real-time MAVLink tunnel | `wss://<alb-dns>` (ALB terminates TLS) | session_id handshake |
 
-- **Backend:** Proxy EC2 (no Lambda in the data path)
+- **Backend:** ECS Fargate (proxy container) + ALB (no Lambda in the MAVLink data path)
 - **Protocol:** Binary MAVLink frames. First message from each client: `frontend:{session_id}` or `agent:{session_id}`. Proxy pairs by session_id and bridges bytes.
 - **Clients:** Frontend (browser) and Agent (with PX4). Both must have obtained the same `session_id` from the REST API.
 
@@ -166,34 +166,37 @@ RDI uses two APIs with different protocols and responsibilities:
 
 ## Flight Logs (S3)
 
-**Flow:** EC2 logs activity/telemetry during active sessions in parallel (no latency impact) → on session close, writes log file to S3.
+**Flow:** (Planned) Log activity/telemetry during active sessions in parallel (no latency impact) → on session close, write log file to S3.
 
 | Aspect | Detail |
 |--------|--------|
 | **Bucket** | `rdi-flight-logs-{env}-{account}` (Base Infra) |
 | **Replication** | Prod: primary + replica (e.g. eu-central-1 → eu-west-2); Staging: single region |
 | **Path** | `{user_id}/{wavelength_zone_id}/{drone_id}-{session_id}.log` |
-| **Write** | Proxy EC2 on session close — EC2 gets close signal, flushes buffer, uploads to S3 |
+| **Write** | (To be implemented) Proxy or agent on session close — flush buffer, upload to S3 |
 | **Access** | Users browse logs by user_id; frontend can list by prefix |
 
 **Drone ID format:** `{user-set-name}-{uuid}` — e.g. `survey-alpha-a1b2c3d4-...` for easy identification in logs.
 
-**Implementation status:** Bucket and path structure are in place. The Proxy EC2 logic (log buffering, session-close detection, S3 upload) is to be implemented once initial flight controls are tested and validated.
+**Implementation status:** Bucket and path structure are in place. Flight-log buffering, session-close detection, and S3 upload are to be implemented once initial flight controls are tested and validated.
 
 **Session deletion logging (to be implemented):** When a session is deleted (via `DELETE /sessions` with `permanent: true`), the system should append an entry to the logfile recording the deletion event (session_id, user_id, drone_id, timestamp, reason). This ensures audit trails remain complete even when sessions are manually removed. Not yet implemented.
 
 ---
 
-## WebSocket Path (no Lambda in control path)
+## WebSocket Path (no Lambda in MAVLink path)
 
-The **Drone Control** WebSocket API targets **Proxy → EC2** with no Lambda in the data path.
+The **Drone Control** WebSocket API is **ALB → ECS Fargate (proxy)** with no Lambda in the MAVLink data path.
 
 | Option | How | Lambda? |
 |--------|-----|---------|
-| **ALB (production)** | Frontend → ALB (wss://) → Proxy EC2 | No; TLS termination at ALB |
-| **API Gateway WebSocket** | Requires Lambda for connect/message/disconnect | Yes |
+| **ALB + ECS (current)** | Frontend → ALB (`wss://`) → Fargate proxy task | No in MAVLink path; TLS at ALB |
+| **Session status (control plane)** | Session API Lambda → `POST https://<alb>/session-status` → proxy port 8767 | Yes (REST only; sets active/idle per session) |
+| **API Gateway WebSocket** | Requires Lambda for connect/message/disconnect | Yes (not used for drone control) |
 
-`websocket-api` module exists for API Gateway WebSocket (Lambda-based). The preferred path for latency is **ALB + Proxy**: ALB terminates TLS (wss), Proxy relays MAVLink; no Lambda in the data path.
+`websocket-api` module exists for API Gateway WebSocket (Lambda-based). The preferred path for latency is **ALB + ECS proxy**: ALB terminates TLS (`wss`), Fargate runs the Rust proxy; no Lambda in the MAVLink tunnel.
+
+**Terraform:** `use_proxy_ecs = true` (default) provisions module `proxy-ecs` (VPC, ALB, ECR, ECS cluster, Fargate task). Image: `rdi-proxy` container from ECR. Secrets Manager supplies `RDI_PROXY_STATUS_SECRET` to the task so Lambda and proxy agree on the session-status API secret.
 
 ---
 
@@ -257,10 +260,11 @@ Connections are stored in folders per user. The hierarchy lives in the **user pr
 |-----------|----------|------|
 | Frontend | S3 + CloudFront | React app, Cognito auth; calls REST + WebSocket APIs |
 | REST API (Session) | API Gateway + Lambda | POST/GET/DELETE /sessions; returns proxy endpoint |
-| WebSocket API (Drone) | ALB + Proxy EC2 | `wss://` via ALB; Proxy pairs frontend↔agent, bridges MAVLink |
-| ALB | Regional | TLS termination for WSS; targets Proxy EC2 |
-| Proxy | EC2 (regional) | WebSocket relay; forwards to Wavelength |
-| Wavelength EC2 | Wavelength zone | Receives from proxy; runs agent + PX4 |
+| WebSocket API (Drone) | ALB + ECS Fargate | `wss://` via ALB; proxy pairs frontend↔agent, bridges MAVLink |
+| ALB | Regional (proxy VPC) | TLS termination for WSS; listener rules: default → WebSocket TG; `/session-status` → status TG |
+| Proxy | ECS Fargate (Rust container) | WebSocket relay on 8765; health 8766; Lambda session-status on 8767 |
+| ECR | Regional | Container image for proxy |
+| Wavelength EC2 | Wavelength zone | Agent connects outbound to proxy; runs agent + PX4 |
 | Agent | On Wavelength (or beyond) | WS ↔ PX4 UDP bridge |
 | PX4 | With agent | Autopilot, MAVLink |
 
@@ -270,11 +274,14 @@ Connections are stored in folders per user. The hierarchy lives in the **user pr
 
 | Module | Purpose |
 |--------|---------|
-| `proxy-ec2` | Regional proxy EC2; WebSocket relay behind ALB |
-| `alb` (to add) | ALB for WSS (TLS termination), targets Proxy EC2 |
-| `wavelength-ec2` | Optional EC2 in Wavelength zone |
+| `proxy-ecs` | **Default proxy:** Dedicated VPC, internet ALB, ECR, ECS cluster, Fargate task (Rust proxy). Replaces legacy proxy-on-EC2 for new deployments. |
+| `rdi-edge` / proxy EC2 | Legacy: regional proxy EC2 + ALB; use when `use_proxy_ecs = false` |
+| `wavelength-ec2` | Optional EC2 in Wavelength zone (agent binary from S3) |
 | `api-gateway` | REST API for Session API (POST/GET/DELETE /sessions) |
-| `websocket-api` | (Optional) API Gateway WebSocket, Lambda-based; alternative to direct proxy |
+| `secrets-manager` | `proxy_status` secret shared by Lambda and ECS task execution role |
+| `websocket-api` | (Optional) API Gateway WebSocket, Lambda-based; not used for production drone path |
+
+**Variable:** `use_proxy_ecs` (default `true`) — when true, `proxy-ecs` is applied and proxy binary upload to S3 for EC2 proxy is skipped where applicable.
 
 ---
 
@@ -301,19 +308,20 @@ Approximate AWS costs for a single region (e.g. us-east-1 or eu-central-1). Assu
 | Component | Config | Est. monthly (USD) |
 |-----------|--------|--------------------|
 | **ALB** | 1 ALB, ~1 LCU avg, light WebSocket traffic | $18–25 |
-| **Proxy EC2** | t3.small, 30 GB gp3 | $16–18 |
+| **ECS Fargate (proxy)** | 0.25 vCPU / 512 MB, 1 task, 730 h | ~$15–20 |
+| **ECR** | Proxy container image | <$1 |
 | **Wavelength EC2** | t3.small (when deployed), carrier data charges | $18–25 + data |
 | **Session API Lambda** | ~1K–10K invocations | <$1 |
 | **API Gateway** | REST, ~1K–10K requests | $0.50–2 |
 | **DynamoDB** | On-demand, connection pool table | $1–5 |
-| **S3** | Lambda layers, proxy binary, flight logs | <$1–5 |
+| **S3** | Lambda layers, agent binary artifacts, flight logs | <$1–5 |
 | **KMS** | 1 key, low usage | $1 |
 | **EIP** | Not needed with ALB (Proxy is target); $0 | $0 |
 | **Data transfer** | Internet egress, inter-AZ | varies |
 
-**Total per region (staging):** ~\$55–75/month (Proxy + Wavelength + ALB + base services).
+**Total per region (staging):** ~\$55–80/month (ECS proxy + Wavelength + ALB + base services).
 
-**With ALB:** Session API returns `wss://<alb-dns-name>`; frontend and agent connect via WSS. No EIP needed for user-facing proxy if ALB is the entry point (EIP may still be used for proxy↔Wavelength routing).
+**Endpoints:** Session API returns `wss://<alb-dns-name>` (or custom domain when enabled); frontend and agent connect via WSS. Lambda calls `https://<alb-dns-name>/session-status` (or custom domain) for active/idle. No EIP needed for the proxy entry point when ALB is public.
 
 **Production (multi-region):** Multiply by number of regions. Wavelength data transfer and carrier charges vary by provider and usage.
 

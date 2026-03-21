@@ -34,6 +34,10 @@ type SessionsState = Arc<RwLock<HashMap<String, JoinHandle<()>>>>;
 struct AddSessionBody {
     session_id: String,
     proxy_url: String,
+    #[serde(default)]
+    mavlink_host: Option<String>,
+    #[serde(default)]
+    mavlink_port: Option<u16>,
 }
 
 #[tokio::main]
@@ -88,11 +92,16 @@ async fn add_session(
         );
     }
 
-    let mavlink_port: u16 = env::var("RDI_MAVLINK_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
+    let mavlink_host: String = body
+        .mavlink_host
+        .filter(|s| !s.is_empty())
+        .or_else(|| env::var("RDI_MAVLINK_HOST").ok())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let mavlink_port: u16 = body
+        .mavlink_port
+        .or_else(|| env::var("RDI_MAVLINK_PORT").ok().and_then(|s| s.parse().ok()))
         .unwrap_or(DEFAULT_MAVLINK_PORT);
-    let mavlink_addr = format!("127.0.0.1:{}", mavlink_port);
+    let mavlink_addr = format!("{}:{}", mavlink_host, mavlink_port);
 
     let mut guard = sessions.write().await;
     if guard.contains_key(&session_id) {

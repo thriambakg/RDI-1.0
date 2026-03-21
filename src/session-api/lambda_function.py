@@ -24,6 +24,7 @@ TABLE_NAME = os.environ["CONNECTION_POOL_TABLE"]
 REGION = os.environ["AWS_REGION"]
 PROXY_ENDPOINT = os.environ["PROXY_ENDPOINT"]
 USER_PROFILES_TABLE = os.environ.get("USER_PROFILES_TABLE", "")
+RELAY_REGISTRY_TABLE = os.environ.get("RELAY_REGISTRY_TABLE", "")
 PROXY_STATUS_URL = os.environ.get("PROXY_STATUS_URL", "")
 PROXY_STATUS_SECRET_ARN = os.environ.get("PROXY_STATUS_SECRET_ARN", "")
 PROXY_STATUS_SECRET_ENV = os.environ.get("PROXY_STATUS_SECRET", "")  # Fallback when no ARN
@@ -69,13 +70,57 @@ print(
 )
 
 
-def _add_session_to_agent(instance_id: str, proxy_url: str, session_id: str) -> None:
+def _fetch_relay_config(dynamodb, user_id: str, relay_id: str, wavelength_zone_id: str) -> dict | None:
+    """Fetch relay from registry; return config (mavlink_host, mavlink_port) if user owns it and has MAVLink config."""
+    if not RELAY_REGISTRY_TABLE or not relay_id:
+        return None
+    try:
+        resp = dynamodb.get_item(
+            TableName=RELAY_REGISTRY_TABLE,
+            Key={
+                "wavelength_zone_id": {"S": wavelength_zone_id},
+                "relay_id": {"S": relay_id},
+            },
+        )
+    except ClientError:
+        return None
+    item = resp.get("Item")
+    if not item:
+        return None
+    if item.get("user_id", {}).get("S") != user_id:
+        return None
+    config_raw = item.get("config", {}).get("S")
+    if not config_raw:
+        return None
+    try:
+        config = json.loads(config_raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(config, dict):
+        return None
+    out = {}
+    if config.get("mavlink_host"):
+        out["mavlink_host"] = str(config["mavlink_host"])
+    if config.get("mavlink_port") is not None:
+        out["mavlink_port"] = int(config["mavlink_port"])
+    return out if out else None
+
+
+def _add_session_to_agent(
+    instance_id: str, proxy_url: str, session_id: str, relay_config: dict | None = None
+) -> None:
     """Add session to the running agent daemon. Daemon stays up; this opens a WebSocket bridge for this session."""
     if not instance_id or not proxy_url or not session_id:
         _log("add_session skipped", session_id=session_id, has_instance=bool(instance_id), has_proxy_url=bool(proxy_url))
         return
     _log("add_session to agent daemon", session_id=session_id, proxy_url=proxy_url, instance_id=instance_id)
-    body = json.dumps({"session_id": session_id, "proxy_url": proxy_url})
+    body = {"session_id": session_id, "proxy_url": proxy_url}
+    if relay_config:
+        if relay_config.get("mavlink_host"):
+            body["mavlink_host"] = relay_config["mavlink_host"]
+        if relay_config.get("mavlink_port") is not None:
+            body["mavlink_port"] = relay_config["mavlink_port"]
+    body = json.dumps(body)
     cmd = f"curl -s -X POST http://127.0.0.1:{AGENT_API_PORT}/sessions -H 'Content-Type: application/json' -d {shlex.quote(body)}"
     try:
         ssm = boto3.client("ssm", region_name=REGION)
@@ -273,6 +318,7 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     drone_id = f"{drone_name}-{uuid.uuid4()}"
     wavelength_zone_id = body.get("wavelength_zone_id") or REGION
     user_zone_sk = f"{wavelength_zone_id}#{session_id}"
+    relay_id = (body.get("relay_id") or "").strip() or None
 
     item = {
         "user_id": {"S": user_id},
@@ -289,10 +335,13 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     }
     if idle_after_ts is not None:
         item["idle_after"] = {"N": str(idle_after_ts)}
+    if relay_id:
+        item["relay_id"] = {"S": relay_id}
     if body.get("metadata") and isinstance(body["metadata"], dict):
         item["metadata"] = {"S": json.dumps(body["metadata"])}
 
     dynamodb = boto3.client("dynamodb")
+    relay_config = _fetch_relay_config(dynamodb, user_id, relay_id, wavelength_zone_id) if relay_id else None
     try:
         dynamodb.put_item(
             TableName=TABLE_NAME,
@@ -314,6 +363,7 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
             name=drone_name,
             status="active",
             folder_path=folder_path,
+            relay_id=relay_id,
         )
 
     # Mark session active on the proxy so it accepts UI and agent WebSocket connections for this session.
@@ -339,7 +389,7 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
             deployed_zone=WAVELENGTH_ZONE_ID,
         )
     else:
-        _add_session_to_agent(WAVELENGTH_INSTANCE_ID, PROXY_ENDPOINT, session_id)
+        _add_session_to_agent(WAVELENGTH_INSTANCE_ID, PROXY_ENDPOINT, session_id, relay_config)
 
     payload = {
         "session_id": session_id,
@@ -347,6 +397,10 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
         "endpoint": PROXY_ENDPOINT,
         "expires_at": display_expires_at,
     }
+    if relay_id:
+        payload["relay_id"] = relay_id
+    if relay_config:
+        payload["relay_config"] = relay_config
     if WAVELENGTH_CARRIER_IP and (not WAVELENGTH_ZONE_ID or wavelength_zone_id == WAVELENGTH_ZONE_ID):
         payload["carrier_ip"] = WAVELENGTH_CARRIER_IP
         payload["mavlink_port"] = MAVLINK_PORT
@@ -564,6 +618,8 @@ def _get_session(
             "endpoint": item.get("endpoint", {}).get("S"),
             "status": item.get("status", {}).get("S"),
         }
+        if item.get("relay_id", {}).get("S"):
+            out["relay_id"] = item["relay_id"]["S"]
         if WAVELENGTH_CARRIER_IP:
             wl_zone = item.get("wavelength_zone_id", {}).get("S")
             if not WAVELENGTH_ZONE_ID or wl_zone == WAVELENGTH_ZONE_ID:
@@ -614,6 +670,8 @@ def _get_session(
             "endpoint": item.get("endpoint", {}).get("S"),
             "expires_at": expires_at_val,
         }
+        if item.get("relay_id", {}).get("S"):
+            sess["relay_id"] = item["relay_id"]["S"]
         if WAVELENGTH_CARRIER_IP:
             wl_zone = item.get("wavelength_zone_id", {}).get("S")
             if not WAVELENGTH_ZONE_ID or wl_zone == WAVELENGTH_ZONE_ID:
@@ -638,7 +696,9 @@ def _from_dynamo(val: dict | None) -> Any:
     return TypeDeserializer().deserialize(val)
 
 
-def _upsert_profile_add_session(dynamodb, user_id: str, *, session_id: str, name: str, status: str, folder_path: list) -> None:
+def _upsert_profile_add_session(
+    dynamodb, user_id: str, *, session_id: str, name: str, status: str, folder_path: list, relay_id: str | None = None
+) -> None:
     """Get or create profile, add session to folder, save."""
     try:
         resp = dynamodb.get_item(
@@ -651,7 +711,7 @@ def _upsert_profile_add_session(dynamodb, user_id: str, *, session_id: str, name
     hierarchy = {}
     if item and "connection_hierarchy" in item:
         hierarchy = _from_dynamo(item["connection_hierarchy"]) or {}
-    hierarchy = add_session_to_folder(hierarchy, folder_path, session_id, name, status)
+    hierarchy = add_session_to_folder(hierarchy, folder_path, session_id, name, status, relay_id=relay_id)
     dynamodb.update_item(
         TableName=USER_PROFILES_TABLE,
         Key={"user_id": {"S": user_id}},

@@ -23,6 +23,7 @@ export interface CreateSessionParams {
   ttl_seconds?: number
   wavelength_zone_id?: string
   folder_path?: string[]
+  relay_id?: string
   metadata?: {
     mavlink_port?: number
     mavlink_host?: string
@@ -30,11 +31,20 @@ export interface CreateSessionParams {
   }
 }
 
+export interface RelayConfig {
+  mavlink_host?: string
+  mavlink_port?: number
+}
+
 export interface CreateSessionResponse {
   session_id: string
   drone_id: string
   endpoint: string
   expires_at: number
+  relay_id?: string
+  relay_config?: RelayConfig
+  carrier_ip?: string
+  mavlink_port?: number
 }
 
 export interface SessionInfo {
@@ -58,6 +68,7 @@ export async function createSession(params: CreateSessionParams): Promise<Create
     ttl_seconds: params.ttl_seconds ?? 14400,
     wavelength_zone_id: params.wavelength_zone_id,
     folder_path: params.folder_path ?? ['My Drones'],
+    relay_id: params.relay_id,
     metadata: params.metadata,
   }
   console.log('🌐 [RDI Session API] POST /sessions', { url, body })

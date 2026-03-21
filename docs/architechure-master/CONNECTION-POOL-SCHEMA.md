@@ -18,6 +18,7 @@
 | `updated_at` | N | Unix timestamp — last modification |
 | `released_at` | N | Unix timestamp — when status went to idle (optional) |
 | `metadata` | S | JSON string for extensibility (optional) |
+| `relay_id` | S | Optional. Which relay this session routes through. |
 
 ---
 
@@ -70,6 +71,7 @@
 | `drone_name` | string | Optional; default `"drone"`; becomes `{drone_name}-{uuid}` |
 | `wavelength_zone_id` | string | Optional; default region |
 | `folder_path` | array of strings | Optional; e.g. `["My Drones"]` or `["My Drones", "Fleet A"]`; default `["My Drones"]` |
+| `relay_id` | string | Optional. Relay to route this session through. |
 | `metadata` | object | Optional; stored as JSON string. PX4/local tunnel details: |
 
 ### metadata (PX4 / local tunnel)

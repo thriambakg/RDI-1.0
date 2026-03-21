@@ -26,7 +26,7 @@ import { Delete as DeleteIcon, ExpandLess, ExpandMore, Folder, FolderOpen, MoreV
 import { useAuth } from '../../contexts/AuthContext'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import { getEnvironmentRegions } from '../../config'
-import { CreateConnectionDialog, CreateFolderDialog, ConnectionDetailDialog } from '../../components/dialogues'
+import { CreateConnectionDialog, CreateFolderDialog, ConnectionDetailDialog, RegisterRelayDialog } from '../../components/dialogues'
 import { useProfile } from '../../contexts/ProfileContext'
 import {
   deleteFolder,
@@ -38,6 +38,7 @@ import {
   type FolderNode,
   type SessionRef,
   type ConnectionHierarchy,
+  type RelayRef,
 } from '../../services/profileApi'
 import { deleteSession, releaseSession, activateSession, getSession } from '../../services/sessionApi'
 import type { CreateSessionResponse } from '../../services/sessionApi'
@@ -203,7 +204,8 @@ export default function Console() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false)
-  const { hierarchy, isLoading: profileLoading, refetch: fetchProfile, updateHierarchy } = useProfile()
+  const [registerRelayDialogOpen, setRegisterRelayDialogOpen] = useState(false)
+  const { profile, hierarchy, isLoading: profileLoading, refetch: fetchProfile, updateHierarchy } = useProfile()
   const [selectedFolderPath, setSelectedFolderPath] = useState<string[]>([])
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null)
   const [connectionMenuAnchor, setConnectionMenuAnchor] = useState<{ sessionId: string; el: HTMLElement } | null>(null)
@@ -268,6 +270,7 @@ export default function Console() {
           session_id: res.session_id,
           name: displayName,
           status: 'active',
+          relay_id: res.relay_id,
         })
       )
       openSessionWs(res.session_id, res.endpoint)
@@ -506,6 +509,19 @@ export default function Console() {
                 + New folder
               </Button>
               <Button
+                onClick={() => setRegisterRelayDialogOpen(true)}
+                disableRipple
+                variant="outlined"
+                sx={{
+                  color: '#94a3b8',
+                  borderColor: '#475569',
+                  textTransform: 'none',
+                  '&:hover': { borderColor: '#64748b', backgroundColor: 'rgba(71, 85, 105, 0.2)' },
+                }}
+              >
+                + Register relay
+              </Button>
+              <Button
                 onClick={() => setCreateDialogOpen(true)}
                 disabled={!canCreateConnectionUnderSelection}
                 disableRipple
@@ -521,7 +537,21 @@ export default function Console() {
             onClose={() => setCreateDialogOpen(false)}
             wavelengthZoneId={selectedZone.id}
             folderPath={selectedFolderPath.length > 0 ? selectedFolderPath : ['My Drones']}
+            relays={(profile?.relays ?? []).filter((r: RelayRef) => r.wavelength_zone_id === selectedZone.id)}
+            onRegisterRelayClick={() => {
+              setCreateDialogOpen(false)
+              setRegisterRelayDialogOpen(true)
+            }}
             onSuccess={handleConnectionCreated}
+          />
+          <RegisterRelayDialog
+            isOpen={registerRelayDialogOpen}
+            onClose={() => setRegisterRelayDialogOpen(false)}
+            wavelengthZoneId={selectedZone.id}
+            zoneLabel={`${selectedZone.city} (${selectedZone.carrier})`}
+            onSuccess={() => {
+              fetchProfile({ silent: true })
+            }}
           />
           <ConnectionDetailDialog
             sessionId={detailSessionId}

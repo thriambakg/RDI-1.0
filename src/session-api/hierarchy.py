@@ -22,9 +22,15 @@ DEFAULT_HIERARCHY = {
 
 
 def add_session_to_folder(
-    hierarchy: dict, folder_path: list[str], session_id: str, name: str, status: str
+    hierarchy: dict,
+    folder_path: list[str],
+    session_id: str,
+    name: str,
+    status: str,
+    relay_id: str | None = None,
 ) -> dict:
-    """Add session to folder. folder_path e.g. ['My Drones'] or ['My Drones', 'Fleet A']."""
+    """Add session to folder. folder_path e.g. ['My Drones'] or ['My Drones', 'Fleet A'].
+    relay_id optional: which relay this session routes through."""
     h = _ensure_hierarchy(hierarchy)
     target = h
     for part in folder_path[:-1]:
@@ -35,11 +41,10 @@ def add_session_to_folder(
     if last not in target:
         target[last] = {"sessions": [], "subfolders": {}}
     folder = target[last]
-    folder.setdefault("sessions", []).append({
-        "session_id": session_id,
-        "name": name,
-        "status": status,
-    })
+    sess = {"session_id": session_id, "name": name, "status": status}
+    if relay_id:
+        sess["relay_id"] = relay_id
+    folder.setdefault("sessions", []).append(sess)
     return h
 
 
@@ -135,3 +140,42 @@ def _ensure_hierarchy(h: dict | None) -> dict:
                     node["subfolders"] = {}
     _ensure_shared_folder(h)
     return h
+
+
+# --- Relay helpers (user profile relays array) ---
+
+def add_relay_to_profile(relays: list, relay: dict) -> list:
+    """Add relay ref to user profile relays list. relay: {relay_id, wavelength_zone_id, name, relay_type, status}."""
+    rl = list(relays) if isinstance(relays, list) else []
+    # Avoid duplicate (same relay_id + zone)
+    rid = relay.get("relay_id")
+    zid = relay.get("wavelength_zone_id")
+    rl = [r for r in rl if not (isinstance(r, dict) and r.get("relay_id") == rid and r.get("wavelength_zone_id") == zid)]
+    rl.append({
+        "relay_id": rid,
+        "wavelength_zone_id": zid,
+        "name": relay.get("name", "relay"),
+        "relay_type": relay.get("relay_type", "local"),
+        "status": relay.get("status", "offline"),
+    })
+    return rl
+
+
+def remove_relay_from_profile(relays: list, relay_id: str, wavelength_zone_id: str) -> list:
+    """Remove relay from user profile relays list."""
+    rl = list(relays) if isinstance(relays, list) else []
+    return [
+        r for r in rl
+        if not (isinstance(r, dict) and r.get("relay_id") == relay_id and r.get("wavelength_zone_id") == wavelength_zone_id)
+    ]
+
+
+def update_relay_in_profile(relays: list, relay_id: str, wavelength_zone_id: str, updates: dict) -> list:
+    """Update relay in profile (name, status)."""
+    rl = list(relays) if isinstance(relays, list) else []
+    out = []
+    for r in rl:
+        if isinstance(r, dict) and r.get("relay_id") == relay_id and r.get("wavelength_zone_id") == wavelength_zone_id:
+            r = {**r, **updates}
+        out.append(r)
+    return out

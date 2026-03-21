@@ -12,6 +12,7 @@ import {
 } from '@mui/material'
 import { createSession } from '../../services/sessionApi'
 import type { CreateSessionResponse } from '../../services/sessionApi'
+import type { RelayRef } from '../../services/profileApi'
 import './CreateConnectionDialog.css'
 
 const TTL_OPTIONS = [
@@ -64,6 +65,8 @@ export interface CreateConnectionDialogProps {
   onClose: () => void
   wavelengthZoneId: string
   folderPath?: string[]
+  relays: RelayRef[]
+  onRegisterRelayClick?: () => void
   onSuccess?: (result: CreateSessionResponse, displayName: string) => void
 }
 
@@ -72,17 +75,24 @@ export function CreateConnectionDialog({
   onClose,
   wavelengthZoneId,
   folderPath = ['My Drones'],
+  relays,
+  onRegisterRelayClick,
   onSuccess,
 }: CreateConnectionDialogProps) {
   const [droneName, setDroneName] = useState('')
+  const [relayId, setRelayId] = useState('')
   const [ttlSeconds, setTtlSeconds] = useState(14400)
   const [mavlinkPort, setMavlinkPort] = useState(18570)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<CreateSessionResponse | null>(null)
 
+  const noRelays = relays.length === 0
+  const canSubmit = !noRelays && relayId
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!canSubmit) return
     setError(null)
     setLoading(true)
     try {
@@ -91,6 +101,7 @@ export function CreateConnectionDialog({
         ttl_seconds: ttlSeconds === 0 ? 0 : ttlSeconds,
         wavelength_zone_id: wavelengthZoneId,
         folder_path: folderPath,
+        relay_id: relayId,
         metadata: {
           mavlink_port: mavlinkPort,
           mavlink_host: '127.0.0.1',
@@ -108,6 +119,7 @@ export function CreateConnectionDialog({
 
   const handleClose = () => {
     setDroneName('')
+    setRelayId('')
     setTtlSeconds(14400)
     setMavlinkPort(18570)
     setError(null)
@@ -175,7 +187,9 @@ export function CreateConnectionDialog({
               <strong>Endpoint:</strong> {result.endpoint}
             </Typography>
             <Typography sx={{ color: '#94a3b8', fontSize: '0.8rem' }}>
-              Run the agent with RDI_SESSION_ID={result.session_id} and RDI_MAVLINK_PORT={mavlinkPort}
+              {result.relay_config
+                ? `Run the agent with RDI_SESSION_ID=${result.session_id} RDI_MAVLINK_HOST=${result.relay_config.mavlink_host ?? '127.0.0.1'} RDI_MAVLINK_PORT=${result.relay_config.mavlink_port ?? mavlinkPort}`
+                : `Run the agent with RDI_SESSION_ID=${result.session_id} RDI_MAVLINK_PORT=${result.mavlink_port ?? mavlinkPort}`}
             </Typography>
           </Box>
           <DialogActions sx={{ px: 0, backgroundColor: '#1e293b' }}>
@@ -187,6 +201,44 @@ export function CreateConnectionDialog({
       ) : (
         <form onSubmit={handleSubmit}>
           <DialogContent sx={{ pt: 0, backgroundColor: '#1e293b', color: '#f8fafc' }}>
+            {noRelays ? (
+              <Box sx={{ mb: 2, p: 2, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '0.375rem' }}>
+                <Typography sx={{ color: '#f8fafc', fontSize: '0.875rem', mb: 1 }}>
+                  No relays registered for this zone. Register a relay first to create connections.
+                </Typography>
+                {onRegisterRelayClick && (
+                  <Button
+                    onClick={onRegisterRelayClick}
+                    sx={{ color: '#3b82f6', textTransform: 'none', p: 0, mt: 0.5 }}
+                    disableRipple
+                  >
+                    Register relay
+                  </Button>
+                )}
+              </Box>
+            ) : (
+              <TextField
+                fullWidth
+                select
+                label="Relay"
+                value={relayId}
+                onChange={(e) => setRelayId(e.target.value)}
+                required
+                margin="normal"
+                sx={inputSx}
+                SelectProps={{ MenuProps: menuProps }}
+                helperText="Select which relay this connection will route through"
+              >
+                <MenuItem value="" disabled>
+                  Select a relay
+                </MenuItem>
+                {relays.map((r) => (
+                  <MenuItem key={r.relay_id} value={r.relay_id} disableRipple>
+                    {r.name} ({r.relay_type})
+                  </MenuItem>
+                ))}
+              </TextField>
+            )}
             <TextField
               fullWidth
               label="Connection Name"
@@ -240,7 +292,7 @@ export function CreateConnectionDialog({
             <Button onClick={handleClose} disableRipple sx={{ color: '#3b82f6' }}>
               Cancel
             </Button>
-            <Button type="submit" variant="contained" disabled={loading} disableRipple>
+            <Button type="submit" variant="contained" disabled={loading || !canSubmit} disableRipple>
               {loading ? 'Creating...' : 'Create'}
             </Button>
           </DialogActions>

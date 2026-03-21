@@ -128,11 +128,18 @@ def _get_profile(user_id: str, headers: dict) -> dict:
 
     _ensure_shared_folder(connection_hierarchy)
 
+    relays = []
+    if item and "relays" in item:
+        relays = _from_dynamo_value(item["relays"]) or []
+    if not isinstance(relays, list):
+        relays = []
+
     return _response(
         200,
         {
             "user_id": user_id,
             "connection_hierarchy": connection_hierarchy,
+            "relays": relays,
         },
         headers,
     )
