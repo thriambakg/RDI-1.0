@@ -14,9 +14,63 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, RwLock};
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
+use mavlink::common::{MavCmd, MavMessage};
+use serde::Deserialize;
+use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 const DEFAULT_WS_PORT: u16 = 8765;
+const CTRL_PREFIX: &[u8] = b"CTRL";
+const RLOG_PREFIX: &[u8] = b"RLOG";
+const TARGET_SYSTEM: u8 = 1;
+const TARGET_COMPONENT: u8 = 1;
+
+#[derive(Deserialize)]
+struct CtrlCmd {
+    cmd: String,
+    #[serde(default)]
+    alt: Option<f32>,
+}
+
+fn build_command_long_bytes(
+    command: MavCmd,
+    param1: f32,
+    param2: f32,
+    param3: f32,
+    param4: f32,
+    param5: f32,
+    param6: f32,
+    param7: f32,
+) -> Vec<u8> {
+    let data = mavlink::common::COMMAND_LONG_DATA {
+        param1,
+        param2,
+        param3,
+        param4,
+        param5,
+        param6,
+        param7,
+        command,
+        target_system: TARGET_SYSTEM,
+        target_component: TARGET_COMPONENT,
+        confirmation: 0,
+    };
+    let msg = MavMessage::COMMAND_LONG(data);
+    let mut buf = Vec::with_capacity(256);
+    if mavlink::write_v1_msg(&mut buf, mavlink::MavHeader::default(), &msg).is_ok() {
+        buf
+    } else {
+        Vec::new()
+    }
+}
+
+fn build_rlog_bytes(msg: &str) -> Vec<u8> {
+    let json = serde_json::json!({ "msg": msg }).to_string();
+    let mut payload = Vec::with_capacity(RLOG_PREFIX.len() + json.len());
+    payload.extend_from_slice(RLOG_PREFIX);
+    payload.extend_from_slice(json.as_bytes());
+    payload
+}
 const DEFAULT_HEALTH_PORT: u16 = 8766;
 const DEFAULT_STATUS_PORT: u16 = 8767;
 
@@ -460,10 +514,67 @@ async fn handle_ws(
                             )));
                         }
                     } else if role_for_peer == "agent" {
-                        // Agent sent binary (e.g. PONG): forward to frontend.
+                        // Agent sent binary (e.g. PONG, RLOG): forward to frontend.
                         let peer_tx = sessions_for_peer.read().await.frontends.get(&session_id_for_peer).map(|(p, _)| p.tx.clone());
                         if let Some(tx) = peer_tx {
                             let _ = tx.send(data);
+                        }
+                    } else if data.starts_with(CTRL_PREFIX) && data.len() > CTRL_PREFIX.len() {
+                        // Frontend sent CTRL: proxy handles (convert to MAVLink), agent just forwards.
+                        if let Ok(json) = std::str::from_utf8(&data[CTRL_PREFIX.len()..]) {
+                            if let Ok(ctrl) = serde_json::from_str::<CtrlCmd>(json) {
+                                let agent_tx = sessions_for_peer.read().await.agents.get(&session_id_for_peer).map(|(p, _)| p.tx.clone());
+                                if let Some(tx) = agent_tx {
+                                    let cmd_lower = ctrl.cmd.to_lowercase();
+                                    if cmd_lower == "takeoff" {
+                                        let arm_bytes = build_command_long_bytes(
+                                            MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+                                            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                        );
+                                        if !arm_bytes.is_empty() {
+                                            let _ = tx.send(arm_bytes);
+                                            let _ = client_tx_peer.send(ToClient::Binary(build_rlog_bytes("CTRL sent: arm (pre-takeoff)")));
+                                        }
+                                        tokio::time::sleep(Duration::from_millis(500)).await;
+                                        let alt = ctrl.alt.unwrap_or(2.5);
+                                        let takeoff_bytes = build_command_long_bytes(
+                                            MavCmd::MAV_CMD_NAV_TAKEOFF,
+                                            0.0, 0.0, 0.0, f32::NAN, f32::NAN, f32::NAN, alt,
+                                        );
+                                        if !takeoff_bytes.is_empty() {
+                                            let _ = tx.send(takeoff_bytes);
+                                            let _ = client_tx_peer.send(ToClient::Binary(build_rlog_bytes(&format!("CTRL sent: takeoff (alt={})", alt))));
+                                        }
+                                    } else {
+                                        let bytes = match cmd_lower.as_str() {
+                                            "arm" => build_command_long_bytes(
+                                                MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+                                                1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                            ),
+                                            "disarm" => build_command_long_bytes(
+                                                MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+                                                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                            ),
+                                            "land" => build_command_long_bytes(
+                                                MavCmd::MAV_CMD_NAV_LAND,
+                                                0.0, 0.0, 0.0, f32::NAN, f32::NAN, f32::NAN, f32::NAN,
+                                            ),
+                                            "rtl" => build_command_long_bytes(
+                                                MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH,
+                                                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                            ),
+                                            _ => {
+                                                warn!("Unknown CTRL cmd: {}", ctrl.cmd);
+                                                vec![]
+                                            }
+                                        };
+                                        if !bytes.is_empty() {
+                                            let _ = tx.send(bytes);
+                                            let _ = client_tx_peer.send(ToClient::Binary(build_rlog_bytes(&format!("CTRL sent: {}", ctrl.cmd))));
+                                        }
+                                    }
+                                }
+                            }
                         }
                     } else {
                         // Frontend sent other binary (e.g. MAVLink): forward to agent.
