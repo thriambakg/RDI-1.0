@@ -3,6 +3,7 @@ Helpers for user profile connection_hierarchy updates.
 Shared logic for Session API to keep hierarchy in sync with connection pool.
 """
 
+
 import copy
 from typing import Any
 
