@@ -21,6 +21,7 @@ DEFAULT_HIERARCHY = {
 }
 
 
+
 def add_session_to_folder(
     hierarchy: dict,
     folder_path: list[str],
