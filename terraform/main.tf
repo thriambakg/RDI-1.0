@@ -197,7 +197,7 @@ module "wavelength_ec2" {
     insecure_tls          = length(module.ssl_certificate) > 0 ? "1" : ""
     connection_pool_table = local.connection_pool_tbl
     proxy_endpoint        = local.proxy_endpoint
-    wavelength_zone_id    = var.wavelength_zone_id
+    wavelength_zone_id    = length(var.edge_zone_ids) > 0 ? var.edge_zone_ids[0] : var.wavelength_zone_id
     relay_registry_table  = local.relay_registry_tbl
   })
 
