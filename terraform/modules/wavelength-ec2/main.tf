@@ -173,32 +173,6 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
   })
 }
 
-# Allow Wavelength instance to query DynamoDB for session reinstate after agent reboot
-resource "aws_iam_role_policy" "reinstate_dynamodb" {
-  count = var.reinstate_connection_pool_table != "" && var.reinstate_relay_registry_table != "" ? 1 : 0
-
-  name = "${var.project_name}-wavelength-reinstate-dynamodb"
-  role = aws_iam_role.instance.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "dynamodb:Query",
-          "dynamodb:GetItem",
-          "dynamodb:BatchGetItem"
-        ]
-        Resource = [
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.reinstate_connection_pool_table}",
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.reinstate_connection_pool_table}/index/*",
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.reinstate_relay_registry_table}"
-        ]
-      }
-    ]
-  })
-}
-
 resource "aws_iam_instance_profile" "instance" {
   name_prefix = "${var.project_name}-wavelength-"
   role        = aws_iam_role.instance.name

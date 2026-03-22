@@ -549,29 +549,6 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      - name: Reinstate active sessions on Wavelength instance
-        if: >
-          github.event.inputs.destroy != 'true' &&
-          needs.check-agent.outputs.has_agent == 'true'
-        run: |
-          cd terraform
-          INSTANCE_ID=$(terraform output -raw wavelength_instance_id 2>/dev/null || true)
-          if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "null" ]; then
-            echo "Waiting for agent to be ready after update..."
-            sleep 25
-            echo "Reinstating active sessions on Wavelength instance $INSTANCE_ID..."
-            aws ssm send-command \
-              --instance-ids "$INSTANCE_ID" \
-              --document-name "AWS-RunShellScript" \
-              --parameters 'commands=["sudo /opt/rdi-agent/reinstate-sessions.sh 2>&1 | tee -a /var/log/rdi-agent.log"]' \
-              --region ${{ matrix.region }} \
-              --output text --query 'Command.CommandId' || true
-          fi
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        continue-on-error: true
-
       - name: Terraform Destroy
         if: github.event.inputs.destroy == 'true'
         run: |

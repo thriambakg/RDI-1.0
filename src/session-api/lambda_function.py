@@ -312,6 +312,9 @@ def lambda_handler(event: dict, context: Any) -> dict:
             return _create_session(user_id, body, headers)
         if http_method == "PATCH" and "sessions" in path:
             body = json.loads(event.get("body") or "{}")
+            if body.get("action") == "reconnect":
+                _log("route", action="reconnect_session", session_id=body.get("session_id"))
+                return _reconnect_session(user_id, body, headers)
             _log("route", action="patch_session", session_id=body.get("session_id"))
             return _patch_session(user_id, body, headers)
         if http_method == "DELETE" and "sessions" in path:
@@ -606,6 +609,77 @@ def _idle_expired_sessions() -> None:
             if WAVELENGTH_INSTANCE_ID:
                 _remove_session_from_agent(WAVELENGTH_INSTANCE_ID, session_id)
     _log("idle_expired_sessions done")
+
+
+def _reconnect_session(user_id: str, body: dict, headers: dict) -> dict:
+    """Reinstate agent connection for an active session (e.g. after Wavelength agent reboot).
+    Body: session_id, action='reconnect'.
+    Calls _add_session_to_agent to have the agent daemon open a new WebSocket to the proxy.
+    """
+    session_id = (body.get("session_id") or "").strip()
+    if not session_id:
+        _log("reconnect_session rejected", reason="no session_id")
+        return _response(400, {"error": "session_id required"}, headers)
+
+    if not WAVELENGTH_INSTANCE_ID:
+        _log("reconnect_session rejected", reason="proxy_only_mode", session_id=session_id)
+        return _response(400, {"error": "Agent reinstate not available (proxy-only mode)"}, headers)
+
+    dynamodb = boto3.client("dynamodb")
+    wavelength_zone_id = None
+    session_relay_id = None
+    session_relay_config = None
+    try:
+        resp = dynamodb.get_item(
+            TableName=TABLE_NAME,
+            Key={"user_id": {"S": user_id}, "session_id": {"S": session_id}},
+            ProjectionExpression="#status, wavelength_zone_id, relay_id, metadata",
+            ExpressionAttributeNames={"#status": "status"},
+        )
+        item = resp.get("Item")
+        if not item:
+            _log("reconnect_session not found", session_id=session_id)
+            return _response(404, {"error": "Session not found"}, headers)
+
+        status = (item.get("status") or {}).get("S")
+        if status != "active":
+            _log("reconnect_session rejected", session_id=session_id, reason="session_not_active", status=status or "")
+            return _response(400, {"error": "Session must be active to reinstate. Reactivate the connection first."}, headers)
+
+        wavelength_zone_id = (item.get("wavelength_zone_id") or {}).get("S")
+        session_relay_id = (item.get("relay_id") or {}).get("S")
+        if session_relay_id and wavelength_zone_id and RELAY_REGISTRY_TABLE:
+            session_relay_config = _fetch_relay_config(dynamodb, user_id, session_relay_id, wavelength_zone_id)
+
+    except ClientError:
+        return _response(500, {"error": "Failed to fetch session"}, headers)
+
+    if WAVELENGTH_ZONE_ID and wavelength_zone_id != WAVELENGTH_ZONE_ID:
+        _log("reconnect_session skipped", reason="zone_mismatch", session_id=session_id)
+        return _response(400, {"error": "Session zone does not match deployed Wavelength instance"}, headers)
+
+    relay_type = (session_relay_config or {}).get("relay_type")
+    if session_relay_id and relay_type == "local":
+        _log("reconnect_session skipped", reason="local_relay", session_id=session_id)
+        return _response(400, {"error": "Local relays do not use the Wavelength agent"}, headers)
+
+    session_metadata = None
+    metadata_raw = item.get("metadata", {}).get("S")
+    if metadata_raw:
+        try:
+            session_metadata = json.loads(metadata_raw)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    _add_session_to_agent(
+        WAVELENGTH_INSTANCE_ID,
+        PROXY_ENDPOINT,
+        session_id,
+        session_relay_config,
+        session_metadata=session_metadata,
+    )
+    _log("reconnect_session done", session_id=session_id)
+    return _response(200, {"message": "Agent reinstate requested. Connection may take a few seconds."}, headers)
 
 
 def _patch_session(user_id: str, body: dict, headers: dict) -> dict:

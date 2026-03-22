@@ -8,7 +8,7 @@ import {
   Typography,
 } from '@mui/material'
 import { useCallback, useEffect, useState } from 'react'
-import { getSession } from '../../services/sessionApi'
+import { getSession, reconnectSession } from '../../services/sessionApi'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import type { RelayRef } from '../../services/profileApi'
 
@@ -59,6 +59,8 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
   const [pingRunning, setPingRunning] = useState(false)
   const [pingError, setPingError] = useState<string | null>(null)
   const [ctrlError, setCtrlError] = useState<string | null>(null)
+  const [reconnectLoading, setReconnectLoading] = useState(false)
+  const [reconnectError, setReconnectError] = useState<string | null>(null)
 
   const { getWs, openSession, connectionState, connectionError } = useSessionWebSocket()
 
@@ -91,6 +93,7 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
       setLogLines([])
       setPingError(null)
       setCtrlError(null)
+      setReconnectError(null)
       return
     }
     setLoading(true)
@@ -238,6 +241,24 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
     }
   }, [data?.session_id, getWs, addLog])
 
+  const handleReconnect = useCallback(async () => {
+    if (!data?.session_id) return
+    setReconnectLoading(true)
+    setReconnectError(null)
+    try {
+      await reconnectSession(data.session_id)
+      addLog('Reconnect requested — agent should connect within a few seconds. Try Ping to verify.')
+      if (data?.endpoint) {
+        openSession(data.session_id, data.endpoint)
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Reconnect failed'
+      setReconnectError(msg)
+    } finally {
+      setReconnectLoading(false)
+    }
+  }, [data?.session_id, data?.endpoint, openSession, addLog])
+
   const name = data?.drone_id ? data.drone_id.split('-').slice(0, -1).join('-') || data.drone_id : ''
   const wsState = sessionId ? connectionState(sessionId) : 'closed'
   const wsError = sessionId ? connectionError(sessionId) : null
@@ -327,6 +348,31 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
               >
                 Retry connection
               </Button>
+            )}
+          </Box>
+        )}
+        {data?.status === 'active' && data?.carrier_ip && (
+          <Box sx={{ mb: 2 }}>
+            <Typography sx={{ color: '#94a3b8', fontSize: '0.875rem', mb: 1 }}>
+              Connection dropped after a pipeline reboot? Reinstate the agent on the Wavelength instance.
+            </Typography>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={handleReconnect}
+              disabled={reconnectLoading}
+              disableRipple
+              sx={{
+                color: '#3b82f6',
+                borderColor: '#475569',
+                textTransform: 'none',
+                '&:hover': { borderColor: '#3b82f6' },
+              }}
+            >
+              {reconnectLoading ? 'Reconnecting…' : 'Reconnect agent'}
+            </Button>
+            {reconnectError && (
+              <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mt: 1 }}>{reconnectError}</Typography>
             )}
           </Box>
         )}

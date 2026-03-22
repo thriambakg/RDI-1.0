@@ -109,15 +109,3 @@ variable "cloudwatch_log_group_name" {
   type        = string
   default     = ""
 }
-
-variable "reinstate_connection_pool_table" {
-  description = "DynamoDB connection pool table name for reinstate-sessions (Query ZoneIndex, GetItem). When set with reinstate_relay_registry_table, grants DynamoDB read for session reinstate after agent reboot."
-  type        = string
-  default     = ""
-}
-
-variable "reinstate_relay_registry_table" {
-  description = "DynamoDB relay registry table name for reinstate-sessions (GetItem to skip local relays). When set with reinstate_connection_pool_table, grants DynamoDB read."
-  type        = string
-  default     = ""
-}
