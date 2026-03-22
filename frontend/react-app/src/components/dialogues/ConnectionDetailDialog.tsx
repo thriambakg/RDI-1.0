@@ -6,12 +6,20 @@ import {
   Button,
   Box,
   Typography,
+  IconButton,
+  Tooltip,
 } from '@mui/material'
+import { keyframes } from '@emotion/react'
+import { Cached } from '@mui/icons-material'
 import { useCallback, useEffect, useState } from 'react'
-import { getSession, refreshSession } from '../../services/sessionApi'
+import { getSession, releaseSession, activateSession } from '../../services/sessionApi'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import type { RelayRef } from '../../services/profileApi'
 
+const spin = keyframes`
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+`
 const PING_BYTES = new Uint8Array([0x50, 0x49, 0x4e, 0x47]) // "PING"
 const PONG_BYTES = new Uint8Array([0x50, 0x4f, 0x4e, 0x47]) // "PONG"
 const RLOG_PREFIX = new Uint8Array([0x52, 0x4c, 0x4f, 0x47]) // "RLOG"
@@ -61,9 +69,34 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [], 
   const [pingError, setPingError] = useState<string | null>(null)
   const [ctrlError, setCtrlError] = useState<string | null>(null)
   const [refreshLoading, setRefreshLoading] = useState(false)
-  const [refreshError, setRefreshError] = useState<string | null>(null)
 
-  const { getWs, openSession, connectionState, connectionError } = useSessionWebSocket()
+  const { getWs, openSession, closeSession, connectionState, connectionError } = useSessionWebSocket()
+
+  const handleRefreshConnection = useCallback(async () => {
+    if (!data?.session_id || !data?.endpoint) return
+    setRefreshLoading(true)
+    setError(null)
+    setPingError(null)
+    setCtrlError(null)
+    try {
+      if (data.status === 'active') {
+        closeSession(data.session_id)
+        await releaseSession(data.session_id)
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      await activateSession(data.session_id)
+      const updated = await getSession(data.session_id)
+      setData(updated)
+      if (updated.status === 'active' && updated.endpoint) {
+        openSession(data.session_id, updated.endpoint)
+      }
+      onRefreshSuccess?.()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Refresh connection failed')
+    } finally {
+      setRefreshLoading(false)
+    }
+  }, [data?.session_id, data?.endpoint, data?.status, closeSession, openSession, onRefreshSuccess])
 
   const addLog = useCallback((line: string) => {
     setLogLines((prev) => [...prev.slice(-98), line])
@@ -94,7 +127,6 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [], 
       setLogLines([])
       setPingError(null)
       setCtrlError(null)
-      setRefreshError(null)
       return
     }
     setLoading(true)
@@ -242,26 +274,6 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [], 
     }
   }, [data?.session_id, getWs, addLog])
 
-  const handleRefresh = useCallback(async () => {
-    if (!data?.session_id) return
-    setRefreshLoading(true)
-    setRefreshError(null)
-    try {
-      await refreshSession(data.session_id)
-      setData((prev) => (prev ? { ...prev, status: 'active' } : null))
-      addLog('Connection refreshed — session is now active. Reconnecting…')
-      if (data?.endpoint) {
-        openSession(data.session_id, data.endpoint)
-      }
-      onRefreshSuccess?.()
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Refresh failed'
-      setRefreshError(msg)
-    } finally {
-      setRefreshLoading(false)
-    }
-  }, [data?.session_id, data?.endpoint, openSession, addLog, onRefreshSuccess])
-
   const name = data?.drone_id ? data.drone_id.split('-').slice(0, -1).join('-') || data.drone_id : ''
   const wsState = sessionId ? connectionState(sessionId) : 'closed'
   const wsError = sessionId ? connectionError(sessionId) : null
@@ -297,7 +309,27 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [], 
         }}
       >
         Connection details
-        {data?.status === 'active' && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+          {data && (
+            <Tooltip title="Refresh connection (idle then activate to reconnect after agent reboot)">
+              <span>
+                <IconButton
+                  onClick={handleRefreshConnection}
+                  disabled={refreshLoading || loading}
+                  size="small"
+                  sx={{
+                    color: '#94a3b8',
+                    animation: refreshLoading ? `${spin} 1s linear infinite` : undefined,
+                    '&:hover': { color: '#3b82f6' },
+                  }}
+                  aria-label="Refresh connection"
+                >
+                  <Cached sx={{ fontSize: 20 }} />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
+          {data?.status === 'active' && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
             <Box
               sx={{
@@ -329,6 +361,7 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [], 
             </Typography>
           </Box>
         )}
+        </Box>
       </DialogTitle>
       <DialogContent sx={{ color: '#f8fafc' }}>
         {loading && <Typography sx={{ color: '#94a3b8' }}>Loading…</Typography>}
@@ -352,11 +385,6 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [], 
                 Retry connection
               </Button>
             )}
-          </Box>
-        )}
-        {refreshError && (
-          <Box sx={{ mb: 2 }}>
-            <Typography sx={{ color: '#f87171', fontSize: '0.875rem' }}>{refreshError}</Typography>
           </Box>
         )}
         {data && (
@@ -498,22 +526,7 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [], 
           </>
         )}
       </DialogContent>
-      <DialogActions sx={{ borderTop: '1px solid #334155', p: 2, justifyContent: 'space-between' }}>
-        <Button
-          variant="outlined"
-          size="small"
-          onClick={handleRefresh}
-          disabled={refreshLoading || !data?.session_id}
-          disableRipple
-          sx={{
-            color: '#3b82f6',
-            borderColor: '#475569',
-            textTransform: 'none',
-            '&:hover': { borderColor: '#3b82f6' },
-          }}
-        >
-          {refreshLoading ? 'Refreshing…' : 'Refresh connection'}
-        </Button>
+      <DialogActions sx={{ borderTop: '1px solid #334155', p: 2 }}>
         <Button onClick={onClose} sx={{ color: '#3b82f6' }} disableRipple>
           Close
         </Button>

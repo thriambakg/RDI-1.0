@@ -136,48 +136,6 @@ export async function activateSession(session_id: string): Promise<void> {
   }
 }
 
-/**
- * Reinstate the Wavelength agent connection for an active session.
- * Use after a pipeline reboot or agent restart when the proxy session still exists.
- */
-export async function reconnectSession(session_id: string): Promise<void> {
-  const url = `${getApiBaseUrl()}/sessions`
-  const body = { session_id, action: 'reconnect' }
-  const headers = await getAuthHeaders()
-  const res = await fetch(url, {
-    method: 'PATCH',
-    headers,
-    body: JSON.stringify(body),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(
-      (err as { error?: string }).error || `Reconnect agent failed: ${res.status}`
-    )
-  }
-}
-
-/**
- * Refresh connection: idle then reactivate. Cleans up proxy/agent and re-establishes.
- * Use when the connection has dropped (e.g. after pipeline reboot).
- */
-export async function refreshSession(session_id: string): Promise<void> {
-  const url = `${getApiBaseUrl()}/sessions`
-  const body = { session_id, action: 'refresh' }
-  const headers = await getAuthHeaders()
-  const res = await fetch(url, {
-    method: 'PATCH',
-    headers,
-    body: JSON.stringify(body),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(
-      (err as { error?: string }).error || `Refresh connection failed: ${res.status}`
-    )
-  }
-}
-
 export async function listSessions(wavelengthZoneId?: string): Promise<ListSessionsResponse> {
   const params = wavelengthZoneId ? `?wavelength_zone_id=${encodeURIComponent(wavelengthZoneId)}` : ''
   const url = `${getApiBaseUrl()}/sessions${params}`
