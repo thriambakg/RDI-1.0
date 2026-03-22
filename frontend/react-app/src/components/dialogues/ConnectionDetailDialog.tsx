@@ -8,7 +8,7 @@ import {
   Typography,
 } from '@mui/material'
 import { useCallback, useEffect, useState } from 'react'
-import { getSession, reconnectSession } from '../../services/sessionApi'
+import { getSession, refreshSession } from '../../services/sessionApi'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import type { RelayRef } from '../../services/profileApi'
 
@@ -35,6 +35,7 @@ interface ConnectionDetailDialogProps {
   open: boolean
   onClose: () => void
   relays?: RelayRef[]
+  onRefreshSuccess?: () => void
 }
 
 interface HopLog {
@@ -42,7 +43,7 @@ interface HopLog {
   message: string
 }
 
-export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }: ConnectionDetailDialogProps) {
+export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [], onRefreshSuccess }: ConnectionDetailDialogProps) {
   const [data, setData] = useState<{
     session_id: string
     drone_id: string
@@ -59,8 +60,8 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
   const [pingRunning, setPingRunning] = useState(false)
   const [pingError, setPingError] = useState<string | null>(null)
   const [ctrlError, setCtrlError] = useState<string | null>(null)
-  const [reconnectLoading, setReconnectLoading] = useState(false)
-  const [reconnectError, setReconnectError] = useState<string | null>(null)
+  const [refreshLoading, setRefreshLoading] = useState(false)
+  const [refreshError, setRefreshError] = useState<string | null>(null)
 
   const { getWs, openSession, connectionState, connectionError } = useSessionWebSocket()
 
@@ -93,7 +94,7 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
       setLogLines([])
       setPingError(null)
       setCtrlError(null)
-      setReconnectError(null)
+      setRefreshError(null)
       return
     }
     setLoading(true)
@@ -241,23 +242,25 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
     }
   }, [data?.session_id, getWs, addLog])
 
-  const handleReconnect = useCallback(async () => {
+  const handleRefresh = useCallback(async () => {
     if (!data?.session_id) return
-    setReconnectLoading(true)
-    setReconnectError(null)
+    setRefreshLoading(true)
+    setRefreshError(null)
     try {
-      await reconnectSession(data.session_id)
-      addLog('Reconnect requested — agent should connect within a few seconds. Try Ping to verify.')
+      await refreshSession(data.session_id)
+      setData((prev) => (prev ? { ...prev, status: 'active' } : null))
+      addLog('Connection refreshed — session is now active. Reconnecting…')
       if (data?.endpoint) {
         openSession(data.session_id, data.endpoint)
       }
+      onRefreshSuccess?.()
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Reconnect failed'
-      setReconnectError(msg)
+      const msg = e instanceof Error ? e.message : 'Refresh failed'
+      setRefreshError(msg)
     } finally {
-      setReconnectLoading(false)
+      setRefreshLoading(false)
     }
-  }, [data?.session_id, data?.endpoint, openSession, addLog])
+  }, [data?.session_id, data?.endpoint, openSession, addLog, onRefreshSuccess])
 
   const name = data?.drone_id ? data.drone_id.split('-').slice(0, -1).join('-') || data.drone_id : ''
   const wsState = sessionId ? connectionState(sessionId) : 'closed'
@@ -351,29 +354,9 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
             )}
           </Box>
         )}
-        {data?.status === 'active' && data?.carrier_ip && (
+        {refreshError && (
           <Box sx={{ mb: 2 }}>
-            <Typography sx={{ color: '#94a3b8', fontSize: '0.875rem', mb: 1 }}>
-              Connection dropped after a pipeline reboot? Reinstate the agent on the Wavelength instance.
-            </Typography>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={handleReconnect}
-              disabled={reconnectLoading}
-              disableRipple
-              sx={{
-                color: '#3b82f6',
-                borderColor: '#475569',
-                textTransform: 'none',
-                '&:hover': { borderColor: '#3b82f6' },
-              }}
-            >
-              {reconnectLoading ? 'Reconnecting…' : 'Reconnect agent'}
-            </Button>
-            {reconnectError && (
-              <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mt: 1 }}>{reconnectError}</Typography>
-            )}
+            <Typography sx={{ color: '#f87171', fontSize: '0.875rem' }}>{refreshError}</Typography>
           </Box>
         )}
         {data && (
@@ -515,7 +498,22 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
           </>
         )}
       </DialogContent>
-      <DialogActions sx={{ borderTop: '1px solid #334155', p: 2 }}>
+      <DialogActions sx={{ borderTop: '1px solid #334155', p: 2, justifyContent: 'space-between' }}>
+        <Button
+          variant="outlined"
+          size="small"
+          onClick={handleRefresh}
+          disabled={refreshLoading || !data?.session_id}
+          disableRipple
+          sx={{
+            color: '#3b82f6',
+            borderColor: '#475569',
+            textTransform: 'none',
+            '&:hover': { borderColor: '#3b82f6' },
+          }}
+        >
+          {refreshLoading ? 'Refreshing…' : 'Refresh connection'}
+        </Button>
         <Button onClick={onClose} sx={{ color: '#3b82f6' }} disableRipple>
           Close
         </Button>

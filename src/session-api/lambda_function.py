@@ -315,6 +315,9 @@ def lambda_handler(event: dict, context: Any) -> dict:
             if body.get("action") == "reconnect":
                 _log("route", action="reconnect_session", session_id=body.get("session_id"))
                 return _reconnect_session(user_id, body, headers)
+            if body.get("action") == "refresh":
+                _log("route", action="refresh_session", session_id=body.get("session_id"))
+                return _refresh_session(user_id, body, headers)
             _log("route", action="patch_session", session_id=body.get("session_id"))
             return _patch_session(user_id, body, headers)
         if http_method == "DELETE" and "sessions" in path:
@@ -680,6 +683,108 @@ def _reconnect_session(user_id: str, body: dict, headers: dict) -> dict:
     )
     _log("reconnect_session done", session_id=session_id)
     return _response(200, {"message": "Agent reinstate requested. Connection may take a few seconds."}, headers)
+
+
+def _refresh_session(user_id: str, body: dict, headers: dict) -> dict:
+    """Refresh connection: idle then reactivate. Cleans up proxy/agent and re-establishes.
+    Body: session_id, action='refresh'.
+    Use when the connection has dropped (e.g. after pipeline reboot).
+    """
+    session_id = (body.get("session_id") or "").strip()
+    if not session_id:
+        _log("refresh_session rejected", reason="no session_id")
+        return _response(400, {"error": "session_id required"}, headers)
+
+    dynamodb = boto3.client("dynamodb")
+    now = int(time.time())
+
+    # Fetch session to get relay info for reactivation
+    try:
+        resp = dynamodb.get_item(
+            TableName=TABLE_NAME,
+            Key={"user_id": {"S": user_id}, "session_id": {"S": session_id}},
+            ProjectionExpression="wavelength_zone_id, relay_id, metadata",
+        )
+        item = resp.get("Item")
+        if not item:
+            _log("refresh_session not found", session_id=session_id)
+            return _response(404, {"error": "Session not found"}, headers)
+    except ClientError:
+        return _response(500, {"error": "Failed to fetch session"}, headers)
+
+    wavelength_zone_id = (item.get("wavelength_zone_id") or {}).get("S")
+    session_relay_id = (item.get("relay_id") or {}).get("S")
+    session_relay_config = None
+    if session_relay_id and wavelength_zone_id and RELAY_REGISTRY_TABLE:
+        session_relay_config = _fetch_relay_config(dynamodb, user_id, session_relay_id, wavelength_zone_id)
+
+    session_metadata = None
+    metadata_raw = item.get("metadata", {}).get("S")
+    if metadata_raw:
+        try:
+            session_metadata = json.loads(metadata_raw)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Step 1: Idle (disconnect proxy, remove from agent)
+    try:
+        dynamodb.update_item(
+            TableName=TABLE_NAME,
+            Key={"user_id": {"S": user_id}, "session_id": {"S": session_id}},
+            UpdateExpression="SET #status = :idle, updated_at = :now",
+            ConditionExpression="attribute_exists(session_id)",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={
+                ":idle": {"S": "idle"},
+                ":now": {"N": str(now)},
+            },
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return _response(404, {"error": "Session not found"}, headers)
+        raise
+
+    if USER_PROFILES_TABLE:
+        _upsert_profile_update_status(dynamodb, user_id, session_id, "idle")
+    _notify_proxy_session_status(session_id, "idle")
+    if WAVELENGTH_INSTANCE_ID:
+        _remove_session_from_agent(WAVELENGTH_INSTANCE_ID, session_id)
+
+    # Step 2: Reactivate
+    try:
+        dynamodb.update_item(
+            TableName=TABLE_NAME,
+            Key={"user_id": {"S": user_id}, "session_id": {"S": session_id}},
+            UpdateExpression="SET #status = :active, updated_at = :now",
+            ConditionExpression="attribute_exists(session_id)",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={
+                ":active": {"S": "active"},
+                ":now": {"N": str(now)},
+            },
+        )
+    except ClientError:
+        raise
+
+    if USER_PROFILES_TABLE:
+        _upsert_profile_update_status(dynamodb, user_id, session_id, "active")
+    _notify_proxy_session_status(session_id, "active")
+
+    if WAVELENGTH_INSTANCE_ID and (not WAVELENGTH_ZONE_ID or wavelength_zone_id == WAVELENGTH_ZONE_ID):
+        relay_type = (session_relay_config or {}).get("relay_type")
+        if not (session_relay_id and relay_type == "local"):
+            _add_session_to_agent(
+                WAVELENGTH_INSTANCE_ID,
+                PROXY_ENDPOINT,
+                session_id,
+                session_relay_config,
+                session_metadata=session_metadata,
+            )
+    if session_relay_id and wavelength_zone_id:
+        _update_relay_status(dynamodb, user_id, session_relay_id, wavelength_zone_id, "online")
+
+    _log("refresh_session done", session_id=session_id)
+    return _response(200, {"message": "Connection refreshed. Session is now active."}, headers)
 
 
 def _patch_session(user_id: str, body: dict, headers: dict) -> dict:

@@ -655,6 +655,7 @@ export default function Console() {
             open={detailDialogOpen}
             onClose={() => { setDetailDialogOpen(false); setDetailSessionId(null) }}
             relays={relays}
+            onRefreshSuccess={fetchProfile}
           />
 
           <Menu
