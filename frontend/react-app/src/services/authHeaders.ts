@@ -1,11 +1,11 @@
 /**
  * Shared auth headers for API calls. Uses Amplify fetchAuthSession;
  * retries with forceRefresh when session has no tokens (e.g. after OAuth redirect).
- * Logging matches Cosine2.0 api.ts so you can see token presence and header attachment.
  */
 import { fetchAuthSession } from 'aws-amplify/auth'
 
 const log = typeof window !== 'undefined'
+const DEBUG_AUTH = false // Set true to log token debug info
 
 export async function getAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -14,7 +14,7 @@ export async function getAuthHeaders(): Promise<Record<string, string>> {
   let idToken = session.tokens?.idToken
   let accessToken = session.tokens?.accessToken
 
-  if (log) {
+  if (log && DEBUG_AUTH) {
     console.log('🔍 [RDI Auth] Token debug info:', {
       hasIdToken: !!idToken,
       hasAccessToken: !!accessToken,
@@ -32,7 +32,7 @@ export async function getAuthHeaders(): Promise<Record<string, string>> {
       idToken = session.tokens?.idToken
       accessToken = session.tokens?.accessToken
       token = idToken ?? accessToken
-      if (log) {
+      if (log && DEBUG_AUTH) {
         console.log('🔍 [RDI Auth] After forceRefresh:', {
           hasIdToken: !!idToken,
           hasAccessToken: !!accessToken,
@@ -57,7 +57,7 @@ export async function getAuthHeaders(): Promise<Record<string, string>> {
 
   if (bearer) {
     headers['Authorization'] = `Bearer ${bearer}`
-    if (log) {
+    if (log && DEBUG_AUTH) {
       console.log('🔒 [RDI Auth] Using token for Authorization header:', {
         tokenLength: bearer.length,
         tokenPrefix: bearer.substring(0, 20) + '...',

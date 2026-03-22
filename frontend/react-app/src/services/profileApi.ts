@@ -19,20 +19,12 @@ function logProfileRequest(
   if (typeof window === 'undefined') return
   const base = getApiBaseUrl()
   const authValue = headers['Authorization']
-  const tokenPart = authValue?.replace(/^Bearer\s+/i, '') ?? ''
   console.log('[RDI Profile API]', method, url, {
     resolvedUrl: url,
     apiBaseUrl: base || '(empty – requests will go to same origin)',
     ...(body !== undefined && { body }),
   })
-  if (authValue && tokenPart) {
-    console.log('🔒 [RDI Profile API] Authorization header present:', {
-      hasToken: true,
-      tokenLength: tokenPart.length,
-      tokenPrefix: tokenPart.substring(0, 30) + '...',
-      fullHeaderPrefix: authValue.substring(0, 50) + '...',
-    })
-  } else {
+  if (!authValue) {
     console.warn('⚠️ [RDI Profile API] No Authorization header – request will likely fail with 401')
   }
 }
