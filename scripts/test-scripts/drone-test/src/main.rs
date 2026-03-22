@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-const DEFAULT_MAVLINK_PORT: u16 = 14540;
+const DEFAULT_MAVLINK_PORT: u16 = 18570;
 const AXIS_DELTA: i16 = 200;
 const THROTTLE_DELTA: i16 = 50;
 const MIN_THROTTLE: i16 = 0;

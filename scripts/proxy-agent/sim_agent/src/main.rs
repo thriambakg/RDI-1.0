@@ -21,7 +21,7 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info, warn};
 
-const DEFAULT_MAVLINK_PORT: u16 = 14540;
+const DEFAULT_MAVLINK_PORT: u16 = 18570;
 const DEFAULT_AGENT_API_PORT: u16 = 8080;
 const DEFAULT_AGENT_WS_PORT: u16 = 8769;
 const PING_BYTES: &[u8] = b"PING";

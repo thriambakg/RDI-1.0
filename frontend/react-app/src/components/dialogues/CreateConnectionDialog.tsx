@@ -25,8 +25,8 @@ const TTL_OPTIONS = [
 ]
 
 const MAVLINK_PORT_OPTIONS = [
-  { value: 14540, label: '14540 (PX4 legacy)' },
   { value: 18570, label: '18570 (PX4 v1.13+)' },
+  { value: 14540, label: '14540 (PX4 legacy)' },
 ]
 
 const inputSx = {

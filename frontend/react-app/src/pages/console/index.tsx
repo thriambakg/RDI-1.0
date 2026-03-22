@@ -32,6 +32,7 @@ import {
   deleteFolder,
   removeFolderAtPath,
   removeSessionFromHierarchy,
+  removeRelayFromRelays,
   addFolderAtPath,
   addSessionAtPath,
   updateSessionStatusInHierarchy,
@@ -441,13 +442,20 @@ export default function Console() {
       setDetailRelay(null)
       setRelayDetailDialogOpen(false)
     }
+    // Immediate UI update (mirrors handleDeleteConnection, handleSetRelayIdle)
+    const childSessions = allConnections.filter((c) => c.relay_id === relay_id && c.status === 'active')
+    childSessions.forEach((s) => closeSessionWs(s.session_id))
+    childSessions.forEach((s) => updateHierarchy((h) => updateSessionStatusInHierarchy(h, s.session_id, 'idle')))
+    updateRelays((r) => removeRelayFromRelays(r, relay_id, wavelength_zone_id))
     setDeleteLoading(relay_id)
     try {
       await deleteRelay(relay_id, wavelength_zone_id)
-      await fetchProfile({ silent: false })
+      await Promise.all(childSessions.map((s) => releaseSession(s.session_id).catch(() => {})))
+      // Persist succeeded; UI already updated
     } catch (err) {
       console.error('[RDI Console] Delete relay failed', err)
       showSessionError(err instanceof Error ? err.message : 'Delete relay failed')
+      await fetchProfile({ silent: true })
     } finally {
       setDeleteLoading(null)
     }

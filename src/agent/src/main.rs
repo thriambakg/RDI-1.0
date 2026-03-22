@@ -25,7 +25,7 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info, warn};
 
-const DEFAULT_MAVLINK_PORT: u16 = 14540;
+const DEFAULT_MAVLINK_PORT: u16 = 18570;
 const DEFAULT_AGENT_API_PORT: u16 = 8080;
 const PING_BYTES: &[u8] = b"PING";
 const PONG_BYTES: &[u8] = b"PONG";
@@ -279,6 +279,7 @@ async fn run_session(
     let udp_send = Arc::clone(&udp);
 
     let (pong_tx, mut pong_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    let (ws_pong_tx, mut ws_pong_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
     let to_ws = tokio::spawn(async move {
         let mut buf = [0u8; 2048];
@@ -303,18 +304,35 @@ async fn run_session(
                         break;
                     }
                 }
+                ws_pong = ws_pong_rx.recv() => {
+                    if let Some(payload) = ws_pong {
+                        if ws_tx.send(Message::Pong(payload)).await.is_err() {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
             }
         }
     });
 
     let to_udp = tokio::spawn(async move {
         while let Some(msg) = ws_rx.next().await {
-            if let Ok(Message::Binary(data)) = msg {
-                if data == PING_BYTES {
-                    let _ = pong_tx.send(PONG_BYTES.to_vec());
-                } else {
-                    let _ = udp_send.send_to(&data, mavlink_socket).await;
+            match msg {
+                Ok(Message::Binary(data)) => {
+                    if data == PING_BYTES {
+                        let _ = pong_tx.send(PONG_BYTES.to_vec());
+                    } else {
+                        let _ = udp_send.send_to(&data, mavlink_socket).await;
+                    }
                 }
+                Ok(Message::Ping(payload)) => {
+                    let _ = ws_pong_tx.send(payload.to_vec());
+                }
+                Ok(Message::Close(_)) => break,
+                Err(_) => break,
+                _ => {}
             }
         }
     });

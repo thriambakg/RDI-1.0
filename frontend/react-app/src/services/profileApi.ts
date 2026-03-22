@@ -190,6 +190,17 @@ export function updateRelayStatusInRelays(
   )
 }
 
+/** Immutable: remove a relay from the relays array. */
+export function removeRelayFromRelays(
+  relays: RelayRef[],
+  relay_id: string,
+  wavelength_zone_id: string
+): RelayRef[] {
+  return relays.filter(
+    (r) => !(r.relay_id === relay_id && r.wavelength_zone_id === wavelength_zone_id)
+  )
+}
+
 /** Immutable: add a session to the folder at parentPath. Creates path if missing. */
 export function addSessionAtPath(h: ConnectionHierarchy, parentPath: string[], session: SessionRef): ConnectionHierarchy {
   if (parentPath.length === 0) return h

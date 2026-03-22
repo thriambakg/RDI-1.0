@@ -138,6 +138,8 @@ pub(crate) struct Sessions {
 #[derive(Default)]
 struct SessionStatusMap {
     map: HashMap<String, String>,
+    /// When session was last set to active (unix ts ms); used to ignore stale "idle" requests.
+    active_since: HashMap<String, u64>,
 }
 
 #[tokio::main]
@@ -318,21 +320,51 @@ async fn serve_status(
         }
     };
 
-    {
+    if status == "idle" {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let ignore_stale = {
+            let m = status_map.read().await;
+            m.active_since
+                .get(&session_id)
+                .map(|&since_ms| now_ms.saturating_sub(since_ms) < 30_000) // 30s grace
+                .unwrap_or(false)
+        };
+        if ignore_stale {
+            warn!(
+                "Session {} idle ignored (session active <30s ago; possible stale/out-of-order request)",
+                session_id
+            );
+        } else {
+            {
+                let mut m = status_map.write().await;
+                m.map.insert(session_id.clone(), status.clone());
+                m.active_since.remove(&session_id);
+            }
+            let (agent_tx, frontend_tx) = {
+                let mut s = sessions.write().await;
+                let at = s.agents.remove(&session_id).map(|(_, tx)| tx);
+                let ft = s.frontends.remove(&session_id).map(|(_, tx)| tx);
+                (at, ft)
+            };
+            let _ = agent_tx.map(|tx| tx.try_send(()));
+            let _ = frontend_tx.map(|tx| tx.try_send(()));
+            info!("Session {} set to idle; connections cleared", session_id);
+        }
+    } else {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
         let mut m = status_map.write().await;
         m.map.insert(session_id.clone(), status.clone());
-    }
-
-    if status == "idle" {
-        let (agent_tx, frontend_tx) = {
-            let mut s = sessions.write().await;
-            let at = s.agents.remove(&session_id).map(|(_, tx)| tx);
-            let ft = s.frontends.remove(&session_id).map(|(_, tx)| tx);
-            (at, ft)
-        };
-        let _ = agent_tx.map(|tx| tx.try_send(()));
-        let _ = frontend_tx.map(|tx| tx.try_send(()));
-        info!("Session {} set to idle; connections cleared", session_id);
+        if status == "active" {
+            m.active_since.insert(session_id.clone(), now_ms);
+        } else {
+            m.active_since.remove(&session_id);
+        }
     }
 
     let body = b"{\"ok\":true}";

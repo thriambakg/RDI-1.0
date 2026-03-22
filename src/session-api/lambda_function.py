@@ -484,7 +484,7 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
         except (TypeError, ValueError):
             pass
     if eff_port is None:
-        eff_port = int(MAVLINK_PORT) if MAVLINK_PORT else 14540
+        eff_port = int(MAVLINK_PORT) if MAVLINK_PORT else 18570
     payload["mavlink_port"] = eff_port
     payload["mavlink_host"] = (
         (relay_config or {}).get("mavlink_host") or "127.0.0.1"
@@ -745,7 +745,7 @@ def _get_session(
             except (TypeError, ValueError):
                 pass
         if eff_port is None:
-            eff_port = int(MAVLINK_PORT) if MAVLINK_PORT else 14540
+            eff_port = int(MAVLINK_PORT) if MAVLINK_PORT else 18570
         if relay_config and relay_config.get("mavlink_host"):
             out["mavlink_host"] = relay_config["mavlink_host"]
         else:
@@ -801,7 +801,7 @@ def _get_session(
         if item.get("relay_id", {}).get("S"):
             sess["relay_id"] = item["relay_id"]["S"]
         metadata_raw = item.get("metadata", {}).get("S")
-        eff_port = int(MAVLINK_PORT) if MAVLINK_PORT else 14540
+        eff_port = int(MAVLINK_PORT) if MAVLINK_PORT else 18570
         if metadata_raw:
             try:
                 metadata = json.loads(metadata_raw)
