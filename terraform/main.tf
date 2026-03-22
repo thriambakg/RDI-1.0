@@ -175,24 +175,30 @@ module "wavelength_ec2" {
   source = "./modules/wavelength-ec2"
   count  = var.wavelength_zone_id != "" ? 1 : 0
 
-  project_name                  = var.project_name
-  environment                   = var.environment
-  wavelength_zone_id            = var.wavelength_zone_id
-  kms_key_arn                   = module.kms.main_key_arn
-  mavlink_port                  = var.mavlink_port
-  agent_binary_s3_bucket        = module.proxy_artifacts_bucket.bucket_id
-  agent_binary_s3_key           = "agent/rdi-agent"
-  enable_agent_binary_s3_access = true
-  cloudwatch_log_group_name     = "/rdi/${var.environment}/agent"
+  project_name                    = var.project_name
+  environment                     = var.environment
+  wavelength_zone_id              = var.wavelength_zone_id
+  kms_key_arn                     = module.kms.main_key_arn
+  mavlink_port                    = var.mavlink_port
+  agent_binary_s3_bucket          = module.proxy_artifacts_bucket.bucket_id
+  agent_binary_s3_key             = "agent/rdi-agent"
+  enable_agent_binary_s3_access   = true
+  cloudwatch_log_group_name       = "/rdi/${var.environment}/agent"
+  reinstate_connection_pool_table = local.connection_pool_tbl
+  reinstate_relay_registry_table  = local.relay_registry_tbl
 
   user_data = templatefile("${path.module}/../src/wavelength/user_data.sh", {
-    s3_bucket            = module.proxy_artifacts_bucket.bucket_id
-    s3_key               = "agent/rdi-agent"
-    aws_region           = local.region
-    cloudwatch_log_group = "/rdi/${var.environment}/agent"
-    mavlink_port         = tostring(var.mavlink_port)
-    infra_version        = var.environment
-    insecure_tls         = length(module.ssl_certificate) > 0 ? "1" : ""
+    s3_bucket             = module.proxy_artifacts_bucket.bucket_id
+    s3_key                = "agent/rdi-agent"
+    aws_region            = local.region
+    cloudwatch_log_group  = "/rdi/${var.environment}/agent"
+    mavlink_port          = tostring(var.mavlink_port)
+    infra_version         = var.environment
+    insecure_tls          = length(module.ssl_certificate) > 0 ? "1" : ""
+    connection_pool_table = local.connection_pool_tbl
+    proxy_endpoint        = local.proxy_endpoint
+    wavelength_zone_id    = var.wavelength_zone_id
+    relay_registry_table  = local.relay_registry_tbl
   })
 
   tags       = {}
