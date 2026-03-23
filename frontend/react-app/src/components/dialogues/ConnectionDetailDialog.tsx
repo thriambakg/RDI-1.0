@@ -6,20 +6,12 @@ import {
   Button,
   Box,
   Typography,
-  IconButton,
-  Tooltip,
 } from '@mui/material'
-import { keyframes } from '@emotion/react'
-import { Cached } from '@mui/icons-material'
 import { useCallback, useEffect, useState } from 'react'
-import { getSession, releaseSession, activateSession } from '../../services/sessionApi'
+import { getSession } from '../../services/sessionApi'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import type { RelayRef } from '../../services/profileApi'
 
-const spin = keyframes`
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-`
 const PING_BYTES = new Uint8Array([0x50, 0x49, 0x4e, 0x47]) // "PING"
 const PONG_BYTES = new Uint8Array([0x50, 0x4f, 0x4e, 0x47]) // "PONG"
 const RLOG_PREFIX = new Uint8Array([0x52, 0x4c, 0x4f, 0x47]) // "RLOG"
@@ -43,7 +35,6 @@ interface ConnectionDetailDialogProps {
   open: boolean
   onClose: () => void
   relays?: RelayRef[]
-  onRefreshSuccess?: () => void
 }
 
 interface HopLog {
@@ -51,7 +42,7 @@ interface HopLog {
   message: string
 }
 
-export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [], onRefreshSuccess }: ConnectionDetailDialogProps) {
+export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }: ConnectionDetailDialogProps) {
   const [data, setData] = useState<{
     session_id: string
     drone_id: string
@@ -68,35 +59,8 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [], 
   const [pingRunning, setPingRunning] = useState(false)
   const [pingError, setPingError] = useState<string | null>(null)
   const [ctrlError, setCtrlError] = useState<string | null>(null)
-  const [refreshLoading, setRefreshLoading] = useState(false)
 
-  const { getWs, openSession, closeSession, connectionState, connectionError } = useSessionWebSocket()
-
-  const handleRefreshConnection = useCallback(async () => {
-    if (!data?.session_id || !data?.endpoint) return
-    setRefreshLoading(true)
-    setError(null)
-    setPingError(null)
-    setCtrlError(null)
-    try {
-      if (data.status === 'active') {
-        closeSession(data.session_id)
-        await releaseSession(data.session_id)
-        await new Promise((r) => setTimeout(r, 500))
-      }
-      await activateSession(data.session_id)
-      const updated = await getSession(data.session_id)
-      setData(updated)
-      if (updated.status === 'active' && updated.endpoint) {
-        openSession(data.session_id, updated.endpoint)
-      }
-      onRefreshSuccess?.()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Refresh connection failed')
-    } finally {
-      setRefreshLoading(false)
-    }
-  }, [data?.session_id, data?.endpoint, data?.status, closeSession, openSession, onRefreshSuccess])
+  const { getWs, openSession, connectionState, connectionError } = useSessionWebSocket()
 
   const addLog = useCallback((line: string) => {
     setLogLines((prev) => [...prev.slice(-98), line])
@@ -309,27 +273,7 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [], 
         }}
       >
         Connection details
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-          {data && (
-            <Tooltip title="Refresh connection (idle then activate to reconnect after agent reboot)">
-              <span>
-                <IconButton
-                  onClick={handleRefreshConnection}
-                  disabled={refreshLoading || loading}
-                  size="small"
-                  sx={{
-                    color: '#94a3b8',
-                    animation: refreshLoading ? `${spin} 1s linear infinite` : undefined,
-                    '&:hover': { color: '#3b82f6' },
-                  }}
-                  aria-label="Refresh connection"
-                >
-                  <Cached sx={{ fontSize: 20 }} />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )}
-          {data?.status === 'active' && (
+        {data?.status === 'active' && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
             <Box
               sx={{
@@ -361,7 +305,6 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [], 
             </Typography>
           </Box>
         )}
-        </Box>
       </DialogTitle>
       <DialogContent sx={{ color: '#f8fafc' }}>
         {loading && <Typography sx={{ color: '#94a3b8' }}>Loading…</Typography>}

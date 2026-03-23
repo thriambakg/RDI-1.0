@@ -1,11 +1,11 @@
 /**
  * Shared auth headers for API calls. Uses Amplify fetchAuthSession;
  * retries with forceRefresh when session has no tokens (e.g. after OAuth redirect).
+ * Only logs a warning when no token is available (401 likely).
  */
 import { fetchAuthSession } from 'aws-amplify/auth'
 
 const log = typeof window !== 'undefined'
-const DEBUG_AUTH = false // Set true to log token debug info
 
 export async function getAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -14,14 +14,6 @@ export async function getAuthHeaders(): Promise<Record<string, string>> {
   let idToken = session.tokens?.idToken
   let accessToken = session.tokens?.accessToken
 
-  if (log && DEBUG_AUTH) {
-    console.log('🔍 [RDI Auth] Token debug info:', {
-      hasIdToken: !!idToken,
-      hasAccessToken: !!accessToken,
-      idTokenType: idToken != null ? typeof idToken : 'none',
-      accessTokenType: accessToken != null ? typeof accessToken : 'none',
-    })
-  }
 
   let token: unknown = idToken ?? accessToken
   const hasUsableToken = token != null && typeof (token as { toString?: () => string }).toString === 'function'
@@ -32,12 +24,6 @@ export async function getAuthHeaders(): Promise<Record<string, string>> {
       idToken = session.tokens?.idToken
       accessToken = session.tokens?.accessToken
       token = idToken ?? accessToken
-      if (log && DEBUG_AUTH) {
-        console.log('🔍 [RDI Auth] After forceRefresh:', {
-          hasIdToken: !!idToken,
-          hasAccessToken: !!accessToken,
-        })
-      }
     } catch (e) {
       if (log) console.warn('[RDI Auth] fetchAuthSession(forceRefresh) failed:', e)
     }
@@ -57,13 +43,6 @@ export async function getAuthHeaders(): Promise<Record<string, string>> {
 
   if (bearer) {
     headers['Authorization'] = `Bearer ${bearer}`
-    if (log && DEBUG_AUTH) {
-      console.log('🔒 [RDI Auth] Using token for Authorization header:', {
-        tokenLength: bearer.length,
-        tokenPrefix: bearer.substring(0, 20) + '...',
-        tokenType: idToken ? 'idToken' : 'accessToken',
-      })
-    }
   } else {
     if (log) {
       console.warn(
