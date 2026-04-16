@@ -250,6 +250,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       has_agent: ${{ steps.check.outputs.has_agent }}
+      # When true, CI skips build-agent — agent runs on relays only; Terraform uses skip_agent_build from tfvars.
+      skip_ci_agent_build: ${{ steps.tfvars.outputs.skip_ci_agent_build }}
     steps:
       - uses: actions/checkout@v4
       - name: Check for agent source
@@ -259,6 +261,17 @@ jobs:
             echo "has_agent=true" >> $GITHUB_OUTPUT
           else
             echo "has_agent=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Read skip_agent_build from environment tfvars
+        id: tfvars
+        run: |
+          ENV="${{ needs.determine-environment.outputs.environment }}"
+          FILE="terraform/environments/${ENV}.auto.tfvars"
+          if grep -qE '^\s*skip_agent_build\s*=\s*true' "$FILE" 2>/dev/null; then
+            echo "skip_ci_agent_build=true" >> $GITHUB_OUTPUT
+            echo "skip_agent_build=true in $FILE — CI will not build/upload rdi-agent to S3"
+          else
+            echo "skip_ci_agent_build=false" >> $GITHUB_OUTPUT
           fi
 
   build-proxy:
@@ -290,7 +303,7 @@ jobs:
   build-agent:
     name: 'Build Agent Binary'
     needs: [determine-environment, check-agent]
-    if: needs.check-agent.outputs.has_agent == 'true'
+    if: needs.check-agent.outputs.has_agent == 'true' && needs.check-agent.outputs.skip_ci_agent_build != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -445,13 +458,13 @@ jobs:
           ls -la src/proxy/target/release/rdi-proxy
 
       - name: Download Agent Artifact
-        if: needs.check-agent.outputs.has_agent == 'true'
+        if: needs.check-agent.outputs.has_agent == 'true' && needs.check-agent.outputs.skip_ci_agent_build != 'true'
         uses: actions/download-artifact@v4
         with:
           name: agent-binary-${{ needs.determine-environment.outputs.environment }}
 
       - name: Place Agent Binary
-        if: needs.check-agent.outputs.has_agent == 'true'
+        if: needs.check-agent.outputs.has_agent == 'true' && needs.check-agent.outputs.skip_ci_agent_build != 'true'
         run: |
           mkdir -p src/agent/target/release
           BINARY=$(find . -name "rdi-agent" -type f | head -1)
@@ -483,6 +496,7 @@ jobs:
       - name: Terraform Apply
         if: github.event.inputs.destroy != 'true'
         run: |
+          # skip_agent_build comes from environments/<env>.auto.tfvars (agent on relay, not S3)
           EXTRA_VARS=""
           if [ "${{ needs.check-agent.outputs.has_agent }}" != "true" ]; then
             EXTRA_VARS='-var="skip_agent_build=true"'
@@ -523,28 +537,6 @@ jobs:
           CLUSTER="rdi-proxy-${{ needs.determine-environment.outputs.environment }}"
           SERVICE="rdi-proxy-${{ needs.determine-environment.outputs.environment }}"
           aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --force-new-deployment --region ${{ matrix.region }} || echo "ECS service not found, skipping"
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
-      - name: Update agent on legacy edge EC2 (optional)
-        if: >
-          github.event.inputs.destroy != 'true' &&
-          needs.check-agent.outputs.has_agent == 'true'
-        run: |
-          cd terraform
-          INSTANCE_ID=$(terraform output -raw wavelength_instance_id 2>/dev/null || true)
-          if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "null" ]; then
-            echo "Updating agent on edge instance $INSTANCE_ID..."
-            aws ssm send-command \
-              --instance-ids "$INSTANCE_ID" \
-              --document-name "AWS-RunShellScript" \
-              --parameters 'commands=["sudo /opt/rdi-agent/update-from-s3.sh"]' \
-              --region ${{ matrix.region }} \
-              --output text --query 'Command.CommandId' || echo "SSM send-command failed (instance may still be starting or pipeline lacks ssm:SendCommand)"
-          else
-            echo "No edge EC2 agent (wavelength_instance_id empty); skipping — relays use internet to proxy"
-          fi
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

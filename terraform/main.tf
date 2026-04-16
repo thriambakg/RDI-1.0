@@ -157,48 +157,6 @@ module "core_layer" {
   depends_on = [module.layer_artifacts_bucket]
 }
 
-# When wavelength_zone_id is set: ensure agent binary is in S3 before edge EC2 user_data runs.
-# Use stable trigger (bucket+key) so plan doesn't change when S3 etag is computed during apply.
-resource "null_resource" "wavelength_agent_ready" {
-  count = var.wavelength_zone_id != "" && !var.skip_agent_build ? 1 : 0
-
-  triggers = {
-    agent_bucket = module.proxy_artifacts_bucket.bucket_id
-    agent_key    = "agent/rdi-agent"
-  }
-
-  depends_on = [aws_s3_object.agent_binary]
-}
-
-# Optional legacy module: EC2 in an AWS Wavelength Zone (carrier edge). Empty wavelength_zone_id skips entirely.
-module "wavelength_ec2" {
-  source = "./modules/wavelength-ec2"
-  count  = var.wavelength_zone_id != "" ? 1 : 0
-
-  project_name                  = var.project_name
-  environment                   = var.environment
-  wavelength_zone_id            = var.wavelength_zone_id
-  kms_key_arn                   = module.kms.main_key_arn
-  mavlink_port                  = var.mavlink_port
-  agent_binary_s3_bucket        = module.proxy_artifacts_bucket.bucket_id
-  agent_binary_s3_key           = "agent/rdi-agent"
-  enable_agent_binary_s3_access = true
-  cloudwatch_log_group_name     = "/rdi/${var.environment}/agent"
-
-  user_data = templatefile("${path.module}/../src/wavelength/user_data.sh", {
-    s3_bucket            = module.proxy_artifacts_bucket.bucket_id
-    s3_key               = "agent/rdi-agent"
-    aws_region           = local.region
-    cloudwatch_log_group = "/rdi/${var.environment}/agent"
-    mavlink_port         = tostring(var.mavlink_port)
-    infra_version        = var.environment
-    insecure_tls         = length(module.ssl_certificate) > 0 ? "1" : ""
-  })
-
-  tags       = {}
-  depends_on = [null_resource.wavelength_agent_ready]
-}
-
 # S3 bucket for proxy binary (per-region)
 module "proxy_artifacts_bucket" {
   source = "./modules/s3-bucket"
@@ -265,7 +223,7 @@ resource "null_resource" "agent_build" {
   }
 }
 
-# Upload agent binary to S3 for Wavelength EC2 user_data to fetch
+# Upload agent binary to S3 (optional; relay-side builds skip via skip_agent_build). Not wired to edge EC2 in root stack.
 resource "aws_s3_object" "agent_binary" {
   count = var.skip_agent_build ? 0 : 1
 
@@ -291,7 +249,7 @@ module "session_api_lambda" {
   memory_size   = 128
   source_dir    = "${path.module}/../src/session-api"
 
-  environment_variables = merge({
+  environment_variables = {
     CONNECTION_POOL_TABLE   = local.connection_pool_tbl
     USER_PROFILES_TABLE     = local.user_profiles_tbl
     RELAY_REGISTRY_TABLE    = local.relay_registry_tbl
@@ -299,15 +257,10 @@ module "session_api_lambda" {
     PROXY_STATUS_URL        = local.proxy_status_url
     PROXY_STATUS_SECRET_ARN = length(module.proxy_secrets) > 0 ? module.proxy_secrets[0].secret_arns["proxy_status"] : ""
     MAVLINK_PORT            = tostring(var.mavlink_port)
-    }, var.wavelength_zone_id != "" ? {
-    WAVELENGTH_INSTANCE_ID = module.wavelength_ec2[0].instance_id
-    WAVELENGTH_ZONE_ID     = length(var.edge_zone_ids) > 0 ? var.edge_zone_ids[0] : ""
-    WAVELENGTH_CARRIER_IP  = module.wavelength_ec2[0].carrier_ip
-  } : {})
+  }
 
   additional_policy_arns = concat(
     [aws_iam_policy.session_api_dynamodb[0].arn],
-    length(aws_iam_policy.session_api_ssm) > 0 ? [aws_iam_policy.session_api_ssm[0].arn] : [],
     length(aws_iam_policy.session_api_proxy_secret) > 0 ? [aws_iam_policy.session_api_proxy_secret[0].arn] : []
   )
   depends_on = [aws_iam_policy.session_api_dynamodb]
@@ -334,27 +287,6 @@ resource "aws_iam_policy" "session_api_proxy_secret" {
         Effect   = "Allow"
         Action   = ["kms:Decrypt", "kms:DescribeKey"]
         Resource = [module.kms.main_key_arn]
-      }
-    ]
-  })
-}
-
-# Optional: SSM to an edge EC2 agent (legacy AWS Wavelength module). Empty wavelength_zone_id = no SSM policy.
-resource "aws_iam_policy" "session_api_ssm" {
-  count       = var.wavelength_zone_id != "" ? 1 : 0
-  name        = "${var.project_name}-session-api-ssm-${var.environment}"
-  description = "SSM SendCommand to RDI agent on edge EC2 (when Wavelength module deployed)"
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = "ssm:SendCommand"
-        Resource = [
-          "arn:aws:ssm:${local.region}::document/AWS-RunShellScript",
-          "arn:aws:ec2:${local.region}:${data.aws_caller_identity.current.account_id}:instance/${module.wavelength_ec2[0].instance_id}"
-        ]
       }
     ]
   })

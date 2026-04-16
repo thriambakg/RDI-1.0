@@ -58,16 +58,6 @@ output "proxy_websocket_endpoint" {
   value       = length(module.proxy_ecs) > 0 ? local.proxy_endpoint : null
 }
 
-output "wavelength_instance_id" {
-  description = "Legacy edge EC2 instance ID when Wavelength module is enabled; null otherwise"
-  value       = var.wavelength_zone_id != "" ? module.wavelength_ec2[0].instance_id : null
-}
-
-output "wavelength_carrier_ip" {
-  description = "Legacy carrier-facing IP when Wavelength module is enabled; null otherwise"
-  value       = var.wavelength_zone_id != "" ? module.wavelength_ec2[0].carrier_ip : null
-}
-
 output "wss_custom_domain_name_servers" {
   description = "Route53 name servers for domain_name; set these as NS at your registrar when enable_custom_domain is true"
   value       = var.enable_custom_domain && var.domain_name != "" && length(module.domain) > 0 ? module.domain[0].hosted_zone_name_servers : null
@@ -86,11 +76,6 @@ output "proxy_target_group_arn" {
 output "proxy_ecr_repository_url" {
   description = "ECR repository URL for proxy container (when using ECS)"
   value       = length(aws_ecr_repository.proxy) > 0 ? aws_ecr_repository.proxy[0].repository_url : null
-}
-
-output "edge_zone_ids" {
-  description = "AWS region ids listed for this environment (docs/outputs; UI regions are in the frontend config)"
-  value       = var.edge_zone_ids
 }
 
 # Keep variables in use (avoids terraform_unused_declarations)

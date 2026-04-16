@@ -6,9 +6,9 @@ primary_region = "us-east-1"
 base_state_bucket = "rdi-terraform-state-470900128247"
 base_state_region = "eu-central-1"
 
-# Wavelength edge EC2 disabled — relays use internet (e.g. Starlink) to reach regional API/proxy.
-wavelength_zone_id = ""
-edge_zone_ids      = ["us-east-1"] # AWS regions (docs / outputs; UI uses frontend config)
+# Agent binary: not uploaded to S3 — agent runs on relays (build from src/agent locally or separate release).
+# ECS proxy image only contains rdi-proxy (WebSocket hub), not the MAVLink UDP agent.
+skip_agent_build = true
 
 # Proxy: ECS Fargate (true) or EC2 rdi_edge (false)
 use_proxy_ecs = true

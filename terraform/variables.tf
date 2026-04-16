@@ -27,20 +27,8 @@ variable "project_name" {
   default     = "rdi"
 }
 
-variable "wavelength_zone_id" {
-  description = "Optional: Wavelength Zone Name for legacy edge EC2 module (e.g. us-east-1-wl1-chi-wlz-1). Empty = no edge EC2; relays use public internet to API/proxy."
-  type        = string
-  default     = ""
-}
-
-variable "edge_zone_ids" {
-  description = "List of AWS region ids (e.g. us-east-1) for docs/outputs; frontend Region selector is configured in the React app."
-  type        = list(string)
-  default     = []
-}
-
 variable "mavlink_port" {
-  description = "MAVLink UDP port for PX4 (14540 legacy, 18570 v1.13+). Session API default; also passed to legacy Wavelength EC2 when that module is enabled."
+  description = "MAVLink UDP port for PX4 (14540 legacy, 18570 v1.13+). Session API default for session metadata."
   type        = number
   default     = 18570
 }
@@ -70,7 +58,7 @@ variable "skip_proxy_build" {
 }
 
 variable "skip_agent_build" {
-  description = "Skip building and uploading the agent binary. Set true when Rust is not available or agent is not deployed."
+  description = "Skip Terraform local-exec build and S3 upload of rdi-agent. Use true when agent runs only on relays (Starlink/laptop); ECS image is proxy-only."
   type        = bool
   default     = false
 }
