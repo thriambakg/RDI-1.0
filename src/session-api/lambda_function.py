@@ -34,7 +34,7 @@ WAVELENGTH_CARRIER_IP = os.environ.get("WAVELENGTH_CARRIER_IP", "")
 MAVLINK_PORT = os.environ.get("MAVLINK_PORT", "18570")
 
 
-AGENT_API_PORT = "8080"  # RDI_AGENT_API_PORT on Wavelength (agent daemon - stays running; Lambda adds/removes sessions only)
+AGENT_API_PORT = "8080"  # RDI_AGENT_API_PORT on edge agent host when SSM-managed (daemon; Lambda adds/removes sessions)
 
 _PROXY_STATUS_SECRET_CACHE: str | None = None
 
@@ -66,7 +66,7 @@ def _get_proxy_status_secret() -> str:
 # Logged once per cold start (no secret values)
 print(
     f"[RDI Session] init endpoint={PROXY_ENDPOINT} has_proxy_status_url={bool(PROXY_STATUS_URL)} "
-    f"has_proxy_secret_arn={bool(PROXY_STATUS_SECRET_ARN)} wavelength_instance_id={bool(WAVELENGTH_INSTANCE_ID)}"
+    f"has_proxy_secret_arn={bool(PROXY_STATUS_SECRET_ARN)} edge_agent_instance={bool(WAVELENGTH_INSTANCE_ID)}"
 )
 
 
@@ -623,8 +623,8 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
     dynamodb = boto3.client("dynamodb")
     now = int(time.time())
 
-    # When reactivating, we need wavelength_zone_id to start the agent, relay_id to update relay status,
-    # and relay_type to skip Wavelength for local relays.
+    # When reactivating, we need wavelength_zone_id (deployment region key) for relay lookup, relay_id to update relay status,
+    # and relay_type to skip cloud SSM agent for local relays.
     wavelength_zone_id = None
     session_relay_id = None
     session_relay_config = None

@@ -93,7 +93,7 @@ export function RelayDetailDialog({ relay, open, onClose }: RelayDetailDialogPro
               <strong>Relay ID:</strong> {relay.relay_id}
             </Typography>
             <Typography sx={{ fontSize: '0.875rem', mb: 1 }}>
-              <strong>Wavelength zone:</strong> {relay.wavelength_zone_id}
+              <strong>Region:</strong> {relay.wavelength_zone_id}
             </Typography>
             <Typography sx={{ fontSize: '0.875rem', mb: 1 }}>
               <strong>Type:</strong> {relay.relay_type}

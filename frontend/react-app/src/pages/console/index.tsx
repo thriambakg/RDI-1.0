@@ -47,7 +47,7 @@ import { deleteRelay, updateRelayStatus } from '../../services/relayApi'
 import type { CreateSessionResponse } from '../../services/sessionApi'
 import './Console.css'
 
-const { regions: EDGE_ZONES } = getEnvironmentRegions()
+const { regions: REGION_OPTIONS } = getEnvironmentRegions()
 
 const selectSx = {
   '& .MuiOutlinedInput-root': {
@@ -203,7 +203,9 @@ function FolderTree({
 }
 
 export default function Console() {
-  const [selectedZone] = useState(EDGE_ZONES[0] ?? { id: 'use1-wl1-chi-wlz1', city: 'Chicago', country: 'USA', carrier: 'Verizon' })
+  const [selectedZone, setSelectedZone] = useState(
+    REGION_OPTIONS[0] ?? { id: 'us-east-1', label: 'N. Virginia', country: 'USA' }
+  )
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false)
@@ -472,8 +474,9 @@ export default function Console() {
   }
 
   const handleZoneChange = (e: SelectChangeEvent<string>) => {
-    const z = EDGE_ZONES.find((x) => x.id === e.target.value)
+    const z = REGION_OPTIONS.find((x) => x.id === e.target.value)
     if (z) {
+      setSelectedZone(z)
       setSelectedRelayId(null)
     }
   }
@@ -499,7 +502,7 @@ export default function Console() {
       <div className="console-body">
         <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
           <Typography variant="overline" sx={{ color: '#64748b', display: 'block', mb: 1 }}>
-            Edge Location
+            Region
           </Typography>
           <FormControl fullWidth size="small" sx={selectSx}>
             <Select
@@ -515,9 +518,9 @@ export default function Console() {
                 },
               }}
             >
-              {EDGE_ZONES.map((z) => (
+              {REGION_OPTIONS.map((z) => (
                 <MenuItem key={z.id} value={z.id} disableRipple>
-                  {z.city} ({z.carrier})
+                  {z.label} ({z.id})
                 </MenuItem>
               ))}
             </Select>
@@ -567,9 +570,9 @@ export default function Console() {
         <main className="main">
           <div className="main-top-bar">
             <div className="region-header">
-              <Typography variant="h6" sx={{ margin: 0, color: '#f8fafc' }}>{selectedZone.city}</Typography>
+              <Typography variant="h6" sx={{ margin: 0, color: '#f8fafc' }}>{selectedZone.label}</Typography>
               <Typography component="span" sx={{ fontSize: '0.8rem', color: '#64748b', display: 'block' }}>
-                {selectedZone.carrier} · {selectedZone.id}
+                {selectedZone.country} · {selectedZone.id}
               </Typography>
               <Typography
                 component="span"
@@ -640,7 +643,7 @@ export default function Console() {
             isOpen={registerRelayDialogOpen}
             onClose={() => setRegisterRelayDialogOpen(false)}
             wavelengthZoneId={selectedZone.id}
-            zoneLabel={`${selectedZone.city} (${selectedZone.carrier})`}
+            zoneLabel={`${selectedZone.label} (${selectedZone.id})`}
             onSuccess={() => {
               fetchProfile({ silent: true })
             }}

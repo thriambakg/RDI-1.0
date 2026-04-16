@@ -28,19 +28,19 @@ variable "project_name" {
 }
 
 variable "wavelength_zone_id" {
-  description = "Wavelength Zone ID for EC2 (e.g. use1-wl1-chi-wlz1). Empty = skip Wavelength deployment"
+  description = "Optional: Wavelength Zone Name for legacy edge EC2 module (e.g. us-east-1-wl1-chi-wlz-1). Empty = no edge EC2; relays use public internet to API/proxy."
   type        = string
   default     = ""
 }
 
 variable "edge_zone_ids" {
-  description = "List of Wavelength Zone IDs available in this environment (for UI, docs). Maps to frontend Edge Location selector."
+  description = "List of AWS region ids (e.g. us-east-1) for docs/outputs; frontend Region selector is configured in the React app."
   type        = list(string)
   default     = []
 }
 
 variable "mavlink_port" {
-  description = "MAVLink UDP port for PX4 (14540 legacy, 18570 v1.13+). Passed to Wavelength EC2 and session metadata default."
+  description = "MAVLink UDP port for PX4 (14540 legacy, 18570 v1.13+). Session API default; also passed to legacy Wavelength EC2 when that module is enabled."
   type        = number
   default     = 18570
 }

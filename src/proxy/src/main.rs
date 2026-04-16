@@ -487,7 +487,7 @@ async fn handle_ws(
         if role == "agent" {
             let had_frontend = s.frontends.contains_key(&session_id);
             info!(
-                "Agent WebSocket connected session_id={} addr={} (Wavelength EC2) frontend_already_connected={}",
+                "Agent WebSocket connected session_id={} addr={} frontend_already_connected={}",
                 session_id, addr, had_frontend
             );
             s.agents.insert(session_id.clone(), (peer, close_tx));
@@ -638,14 +638,14 @@ async fn handle_ws(
     let role_pong = role.clone();
     let session_id_pong = session_id.clone();
     let to_pong = tokio::spawn(async move {
-        let mut sent_wavelength = false;
+        let mut sent_agent_hop = false;
         while let Some(data) = peer_rx.recv().await {
-            if role_pong == "frontend" && !sent_wavelength {
+            if role_pong == "frontend" && !sent_agent_hop {
                 info!("PING round-trip complete session_id={} agent responded", session_id_pong);
                 let _ = client_tx_pong.send(ToClient::Text(
-                    r#"{"hop":"wavelength","message":"instance responded"}"#.to_string(),
+                    r#"{"hop":"agent","message":"instance responded"}"#.to_string(),
                 ));
-                sent_wavelength = true;
+                sent_agent_hop = true;
             }
             let _ = client_tx_pong.send(ToClient::Binary(data));
         }
@@ -663,7 +663,7 @@ async fn handle_ws(
     let mut s = sessions.write().await;
     if role == "agent" {
         s.agents.remove(&session_id);
-        info!("Agent WebSocket disconnected session_id={} addr={} (Wavelength EC2)", session_id, addr);
+        info!("Agent WebSocket disconnected session_id={} addr={}", session_id, addr);
     } else {
         s.frontends.remove(&session_id);
         info!("Frontend WebSocket disconnected session_id={} addr={} (browser)", session_id, addr);

@@ -1,8 +1,8 @@
 //! RDI Agent - bridges proxy WebSocket to local PX4 MAVLink UDP.
 //!
 //! Modes:
-//! - Daemon (Wavelength EC2): HTTP API; Lambda uses SSM to add/remove sessions.
-//! - Standalone (local Path 1): env RDI_SESSION_ID + RDI_PROXY_URL; single session, no HTTP.
+//! - Daemon (edge host with HTTP API): Lambda may use SSM to add/remove sessions (optional legacy deploy).
+//! - Standalone: env RDI_SESSION_ID + RDI_PROXY_URL; single session, no HTTP (relay / laptop / Starlink).
 //!
 //! Agent is a byte-level forwarder: proxy handles CTRL->MAVLink conversion; agent forwards
 //! all binary (except PING->PONG) to PX4 UDP.
@@ -155,7 +155,7 @@ async fn add_session(
     drop(guard);
 
     info!(
-        "Added session session_id={} proxy_url={} (Wavelength EC2); WebSocket connection task started",
+        "Added session session_id={} proxy_url={}; WebSocket connection task started",
         session_id, proxy_url
     );
     (StatusCode::CREATED, format!("session {} added", session_id))
@@ -174,7 +174,7 @@ async fn remove_session(
     if let Some(handle) = guard.remove(&session_id) {
         handle.abort();
         drop(guard);
-        info!("Removed session session_id={} (Wavelength EC2); WebSocket to proxy will close", session_id);
+        info!("Removed session session_id={}; WebSocket to proxy will close", session_id);
         (StatusCode::OK, format!("session {} removed", session_id))
     } else {
         drop(guard);
@@ -257,14 +257,14 @@ async fn run_session(
     mavlink_addr: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!(
-        "WebSocket opening url={} session_id={} (Wavelength EC2) -> mavlink {}",
+        "WebSocket opening url={} session_id={} -> mavlink {}",
         proxy_url, session_id, mavlink_addr
     );
 
     let ws_stream = connect_to_proxy(proxy_url).await?;
     let (mut ws_tx, mut ws_rx) = futures_util::StreamExt::split(ws_stream);
     info!(
-        "WebSocket connected to proxy session_id={} (Wavelength EC2); sending handshake agent:{}",
+        "WebSocket connected to proxy session_id={}; sending handshake agent:{}",
         session_id, session_id
     );
 

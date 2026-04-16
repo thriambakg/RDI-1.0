@@ -527,7 +527,7 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      - name: Update agent on Wavelength instance
+      - name: Update agent on legacy edge EC2 (optional)
         if: >
           github.event.inputs.destroy != 'true' &&
           needs.check-agent.outputs.has_agent == 'true'
@@ -535,7 +535,7 @@ jobs:
           cd terraform
           INSTANCE_ID=$(terraform output -raw wavelength_instance_id 2>/dev/null || true)
           if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "null" ]; then
-            echo "Updating agent on Wavelength instance $INSTANCE_ID..."
+            echo "Updating agent on edge instance $INSTANCE_ID..."
             aws ssm send-command \
               --instance-ids "$INSTANCE_ID" \
               --document-name "AWS-RunShellScript" \
@@ -543,7 +543,7 @@ jobs:
               --region ${{ matrix.region }} \
               --output text --query 'Command.CommandId' || echo "SSM send-command failed (instance may still be starting or pipeline lacks ssm:SendCommand)"
           else
-            echo "No Wavelength instance (wavelength_instance_id empty); skipping agent update"
+            echo "No edge EC2 agent (wavelength_instance_id empty); skipping — relays use internet to proxy"
           fi
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}

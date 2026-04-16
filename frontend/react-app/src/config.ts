@@ -1,4 +1,4 @@
-import { getEdgeZonesForEnvironment } from './config/environment-regions'
+import { getRegionsForEnvironment } from './config/environment-regions'
 import {
   getApiGatewayUrl,
   getAwsRegion,
@@ -27,9 +27,9 @@ export function getConfig(): RDIConfig {
   };
 }
 
-export function getEnvironmentRegions(): { environment: string; regions: ReturnType<typeof getEdgeZonesForEnvironment> } {
+export function getEnvironmentRegions(): { environment: string; regions: ReturnType<typeof getRegionsForEnvironment> } {
   const config = getConfig()
   const environment = config.ENVIRONMENT || getEnvironmentConfig().environment
-  const regions = getEdgeZonesForEnvironment(environment)
+  const regions = getRegionsForEnvironment(environment)
   return { environment, regions }
 }

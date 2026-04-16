@@ -173,8 +173,8 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
           }
         }
         if (arr.length === PONG_BYTES.length && arr.every((b, i) => b === PONG_BYTES[i])) {
-          add(`2. Wavelength: instance responded (T+${ms}ms)`)
-          add(`Success — full round-trip (client → proxy → Wavelength instance → proxy → client) (T+${ms}ms).`)
+          add(`2. Agent: responded (T+${ms}ms)`)
+          add(`Success — full round-trip (client → proxy → agent → proxy → client) (T+${ms}ms).`)
           finish()
         }
       }
@@ -182,7 +182,7 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
         event.data.arrayBuffer().then((ab) => {
           const arr = new Uint8Array(ab)
           if (arr.length === PONG_BYTES.length && arr.every((b, i) => b === PONG_BYTES[i])) {
-            add(`2. Wavelength: instance responded (T+${ms}ms)`)
+            add(`2. Agent: responded (T+${ms}ms)`)
             add(`Success — full round-trip (T+${ms}ms).`)
             finish()
           }
@@ -203,14 +203,14 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
               add(`Success — proxy responded (round-trip T+${ms}ms, no agent).`)
               finish()
             }
-          } else if (obj.hop === 'wavelength') {
-            add(`2. Wavelength: ${obj.message} (T+${ms}ms)`)
+          } else if (obj.hop === 'agent' || obj.hop === 'wavelength') {
+            add(`2. Agent: ${obj.message} (T+${ms}ms)`)
             if (obj.message === 'instance responded') {
-              add(`Success — full round-trip (client → proxy → Wavelength instance → proxy → client) (T+${ms}ms).`)
+              add(`Success — full round-trip (client → proxy → agent → proxy → client) (T+${ms}ms).`)
               finish()
             } else {
               finish(
-                'Proxy reached; no agent on Wavelength instance. The agent is started when you create a session and runs for that session only. ' +
+                'Proxy reached; no agent connected for this session. The agent starts when you create a session and runs for that session only. ' +
                   'Use this session (see Session ID below); if you have multiple sessions, connect from the same session you just created, then ping again.'
               )
             }
@@ -376,15 +376,15 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
                   </Typography>
                   {(data.mavlink_host === '127.0.0.1' || !data.mavlink_host) && (
                     <Typography sx={{ fontSize: '0.75rem', mt: 0.5, color: '#94a3b8' }}>
-                      PX4 must run on the same machine as the agent (Wavelength instance). Local PX4 on your laptop
-                      will not receive commands — run PX4 SITL on the Wavelength EC2 instead.
+                      PX4 must run on the same host as the MAVLink agent (e.g. relay or edge compute). Local PX4 on your laptop
+                      will not receive commands — run PX4 SITL on that host instead.
                     </Typography>
                   )}
                 </>
               )}
               {data.carrier_ip && (
                 <Typography sx={{ fontSize: '0.875rem', mt: 0.5, color: '#94a3b8' }}>
-                  <strong>Wavelength instance:</strong> {data.carrier_ip}
+                  <strong>Carrier / edge IP:</strong> {data.carrier_ip}
                 </Typography>
               )}
             </Box>

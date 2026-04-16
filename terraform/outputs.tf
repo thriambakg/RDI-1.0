@@ -59,12 +59,12 @@ output "proxy_websocket_endpoint" {
 }
 
 output "wavelength_instance_id" {
-  description = "Wavelength EC2 instance ID (when deployed)"
+  description = "Legacy edge EC2 instance ID when Wavelength module is enabled; null otherwise"
   value       = var.wavelength_zone_id != "" ? module.wavelength_ec2[0].instance_id : null
 }
 
 output "wavelength_carrier_ip" {
-  description = "Wavelength carrier IP for 5G connectivity"
+  description = "Legacy carrier-facing IP when Wavelength module is enabled; null otherwise"
   value       = var.wavelength_zone_id != "" ? module.wavelength_ec2[0].carrier_ip : null
 }
 
@@ -89,7 +89,7 @@ output "proxy_ecr_repository_url" {
 }
 
 output "edge_zone_ids" {
-  description = "Wavelength zone IDs available in this environment (for UI Edge Location selector)"
+  description = "AWS region ids listed for this environment (docs/outputs; UI regions are in the frontend config)"
   value       = var.edge_zone_ids
 }
 

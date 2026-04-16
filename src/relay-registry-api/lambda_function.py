@@ -1,7 +1,7 @@
 """
-Relay Registry API - Register and manage relay devices per Wavelength zone.
-Relays (local tunnel, SIM relays) connect to Wavelength instances; this API
-registers them so users can select a relay when creating connections.
+Relay Registry API - Register and manage relay devices per deployment region.
+The DynamoDB partition key is still named wavelength_zone_id; values are AWS region ids (e.g. us-east-1).
+Relays reach the API/proxy over the public internet (e.g. Starlink); this API registers them for the console.
 """
 
 import json
@@ -90,7 +90,7 @@ def lambda_handler(event: dict, context: Any) -> dict:
 
 
 def _register_relay(user_id: str, body: dict, headers: dict) -> dict:
-    """POST /relays - Register a new relay for a Wavelength zone."""
+    """POST /relays - Register a new relay for a deployment region (wavelength_zone_id = AWS region id)."""
     wavelength_zone_id = (body.get("wavelength_zone_id") or "").strip()
     name = (body.get("name") or "").strip() or "relay"
     relay_type = (body.get("relay_type") or "local").strip().lower()
@@ -165,7 +165,7 @@ def _register_relay(user_id: str, body: dict, headers: dict) -> dict:
 
 
 def _list_relays(user_id: str, params: dict, headers: dict) -> dict:
-    """GET /relays - List relays. Query: wavelength_zone_id (optional) for zone filter."""
+    """GET /relays - List relays. Query: wavelength_zone_id (optional) region filter."""
     wavelength_zone_id = (params.get("wavelength_zone_id") or "").strip()
     dynamodb = boto3.client("dynamodb")
 

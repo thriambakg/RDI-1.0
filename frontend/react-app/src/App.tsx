@@ -15,7 +15,7 @@ export default function App() {
       const { environment, regions } = getEnvironmentRegions()
       console.log('[RDI] Environment', {
         environment,
-        regions: regions.map((r) => `${r.id} (${r.city})`),
+        regions: regions.map((r) => `${r.id} (${r.label})`),
         regionCount: regions.length,
       })
       console.log('[RDI] App config', { hasAuth, socialProviders })

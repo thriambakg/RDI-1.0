@@ -157,7 +157,7 @@ module "core_layer" {
   depends_on = [module.layer_artifacts_bucket]
 }
 
-# Ensure agent binary is in S3 before Wavelength boots (so user_data can fetch it).
+# When wavelength_zone_id is set: ensure agent binary is in S3 before edge EC2 user_data runs.
 # Use stable trigger (bucket+key) so plan doesn't change when S3 etag is computed during apply.
 resource "null_resource" "wavelength_agent_ready" {
   count = var.wavelength_zone_id != "" && !var.skip_agent_build ? 1 : 0
@@ -170,7 +170,7 @@ resource "null_resource" "wavelength_agent_ready" {
   depends_on = [aws_s3_object.agent_binary]
 }
 
-# Wavelength EC2 - agent at 5G edge for MAVLink UDP <-> WebSocket bridge
+# Optional legacy module: EC2 in an AWS Wavelength Zone (carrier edge). Empty wavelength_zone_id skips entirely.
 module "wavelength_ec2" {
   source = "./modules/wavelength-ec2"
   count  = var.wavelength_zone_id != "" ? 1 : 0
@@ -298,11 +298,11 @@ module "session_api_lambda" {
     PROXY_ENDPOINT          = local.proxy_endpoint
     PROXY_STATUS_URL        = local.proxy_status_url
     PROXY_STATUS_SECRET_ARN = length(module.proxy_secrets) > 0 ? module.proxy_secrets[0].secret_arns["proxy_status"] : ""
+    MAVLINK_PORT            = tostring(var.mavlink_port)
     }, var.wavelength_zone_id != "" ? {
     WAVELENGTH_INSTANCE_ID = module.wavelength_ec2[0].instance_id
     WAVELENGTH_ZONE_ID     = length(var.edge_zone_ids) > 0 ? var.edge_zone_ids[0] : ""
     WAVELENGTH_CARRIER_IP  = module.wavelength_ec2[0].carrier_ip
-    MAVLINK_PORT           = tostring(var.mavlink_port)
   } : {})
 
   additional_policy_arns = concat(
@@ -339,11 +339,11 @@ resource "aws_iam_policy" "session_api_proxy_secret" {
   })
 }
 
-# Allow Session API Lambda to start RDI agent on Wavelength instance via SSM
+# Optional: SSM to an edge EC2 agent (legacy AWS Wavelength module). Empty wavelength_zone_id = no SSM policy.
 resource "aws_iam_policy" "session_api_ssm" {
   count       = var.wavelength_zone_id != "" ? 1 : 0
   name        = "${var.project_name}-session-api-ssm-${var.environment}"
-  description = "SSM SendCommand to start agent on Wavelength EC2"
+  description = "SSM SendCommand to RDI agent on edge EC2 (when Wavelength module deployed)"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -459,7 +459,7 @@ module "relay_registry_api_lambda" {
   source = "./modules/lambda"
 
   function_name = "${var.project_name}-relay-registry-api-${var.environment}-${local.region}"
-  description   = "Relay registry API - register and manage relay devices per Wavelength zone"
+  description   = "Relay registry API - register and manage relay devices per deployment region"
   handler       = "lambda_function.lambda_handler"
   runtime       = "python3.12"
   timeout       = 10

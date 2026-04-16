@@ -1,0 +1,847 @@
+aws wavelength verizon sim cardwant to connect one to a raspberry pi and a radio transmitter to control drones via wavelengthApr 4Searched the webSearched the webGreat — there's a well-documented path for exactly this. Here's a breakdown of how the whole stack works and what you need:
+
+How AWS Wavelength + Verizon Works for Drone Control
+AWS Wavelength runs AWS compute and storage services at the edge of Verizon's 5G network, reducing round-trip latency to potentially single digits. Verizon Wavelength Zones support 4G, 5G, and CAT-M IoT connections from Verizon clients Verizon — which means a Verizon SIM in your Raspberry Pi can talk directly to an EC2 instance in a Wavelength Zone without traffic leaving the mobile network.
+The key constraint: application traffic from the public internet is blocked into Wavelength Zones — it must originate from the carrier network side. Verizon So your Pi needs a Verizon SIM, not just any internet connection.
+
+Hardware Stack for the Pi
+Verizon has an official tutorial for exactly this setup. You need a Verizon ThingSpace account for an IoT connectivity plan, the Monarch Go Pi Hat (which includes the LTE module and plugs directly onto the Raspberry Pi GPIO), and an active AWS account with Wavelength Zones enabled. Verizon
+The Monarch Go Pi Hat is the cleanest option — no USB dongles, direct GPIO attachment. Alternatively, Sixfab hats (Quectel or Telit-based) also work with Verizon SIMs, though you may need to issue an AT command (AT+FWSWITCH=2) to switch to Verizon config if the modem defaults to AT&T.
+SIM options:
+
+Verizon ThingSpace IoT SIM — purpose-built for this, activates through the ThingSpace portal with flexible data plans. Best for Wavelength integration.
+Multi-carrier industrial SIMs (like Eiotclub Triple Play Pro) automatically switch between AT&T, T-Mobile, and Verizon for the strongest signal EIOTCLUB — useful for drones that travel, but you lose the dedicated Wavelength low-latency path.
+
+
+Architecture for Drone Control
+[Raspberry Pi + Radio TX]
+        |
+  Verizon SIM (LTE/5G)
+        |
+  Verizon RAN (cell tower)
+        |
+  AWS Wavelength Zone (EC2)
+        |
+  AWS Parent Region (VPC)
+        |
+  Your control application
+Traffic can reach application servers in Wavelength Zones without leaving the mobile network, which is what gives you the ultra-low latency. Verizon
+For the radio transmitter side, the Pi would handle the command logic and relay over the cellular uplink to Wavelength, then back down to another ground station or directly to onboard drone hardware depending on your radio protocol (MAVLink, etc.).
+
+Getting Started Steps
+
+Create a Verizon ThingSpace account at thingspace.verizon.com
+Enable AWS Wavelength Zones in your AWS account (requires a sign-up form approval)
+Buy a Monarch Go Pi Hat from the ThingSpace Marketplace and activate your SIM with a data plan
+Deploy an EC2 instance in the nearest Wavelength Zone — the Carrier Gateway in your VPC is how traffic routes from the Verizon network in
+Set up your drone control app (e.g., MAVSDK + MAVLink) on the EC2 instance or proxied through it
+
+One heads-up: to SSH into a Wavelength Zone instance, you need to be on the Verizon network (e.g., tethered through your Pi's SIM), use a bastion host in the parent AWS region, or use AWS Systems Manager Session Manager. Verizon
+Want help designing the specific AWS architecture (VPC, Carrier Gateway, EC2 setup) or the Pi-side software stack for drone communication?ThingSpace Marketplace
+Search
+Product
+Industry
+Technology
+Brand
+Marketplace get started
+ThingSpace Marketplace is a one-stop shop for everything you need to start building your IoT solution right away. Our SIM cards, connectivity plans, hardware, and solutions are available with the click of pastedThis is what i see on the thingspace websiteApr 4Good info! Based on what you're seeing, here's what you'd want for your drone control setup:
+
+SIM Card
+Cat 1 and above Triple-punch SIM card — $1.50
+This is the right pick for your Raspberry Pi use case. "Triple-punch" means it comes in 3 sizes (standard/micro/nano) pre-punched, so it fits whatever modem hat you use. The ruggedized version ($3.00) is worth it if the Pi is going to be outdoors or on the drone itself given the wider temp range (-40 to +105°C).
+For a ground control station Pi, the regular $1.50 triple-punch is fine.
+
+Connectivity Plan
+For drone control via MAVLink/radio, you won't use a ton of data — telemetry and commands are small packets. Realistically:
+
+100MB plan at $14/month is a safe starting point for testing
+10MB at $6/month might work if you're only sending command/telemetry data with no video
+Avoid the 1MB plan — too easy to blow through during a session
+
+If you're also streaming video back from the drone over the same link, jump to 500MB or 1GB.
+
+Hardware Note
+I noticed the 5G Data Card (Telit FN980m) listed there — that's a USB modem designed for laptops/dev boards and would work with the Pi via USB. It's the most straightforward path to 5G Edge / Wavelength connectivity without needing a GPIO hat.
+The Monarch 2 EVK is also listed — that's the Cat-M1 development kit, better suited for low-power sensor applications than drone control (bandwidth is limited).
+
+Recommended Shopping List from ThingSpace
+ItemCostCat 1+ Triple-punch SIM (or Ruggedized if outdoor)$1.50–$3.00100MB connectivity plan$14/month5G Data Card (USB modem for Pi)Check "Buy now" price
+Want help with the AWS Wavelength Zone setup side once you have the SIM sorted?Cat 1 or Cat M1 card?Apr 4For drone control, you want the Cat 1 and above SIM.
+Here's why:
+Cat 1 (what you want)
+
+Up to 10 Mbps down / 5 Mbps up
+Low latency suitable for real-time control
+Full 4G LTE — works with the 5G Data Card and standard LTE modems
+Required for AWS Wavelength access
+
+Cat M1 (not ideal here)
+
+Max ~1 Mbps, designed for low-bandwidth sensors (temperature monitors, asset trackers, smart meters)
+Higher latency
+Not suitable for real-time drone command/control or video
+Cheaper to run but wrong tool for this job
+
+
+Rule of thumb:
+
+Cat M1 = slow, cheap, low-power things that just ping data occasionally
+Cat 1+ = anything that needs a real connection — like a Pi controlling a drone
+
+Go with the Cat 1 Triple-punch at $1.50 (or ruggedized at $3.00 if it's going outdoors).pdfLooking at the monarch go pi hat its saying its only compatible with CAT m1 sim cards check thisApr 5You're right to flag that — good catch. The Monarch Go Pi HAT is indeed Cat-M1 only, which contradicts what I recommended earlier. Let me be straight about the tradeoff:
+
+The Problem for Drone Control
+The Monarch Go HAT uses a Cat-M1 modem — max ~1 Mbps, higher latency. That's fine for the use cases listed on the datasheet (asset tracking, remote monitoring) but marginal for real-time drone control, especially if you want:
+
+Low-latency command response
+Any video feed
+Reliable MAVLink telemetry at speed
+
+
+Your Two Options
+Option A — Use the Monarch Go HAT anyway (Cat-M1)
+
+Simplest plug-and-play with ThingSpace + Wavelength
+Use the Cat-M1 SIM ($1.50) to match
+Acceptable only if your radio transmitter handles the actual real-time drone link and the Pi/cellular connection is just for telemetry data and cloud relay — not the primary control path
+Cost: ~$72.95 for the HAT, SIM included
+
+Option B — Use a Cat 1+ USB modem instead (recommended for drone control)
+
+The 5G Data Card listed on ThingSpace (Telit FN980m) connects via USB to the Pi
+Supports full Cat 1+ / 5G speeds
+Use the Cat 1+ Triple-punch SIM ($1.50)
+More bandwidth, lower latency, proper Wavelength access
+Slightly more setup required vs. a GPIO HAT
+
+
+Bottom Line
+If the cellular link is your primary control path → go Option B (Cat 1+ USB modem).
+If cellular is just telemetry/monitoring and the radio handles actual drone commands → Option A is fine and simpler.
+What's the role of the radio transmitter in your setup — is it the primary drone control link, or backup?when i attepnt to checkout on thingspace, it gives me a 400 errorApr 5That's a known pain point with ThingSpace — their marketplace checkout has been buggy for a lot of developers. A few things to try:
+
+Quick Fixes to Try First
+
+Clear cache / try incognito mode — ThingSpace's cart sometimes breaks with cached session data
+Try a different browser — Chrome tends to work better than Firefox/Safari for their portal
+Make sure you're fully logged in before adding to cart — session timeouts cause 400 errors at checkout
+Check your billing/shipping address is fully filled out in your account profile before attempting checkout
+
+
+If That Doesn't Work
+The ThingSpace Marketplace checkout is notoriously unreliable for first-time purchases. The most reliable alternatives:
+
+Call Verizon Business directly — 1-800-526-3178. Tell them you want a ThingSpace IoT SIM and connectivity plan. They can provision it manually.
+Buy the Monarch Go HAT from Avnet directly at Avnet.me/MonarchGO-HAT-buy — the HAT comes with the SIM pre-installed anyway, so you may not need to buy the SIM separately from ThingSpace at all
+Contact ThingSpace support at thingspace.verizon.com — there's a chat/support option and they're used to handling checkout failures
+
+
+Worth Noting
+Since the Monarch Go HAT comes with a pre-installed Verizon ThingSpace IoT SIM, you may only need to buy the HAT from Avnet and then activate the included SIM through your ThingSpace account — skipping the SIM purchase from the marketplace entirely.
+Want help with the activation steps once you have the hardware?yeah but the hat only comes with an M1 cardApr 5You're absolutely right — and that's the core problem. The HAT comes with a Cat-M1 SIM baked in, and you can't swap it out easily since it's integrated on the module.
+
+Realistic Path Forward
+Since the ThingSpace checkout is broken and the HAT locks you into Cat-M1, I'd recommend stepping back from the Monarch Go HAT entirely and going with a more flexible setup:
+What to buy instead:
+Sixfab 4G/LTE Base HAT (~$49 on sixfab.com)
+
+GPIO HAT for Raspberry Pi
+Takes a standard nano SIM
+Works with Quectel modems (Cat 1, Cat 4, even 5G options)
+Well documented for Pi specifically
+Large community, active support
+
+SIM — skip ThingSpace for now and use one of:
+
+A Verizon IoT SIM ordered through a Verizon Business rep directly (phone call)
+Or a multi-carrier IoT SIM from Hologram or Eiotclub that roams on Verizon — easier to activate online, no broken checkout
+
+
+The Tradeoff
+You'd lose the tight ThingSpace/Wavelength integration that the Monarch Go was designed for, but you'd gain:
+
+Proper Cat 1+ speeds
+A working purchase path
+More flexibility long term
+
+Are you set on the Wavelength integration specifically, or is low-latency 5G/LTE connectivity to AWS the main goal? That changes which route makes most sense.If iw anted to use vodafone long term for this technology what woudl be the best pathApr 5Good question — Vodafone is actually a strong choice for this long term, especially if you're thinking beyond the US or want a more open ecosystem.
+
+Vodafone's Equivalent Stack
+Vodafone has their own IoT platform that mirrors what Verizon/ThingSpace offers:
+Vodafone UNITE / Vodafone IoT
+
+Their SIM management platform is called Vodafone IoT SIM (formerly GDSP)
+Global coverage across 190+ countries via roaming agreements
+Supports Cat-M1, Cat 1, Cat 4, and 5G depending on region
+Developer-friendly API for SIM management
+
+
+The AWS Edge Question
+This is the key issue — AWS Wavelength with Vodafone is limited compared to Verizon. Wavelength zones are currently only confirmed with:
+
+Verizon (US)
+KDDI (Japan)
+SK Telecom (South Korea)
+Vodafone (UK & Germany only)
+
+So if you're in the UK, Vodafone + AWS Wavelength is actually a viable path. If you're in the US, Vodafone doesn't give you Wavelength access.
+
+Best Path for Vodafone Long Term
+UK-based:
+
+Vodafone IoT SIM (Cat 1+)
+Sixfab HAT or similar on the Pi
+AWS Wavelength zones in London (eu-west-2 region)
+Nearly identical architecture to the Verizon setup
+
+US-based with Vodafone:
+
+You'd need to drop Wavelength and use standard AWS regions instead
+Latency would be higher (~50-100ms vs single digits)
+Could partially compensate with AWS Local Zones near your location
+Bloomington IL → closest would be Chicago
+
+
+Honest Recommendation
+If you're US-based (which you appear to be), Vodafone long-term means giving up the ultra-low latency Wavelength advantage. For drone control that's a meaningful tradeoff.
+If you're open to it, T-Mobile is the closest US alternative to Verizon for IoT — they have AWS Wavelength zones too and their IoT SIM provisioning is significantly less broken than ThingSpace.
+Where are you planning to operate the drones primarily — US only, or international?I want it to work here temporarily, i just need a device which is compatible with both sim cards, meaning i dont want to be locked in to using verizon iot devicesApr 5That makes total sense — you want hardware flexibility so you can swap carriers without replacing equipment.
+
+What You Need
+A Pi HAT or USB modem with:
+
+A removable nano/micro SIM slot (not soldered/embedded like the Monarch Go)
+Multi-band support — covers both Verizon (bands 4, 13) and Vodafone UK (bands 1, 3, 7, 20)
+Cat 1+ minimum for drone control
+
+
+Best Options
+Sixfab Cellular IoT HAT
+
+Quectel BG95 or EC25 modem
+Removable nano SIM slot
+Covers Verizon + Vodafone bands
+~$49 at sixfab.com
+Well documented for Raspberry Pi
+Best all-round pick
+
+Waveshare SIM7600G-H 4G HAT
+
+Removable SIM
+Global band support (works everywhere)
+Cat 4 speeds (150 Mbps down)
+~$45 on Amazon
+Good Pi documentation
+Best if you want future-proofing for international bands
+
+Quectel RM502Q (USB/HAT)
+
+Full 5G
+Removable nano SIM
+Supports virtually every band globally
+More expensive (~$120+)
+Best if 5G Wavelength speeds matter to you
+
+
+SIM Strategy
+For now (Verizon/US):
+
+Get a standard Verizon business LTE SIM directly from a Verizon store — avoid ThingSpace entirely
+Ask for a data-only IoT SIM on a business account
+
+For later (Vodafone):
+
+Just swap the SIM — same hardware works
+
+
+Bottom Line
+The Waveshare SIM7600G-H is probably your sweet spot — cheaper than the Quectel 5G option, global bands, removable SIM, solid Pi support, and available on Amazon right now without broken checkout systems.
+Want help picking the right Verizon SIM to pair with it?I have my aws account with wavelength set up already, and im sending signals from my internet UI to the wavelenght instance. How would i get the wavelength instance to connect to the sim? I have a relay registration system set in place, but its only a placeholder for now.Apr 5Great — so you have the cloud side sorted. The missing piece is getting your Wavelength EC2 instance to push commands down to the Pi's SIM over the Verizon carrier network. Here's how that works:
+
+The Core Networking Concept
+The critical rule (mentioned earlier) is:
+
+Inbound to Wavelength from internet = blocked
+Outbound from the Pi (carrier network) to Wavelength = allowed
+
+This means you cannot have Wavelength initiate the connection to the Pi. The Pi must initiate and maintain a persistent connection up to Wavelength.
+
+How to Bridge the Gap
+The Pattern: Persistent Outbound Connection from Pi
+[Your UI]
+    ↓ (internet)
+[Wavelength EC2]
+    ↑ (persistent connection, carrier network only)
+[Raspberry Pi + SIM]
+    ↓ (serial/GPIO)
+[Radio Transmitter]
+    ↓ (RF)
+[Drone]
+The Pi opens and holds a connection to Wavelength — your relay registration system is exactly the right idea for this.
+
+Best Protocol Options for the Persistent Connection
+Option A — MQTT (recommended for drone telemetry)
+
+Pi runs an MQTT client, connects outbound to a broker on your Wavelength instance
+Lightweight, designed for unreliable networks
+Bi-directional once connected — Wavelength can push commands down
+AWS IoT Core supports MQTT natively if you want to extend later
+
+Option B — WebSocket
+
+Pi opens a WebSocket to Wavelength
+Good if your UI is already web-based
+Easy to integrate with existing relay registration logic
+
+Option C — Reverse SSH Tunnel
+
+Pi SSHs into Wavelength and opens a reverse tunnel
+Simple but not ideal for production
+Good for testing your relay system right now
+
+
+Fleshing Out Your Relay Registration
+Your placeholder relay registration should do these things:
+1. Pi boots → connects SIM → gets carrier IP
+2. Pi sends registration packet to Wavelength:
+   {device_id, auth_token, carrier_ip, timestamp}
+3. Wavelength logs the connection, keeps socket open
+4. UI sends command → Wavelength → down the open socket → Pi → radio TX
+5. Pi sends telemetry back up the same connection
+
+Practical First Step
+The quickest way to make your placeholder real right now is MQTT over port 8883 (TLS):
+On your Wavelength EC2:
+bash# Install Mosquitto broker
+sudo apt install mosquitto mosquitto-clients
+# Open port 8883 in your carrier security group
+On the Pi:
+pythonimport paho.mqtt.client as mqtt
+
+client = mqtt.Client("drone-controller-01")
+client.connect("YOUR_WAVELENGTH_CARRIER_IP", 8883)
+client.loop_start()
+
+# Subscribe to commands
+client.subscribe("drone/commands")
+
+# Publish telemetry
+client.publish("drone/telemetry", payload)
+
+Key AWS Config to Check
+In your Wavelength VPC, make sure your carrier security group allows:
+
+Inbound TCP 8883 from 0.0.0.0/0 (MQTT from carrier network)
+Outbound all traffic
+
+The carrier gateway handles the routing from Verizon network → your EC2 automatically once the Pi initiates the connection.
+Does your relay registration system use any specific protocol currently, even as a placeholder?software aside is there any hardware which I need to purchase to make this possible aside from the current list of devices?Apr 5Looking at what you have vs. what you need:
+
+What You've Mentioned So Far
+
+Raspberry Pi
+Radio transmitter
+AWS Wavelength (cloud — no hardware)
+
+
+What You Still Need
+Cellular connectivity (the SIM-to-Pi bridge):
+
+A compatible HAT/modem (Waveshare SIM7600G-H or Sixfab) — not purchased yet
+A Verizon data SIM — not purchased yet
+Antennas — most HATs include basic ones, but for outdoor/drone use you may want an external LTE antenna with better gain
+
+Power:
+
+A stable power supply/battery for the Pi + HAT in the field — if this is a ground station the HAT draws extra current that a standard Pi PSU may struggle with
+
+
+What You Probably Already Have
+
+Ethernet/USB cables
+SD card for Pi OS
+Pi power supply (for bench testing)
+
+
+What You DON'T Need
+
+Any additional hardware on the AWS side — Wavelength is purely cloud
+Any special hardware for the radio transmitter connection to Pi — that's software/serial config
+
+
+One Thing to Clarify
+Where is the Raspberry Pi sitting in your setup — is it a ground station (stationary, controlling the drone remotely) or is it onboard the drone itself?
+That changes the antenna and power requirements significantly.It will be onboard the drone itself. The drone in question will be a fixed wing loiterer which relays signals from wavelength to fpv drones on the groundApr 5That's a much more interesting and complex setup than a simple ground station. Let me rethink the hardware requirements with that in mind.
+
+Your Architecture
+[Your UI]
+    ↓ (internet)
+[AWS Wavelength EC2]
+    ↑↓ (Verizon 5G/LTE)
+[Fixed Wing Loiterer]
+  ├── Raspberry Pi
+  ├── Cellular HAT + SIM
+  └── Radio TX (relays to FPV drones below)
+        ↓ (RF)
+[FPV Drones on ground/low altitude]
+
+This Changes Your Hardware List Significantly
+Weight & Size Now Critical
+The Waveshare/Sixfab HATs are fine for ground use but a full Pi + HAT stack is heavy for a fixed wing. You need to think about:
+Compute — consider swapping Pi for:
+
+Raspberry Pi Zero 2W — much lighter, same GPIO, runs Linux
+Raspberry Pi CM4 — compact, embeddable, more robust for flight
+
+Cellular modem — rethink the HAT:
+
+A full-size HAT adds unnecessary weight and bulk
+Consider a Quectel EC25 Mini PCIe module with a small carrier board instead
+Or Hologram Nova (USB, very compact) with a Verizon-compatible SIM
+
+
+Additional Hardware You'll Now Need
+Flight-critical:
+
+Flight controller (Pixhawk Mini or Matek F405) — needed to actually fly the fixed wing
+ESC + motor appropriate for fixed wing loiter
+Airframe — fixed wing capable of loitering (high wing, foam or carbon)
+GPS module — for autonomous loiter position hold (u-blox M8N or M9N)
+
+Comms relay specific:
+
+Second radio module — one for uplink to FPV drones, separate from your Wavelength link
+Consider ExpressLRS or TBS Crossfire for the relay radio — long range, low latency
+A directional or omnidirectional antenna suited for airborne relay — needs to cover ground drones below
+
+Power:
+
+LiPo battery sized for loiter endurance
+Power distribution board — Pi + modem + flight controller + radios all need clean power
+BEC (Battery Eliminator Circuit) — steps down LiPo voltage to 5V for Pi safely
+
+Structural:
+
+Vibration dampening mount for the Pi — flight vibration will cause SD card corruption and GPS issues without it
+
+
+Biggest Concern
+A fixed wing loitering with a Pi, cellular HAT, two radios, GPS, and flight controller is a meaningful payload. You'll need an airframe with enough lift — something like a Penguin, Skywalker X8, or similar ~1.5m wingspan foam flying wing can handle it.
+
+Revised Full Hardware List
+ItemPurposePi Zero 2W or CM4Compute, lighter than full PiQuectel EC25 mini PCIe + carrier boardCellular, compact form factorVerizon data SIMCarrier connectivityPixhawk Mini / Matek F405Flight controlleru-blox M8N GPSLoiter position holdExpressLRS module (airborne)Relay radio to FPV dronesLiPo 4S batteryPowerPower distribution board + BECClean power to all componentsSkywalker X8 or similar airframeCarry the payloadVibration dampening mountProtect Pi/GPS from vibrationExternal LTE antenna (lightweight)Better cellular signal airborne
+
+Do you already have an airframe and flight controller in mind, or is that still to be decided?Give me links to purchase these itemsApr 5I can find links for most of these, but want to make sure I get you the right specs first.What compute module, flight controller, and airframe situation are you working with? Once you answer I'll pull the purchase links together.Q: Which compute module do you want to go with?
+A: What is the difference between the first two?Q: Do you already have a flight controller?
+A: No, need oneQ: Do you already have an airframe?
+A: No, need oneApr 5Good questions — here's the difference:
+
+Pi Zero 2W vs CM4
+Raspberry Pi Zero 2W
+
+Credit card sized, very light (~10g)
+Soldered RAM, no expandability
+Standard 40-pin GPIO
+MicroSD only
+Cheapest (~$15)
+Best if weight is the top priority
+
+Raspberry Pi CM4
+
+Industrial/embedded form factor
+Needs a carrier board to use (adds cost/weight)
+Optional eMMC storage (more reliable than SD in vibration)
+More RAM options (up to 8GB)
+Better for production/long term (~$35-75)
+Best if reliability and expandability matter more than weight
+Q: Which compute module fits your priorities?
+A: CM4 (more reliable, better for production)Apr 5Searched the webSearched the webHere's your complete purchase list. I've found a very important discovery — there's a board that combines the CM4 and Pixhawk into one, which saves weight and complexity significantly.
+
+🔑 Key Find: Combined CM4 + Flight Controller Board
+Rather than buying them separately, the Holybro Pixhawk RPi CM4 Baseboard integrates both into one compact unit — ideal for a weight-sensitive fixed wing. Buy it from Holybro directly:
+👉 https://holybro.com/products/pixhawk-rpi-cm4-baseboard
+
+Full Purchase List
+1. CM4 Module (fits into the Holybro board above)
+Raspberry Pi CM4 — 4GB RAM, 16GB eMMC, with WiFi (CM4104016)
+Recommended spec — eMMC for vibration resistance, 4GB plenty for your workload.
+👉 https://www.pishop.us/product-category/cm4/
+
+2. Cellular Modem (SIM-swappable, Verizon + Vodafone compatible)
+Waveshare SIM7600G-H 4G HAT — Global Band, Cat-4, GNSS built-in
+Removable nano SIM slot, works on both carriers, includes GPS/GNSS as a bonus.
+👉 https://www.amazon.com/dp/B09TJDW41K
+
+3. GPS Module (for loiter position hold)
+CUAV NEO 3 Pro — u-blox M9N, ArduPilot/PX4 compatible
+Integrates compass, buzzer, and safety switch. Specifically designed for Pixhawk/ArduPilot. Buy from CUAV directly or NewBeeDrone:
+👉 https://newbeedrone.com/products/cuav-neo-3-pro-gps-module-gnss-u-blox-m9n-can-bus-35-cm
+
+4. Relay Radio (airborne TX to FPV drones below)
+HappyModel ES900TX + ES900RX Combo Kit — 915MHz ELRS
+915MHz gives better range and wall penetration than 2.4GHz — better for ground-to-air relay. The TX goes on the loiterer, RX goes on each FPV drone.
+👉 https://www.amazon.com/dp/B0CKZ2F29V
+
+5. Airframe
+Skywalker X8 2120mm Flying Wing
+1–2kg valid payload, well documented with Pixhawk/ArduPilot, huge community. US stock available at Ready Made RC (Ohio, ships fast):
+👉 https://www.readymaderc.com/products/details/skywalker-model-x8-wing
+Or direct from UAVMODEL for the composite version:
+👉 https://www.uavmodel.com/products/skywalker-x8-2122mm-uav-fixed-wing
+
+6. Verizon SIM (temporary US use)
+Skip ThingSpace — go to a Verizon Business store in person and ask for a data-only IoT SIM on a business account. Takes 15 minutes and avoids the broken checkout entirely.
+
+Summary Table
+ItemLinkEst. CostHolybro Pixhawk + CM4 Baseboardholybro.com~$200Raspberry Pi CM4 (4GB/16GB/WiFi)pishop.us~$60Waveshare SIM7600G-H HATamazon.com/dp/B09TJDW41K~$45CUAV NEO 3 Pro GPSnewbeedrone.com~$60HappyModel ES900 ELRS TX+RXamazon.com/dp/B0CKZ2F29V~$35Skywalker X8 Airframereadymaderc.com~$120Verizon IoT SIMVerizon store in person~$10 + plan
+Total est. ~$530 before battery, ESC, and motor (which depend on your exact X8 build spec).
+Want help speccing the motor/ESC/battery for the X8 with this payload weight?If i get the holybro combnted cm4+flight controller, will the hat, gps module, and radio connect to it?how will we control the fixed wing drone?Apr 5Great questions — let me check the Holybro board's exact pinout and interfaces before answering confidently.Searched the webSearched the webGood — now I have a clear picture. Here are the answers:
+
+1. Will Everything Connect to the Holybro Board?
+Here's the honest breakdown:
+GPS Module (CUAV NEO 3 Pro) ✅ Yes
+The Pixhawk side of the board has standard Pixhawk JST-GH GPS ports. The CUAV NEO 3 Pro plugs straight in — no adapters needed.
+ELRS Radio (ES900TX) ✅ Yes, with a caveat
+The Pixhawk side has an RCIN/SBUS port. The ELRS RX connects here to receive commands from FPV drones below. However the ES900TX (transmitter) needs to be wired separately via UART to the CM4 or Pixhawk TELEM port — not a plug-and-play connector but a short wiring job.
+Waveshare SIM7600G-H HAT ⚠️ Problem
+This is the issue. The Waveshare HAT is designed to stack on a standard 40-pin Raspberry Pi GPIO header. The Holybro board exposes CM4 USB host ports Holybro but does not break out the full 40-pin GPIO header. So the HAT won't physically stack onto it.
+Your options for the cellular modem:
+
+Connect the Waveshare module via USB instead of GPIO — the SIM7600G-H supports USB mode, plug it into one of the CM4 USB host ports on the Holybro board ✅
+This actually works fine and is simpler to configure
+
+
+2. How Do You Control the Fixed Wing?
+This is the most important thing to understand. There are two separate control layers:
+Layer 1 — Stabilised Flight (Pixhawk handles this)
+The Pixhawk runs ArduPlane firmware, which manages:
+
+Keeping the wings level
+Loiter orbit (circles autonomously at a set altitude/location)
+Servo outputs to ailerons and elevon
+Motor throttle via ESC
+
+You don't manually fly it in real time — you send it mission commands (loiter at X,Y, altitude Z) and ArduPlane handles the actual flying.
+Layer 2 — Mission Commands (CM4 + Wavelength handles this)
+Your CM4 talks to the Pixhawk over the internal TELEM2/serial connection using MAVLink protocol. Your Wavelength EC2 sends MAVLink commands down to the CM4, which relays them to the Pixhawk:
+Your UI
+  ↓ (internet)
+Wavelength EC2
+  ↓ (Verizon 5G, MQTT/WebSocket)
+CM4 on the drone
+  ↓ (MAVLink over internal TELEM2 serial)
+Pixhawk (ArduPlane)
+  ↓ (PWM signals)
+Servos + ESC → flies the wing
+Layer 3 — FPV Drone Relay (ELRS handles this)
+Separately, the ELRS TX module on the loiterer broadcasts commands down to the FPV drones on the ground. The CM4 generates these commands based on what comes in from Wavelength.
+
+Summary
+ComponentConnects howGPS → HolybroJST-GH plug, direct ✅ELRS RX → HolybroSBUS/UART on Pixhawk side ✅ELRS TX → HolybroUART wired to CM4 ✅ (short wire job)SIM7600G-H → HolybroVia USB (not GPIO stack) ✅CM4 ↔ PixhawkInternal connection, already wired ✅
+The only manual wiring you need to do is the ELRS TX UART connection and the USB modem cable. Everything else is plug-in.
+Want to go over the ArduPlane configuration needed for fixed wing loiter mode next?A single loiterer can be connected to multiple FPV drones at the same time, is our hardware compatible with this?Bandwidth would be the  constraint here. Since each drone will need to have its own UDP (radio) connection with t he loiterer and the loiterer in turn would need to maintain that connection with the wavelength instance. Hence relayApr 5Great question. Let's think through this carefully.
+
+The Radio Side (ELRS → FPV Drones)
+Yes, but with a limitation.
+ELRS is a point-to-multipoint capable protocol — it supports binding multiple receivers to one transmitter. However the ES900TX module we selected is a single transmitter. In practice:
+
+One ELRS TX can control multiple drones but they all share the same control channel — meaning you can't send independent commands to each drone simultaneously by default
+For independent per-drone control, you'd need either multiple ELRS TX modules (one per drone) or use ELRS in relay/mesh mode which is still experimental
+
+Realistic options:
+
+1 ELRS TX → broadcast mode — all FPV drones receive the same command stream. Works if they're doing the same thing (swarm-style)
+Multiple ELRS TX modules wired to separate UART ports on the CM4 — independent control per drone, more weight/complexity
+WiFi (2.4GHz) as the relay radio instead — each FPV drone gets its own UDP connection over WiFi, which maps directly to your UDP relay architecture. Lighter, simpler, standard networking
+
+
+The Cellular/Wavelength Side
+This is actually the easier problem. Your CM4 maintains a single persistent connection to Wavelength. Each FPV drone just becomes a separate logical channel over that one connection:
+Wavelength EC2
+  ├── UDP stream → Drone 1 (via CM4 relay)
+  ├── UDP stream → Drone 2 (via CM4 relay)
+  └── UDP stream → Drone 3 (via CM4 relay)
+        ↓
+      CM4
+  ├── Radio TX 1 → FPV Drone 1
+  ├── Radio TX 2 → FPV Drone 2
+  └── Radio TX 3 → FPV Drone 3
+The bottleneck isn't the cellular uplink — Cat-4 gives you 150Mbps down / 50Mbps up, far more than drone telemetry needs. The bottleneck is the radio layer between the loiterer and the FPV drones.
+
+Bandwidth Reality Check
+Per FPV drone over MAVLink:
+
+Telemetry only: ~10-50 KB/s
+With video: ~2-5 MB/s
+
+So for telemetry-only control of say 5 drones, your cellular link handles it easily. Video is where it scales badly — you'd saturate the uplink fast.
+
+Honest Verdict on Current Hardware
+LayerMulti-drone capable?NotesWavelength → CM4✅ YesSingle connection, multiple logical streamsCM4 processing✅ YesHandles multiple UART/USB streamsELRS ES900TX⚠️ PartialShared broadcast or needs multiple TX modulesPhysical UART ports on Holybro⚠️ LimitedOnly a few spare UARTs for additional TX modules
+
+Recommendation
+Switch the FPV drone radio link from ELRS to WiFi (802.11) for the relay layer. Reasons:
+
+Each drone gets a proper independent UDP socket — maps perfectly to your architecture
+Standard networking, no custom radio protocol needed
+A small WiFi AP module on the loiterer (e.g. a USB WiFi adapter in AP mode) lets each FPV drone connect as a client
+CM4 routes packets between Wavelength and each drone's IP address natively
+Much simpler to scale to N drones without adding hardware per drone
+
+The tradeoff is range — WiFi gives you ~100-300m line of sight from the loiterer vs ELRS which can do kilometers. For a loiterer orbiting directly above FPV drones on the ground, 300m is likely sufficient.
+Does that range tradeoff work for your use case, or do the FPV drones need to operate further from the loiterer?I want as little latency as possible between the relay and the drones, i also should be as resistant to electronic warfare as posisble to a directed radio signal is likely best?Apr 5You're right on both counts — directed radio is the correct choice for low latency and EW resistance. Let me break down the options properly.
+
+Why Directed (Directional) Radio Wins Here
+
+Narrow beam = much harder to jam than omnidirectional broadcast
+Higher gain = more signal power concentrated toward target = lower latency, fewer retransmissions
+Less interference from competing signals in the environment
+FHSS (Frequency Hopping Spread Spectrum) adds another layer of EW resistance on top
+
+
+Best Protocol Options Ranked for Your Use Case
+1. TBS Crossfire (CRSF) — Best balance ✅
+
+Operates at 915MHz — penetrates well, hard to jam
+FHSS — frequency hops to avoid jamming
+Very low latency (~5ms)
+Designed specifically for long range drone control
+Supports multiple receivers from one TX more reliably than ELRS
+CRSF protocol is what MAVLink can bridge over natively
+Used in real military/paramilitary drone applications
+
+2. ELRS 900MHz with directional antenna — Good ✅
+
+What we already selected
+Can add a directional antenna to the TX to narrow the beam
+FHSS capable
+Open source — easier to modify for your relay architecture
+Slightly less EW-hardened than Crossfire out of the box
+
+3. Dedicated RF datalink (RFD900x) — Most robust ✅✅
+
+Purpose-built for UAV telemetry and command
+Frequency hopping across 900MHz band
+Designed to be resistant to interference
+Used by militaries and serious UAV operators
+Point-to-point but can do multipoint with configuration
+Higher cost (~$180/pair) but most EW-resistant option on this list
+
+
+Directional Antenna Strategy
+For a loiterer orbiting above ground drones, you actually want a downward-facing antenna with a wide-angle cone pattern rather than a tight pencil beam — because the drones are below in a spread pattern, not at one fixed angle.
+The right antenna for this:
+Cloverleaf or RHCP patch antenna facing downward
+
+Circular polarization = rejects multipath interference
+Wide cone coverage below the aircraft
+Much harder to jam than a linear dipole
+Used on FPV video systems for exactly this reason
+
+
+Recommended Hardware Change
+Replace the ES900TX with:
+RFD900x Multipoint (~$180/unit)
+
+One TX on the loiterer
+One RX per FPV drone
+Each link is independent — separate UDP per drone
+FHSS across 902-928MHz
+Explicitly designed for MAVLink relay
+Used in serious UAV programs
+
+👉 https://store.rfdesign.com.au/rfd900x-modem/
+Or if budget is a constraint, keep ELRS but upgrade the antenna to a directional patch and enable FHSS — you get ~80% of the EW resistance at a fraction of the cost.
+
+Revised Radio Layer in Your Architecture
+Wavelength EC2
+     ↓ (5G, per-drone UDP streams)
+CM4 on Loiterer
+     ↓ (MAVLink routing per drone)
+RFD900x TX (downward RHCP antenna)
+     ↓ (FHSS 900MHz directed cone)
+RFD900x RX on FPV Drone 1 ──→ Flight Controller
+RFD900x RX on FPV Drone 2 ──→ Flight Controller  
+RFD900x RX on FPV Drone 3 ──→ Flight Controller
+
+Bottom Line
+OptionLatencyEW ResistanceMulti-droneCostRFD900x Multipoint~10ms✅✅ Best✅ Native$$$ELRS 900MHz + directional antenna~5ms✅ Good⚠️ Partial$TBS Crossfire~5ms✅✅ Very good✅ Better than ELRS$$WiFi~2ms❌ Poor✅ Easy$
+For your requirements — RFD900x is the correct answer if budget allows. Want me to find purchase links and check CM4/Holybro UART compatibility for it?https://irlock.com/products/rfd900x-us-modem-bundle-fcc-approved?variant=12655953346611&utm_campaign=gs-2018-09-19&utm_source=google&utm_medium=smart_campaign&gad_source=1&gad_campaignid=20779568302&gbraid=0AAAAADivTnryXUkx6GpRS9v5DZizrW47U&gclid=Cj0KCQjwkMjOBhC5ARIsADIdb3cUldUpPdi6NObTR54iN19dH0m6fYTuScYdEwHPeCa-dE5gs4QIYLwaAsSiEALw_wcBproceed with checkig for compatibilityApr 5Searched the webSearched the webGood — I have everything I need. Here's the full compatibility verdict:
+
+✅ The RFD900x-US Bundle is Compatible
+Here's exactly how everything connects:
+Physical Connection to Holybro Board
+The bundle includes an RFD900 to Pixhawk cable IR-LOCK, which means it's plug-and-play into the Holybro's TELEM1 port — standard JST-GH Pixhawk connector, no adapters or soldering needed.
+UART Compatibility
+The RFD900x supports UART data rates from 9600 up to 921k baud IR-LOCK — the Holybro/Pixhawk TELEM ports run at 57600 or 921600 baud, both well within range. ✅
+MAVLink Native Support
+The RFD900x supports MAVLink protocol framing and radio status reporting including local RSSI, remote RSSI, local noise, and remote noise IR-LOCK — meaning it natively speaks the same protocol your CM4/Pixhawk stack uses. No translation layer needed. ✅
+EW Resistance
+The RFD900x uses frequency hopping spread spectrum (FHSS) IR-LOCK and includes AES hardware accelerated encryption IR-LOCK. That gives you two layers of EW resistance — frequency hopping defeats jamming, AES defeats signal spoofing. ✅
+Multi-drone (Multipoint)
+The RFD900x supports both point-to-point and multipoint networking, configurable via simple AT commands IR-LOCK. Each FPV drone gets its own RFD900x RX unit with a unique NODEID, and the loiterer TX addresses them independently. ✅
+
+One Important Flag on the Bundle
+The US bundle comes with only 2 RFD900x modems IR-LOCK — one for the loiterer TX, one for a single FPV drone RX. For each additional FPV drone you need to buy an additional RFD900x-US modem (~$180 each) from the same irlock page.
+So if you plan for 3 FPV drones: 1 TX on loiterer + 3 RX units = 4 modems total. The bundle covers 2.
+
+How It All Fits Together Now
+Holybro TELEM1 (JST-GH)
+        ↓ (included Pixhawk cable)
+RFD900x TX on loiterer
+        ↓ (FHSS 900MHz, AES encrypted)
+RFD900x RX — FPV Drone 1 → Flight Controller
+RFD900x RX — FPV Drone 2 → Flight Controller
+RFD900x RX — FPV Drone 3 → Flight Controller
+CM4 on TELEM2 (internal) handles the Wavelength uplink simultaneously — the two TELEM ports are independent so there's no conflict.
+
+Summary
+CheckResultPhysical connector to Holybro✅ Included cable fits TELEM1UART baud rate compatibility✅ Full range supportedMAVLink native✅ Built inFHSS anti-jam✅ Built inAES encryption✅ Built inMulti-drone support✅ Via multipoint firmwareBundle covers all drones⚠️ Buy extra RX per additional drone
+You're good to proceed with that bundle. How many FPV drones are you planning to control simultaneously?https://www.amazon.com/dp/B09TJDW41Kthis waveshare board only works with lte and cat 4 cards. I do plan on running on 5g right? Isnt wavelength only on 5g networks?looking to use EU-Central-1 for my host (frankfurt) for use in ukraineApr 5Really important questions — let me address both clearly.
+
+1. AWS Wavelength + 5G Requirement
+You're partially right but there's a nuance. Wavelength zones exist at the edge of carrier networks — but not all carriers offering Wavelength use 5G exclusively.Searched the webSearched the webTwo separate issues here — let me be direct about both.
+
+Issue 1: The Waveshare SIM7600G-H and 5G
+You're right to flag this. The SIM7600G-H is Cat-4 LTE only — it has no 5G capability. This matters because of your second question.
+
+Issue 2: Wavelength + Frankfurt + Ukraine
+This is the bigger problem. Here's the reality:
+Wavelength in eu-central-1 (Frankfurt):
+AWS Wavelength on Vodafone's 4G/5G network in Germany has Wavelength Zones available in Berlin, Munich, and Dortmund AWS — not Frankfurt specifically, and critically, AWS Wavelength Zones are only accessible from a device on Vodafone's network Vodafone. The drone would need a Vodafone SIM with coverage in Ukraine to access those German Wavelength zones.
+Ukraine has no Vodafone Wavelength coverage. Vodafone Ukraine is a separate entity from Vodafone Group and is not part of the AWS Wavelength partnership.
+This means Wavelength's core advantage — traffic staying inside the carrier network — doesn't apply here. Traffic from Ukraine to a German Wavelength zone will traverse the public internet regardless, which eliminates the ultra-low latency benefit of Wavelength entirely.
+
+What You Actually Need for Ukraine
+For a drone operating in Ukraine connecting to eu-central-1, you should drop Wavelength entirely and use a standard AWS EC2 instance in Frankfurt directly. Here's why it's still viable:
+Frankfurt to Ukraine (Kyiv) round trip latency over internet: ~30-50ms. That's acceptable for drone command relay — MAVLink handles it fine.
+The Wavelength architecture made sense when you were thinking US/Verizon. For Ukraine it adds complexity with zero benefit.
+
+Revised Architecture for Ukraine
+[Your UI]
+     ↓ (internet)
+[EC2 in eu-central-1 Frankfurt — standard, no Wavelength]
+     ↓ (internet ~30-50ms to Ukraine)
+[Drone SIM — any carrier with Ukraine coverage]
+     ↓
+[CM4 on loiterer]
+     ↓ (RFD900x)
+[FPV drones]
+
+Best SIM for Ukraine Operation
+Since you're dropping Wavelength, you no longer need a carrier-specific SIM. You need coverage in Ukraine specifically. Best options:
+Kyivstar or Lifecell — Ukrainian carriers, best local coverage, 4G LTE widespread. Cat-4 is perfectly sufficient since you're not using Wavelength.
+Or a roaming IoT SIM — something like Hologram or Eiotclub that roams on local Ukrainian networks. Easier to manage remotely without needing a Ukrainian business account.
+
+Revised Modem Recommendation
+Since 5G and Wavelength are now off the table, the Waveshare SIM7600G-H Cat-4 is actually the right modem for this use case. You don't need 5G. Cat-4 gives you 150Mbps down / 50Mbps up — far more than enough for MAVLink telemetry relay over standard internet to Frankfurt.
+Keep the Waveshare board. Swap the SIM strategy to a roaming IoT SIM with Ukraine coverage.
+
+Summary of Changes
+ItemPrevious planRevised planAWS infrastructureWavelength ZoneStandard EC2 eu-central-1Carrier requirementVodafone 5GAny carrier with Ukraine LTEModemNeeds 5G upgradeWaveshare Cat-4 is fine ✅SIMVodafone IoTRoaming IoT SIM (Hologram/Eiotclub)Latency~5ms (Wavelength)~30-50ms (acceptable for MAVLink)
+Want me to find roaming IoT SIM options with confirmed Ukraine coverage?Why do ukraine soldiers use starlink if LTE can be used instead? What is the use case?Apr 5Really important question — and it exposes a gap in our architecture planning.
+
+Why Starlink, Not LTE
+1. LTE Infrastructure Gets Destroyed
+In active conflict zones, cell towers are priority targets. They're fixed, known locations, easy to strike. In many parts of eastern Ukraine, LTE coverage is either destroyed, degraded, or completely absent. Starlink works where there are no towers left standing.
+2. LTE Coverage is Sparse Outside Cities
+Ukraine's LTE network is strong in cities but very patchy in rural/frontline areas — exactly where drones operate. A drone flying over fields east of Zaporizhzhia or in Kherson oblast has little to no LTE coverage.
+3. Starlink is Low Earth Orbit
+Starlink satellites are at ~550km altitude vs traditional satellite at 35,000km. Latency is 20-40ms — comparable to what we were estimating for LTE-to-Frankfurt. It's genuinely competitive.
+4. Starlink is Mobile and Deployable
+A unit can set up a Starlink terminal anywhere in 5 minutes. No infrastructure dependency whatsoever.
+
+What This Means for Your Architecture
+This is a significant problem for the design we've built so far.
+If LTE coverage cannot be guaranteed at the operating location, the entire cellular uplink fails. The loiterer loses its connection to your EC2 instance, the relay breaks, and the FPV drones below lose command authority.
+
+Starlink on a Fixed Wing Loiterer
+This is actually done in Ukraine right now — Starlink terminals have been fitted to larger UAVs. The challenge is:
+
+Standard Starlink dish is too heavy for an X8-class airframe
+Starlink Mini is the relevant product here — it weighs ~1.1kg which is at the upper edge of the X8's payload capacity but feasible
+Flat panel form factor can be mounted flush to the fuselage
+
+Starlink Mini specs relevant to your use case:
+
+Weight: ~1.1kg
+Latency: 20-40ms
+Download: 50-200Mbps
+Works anywhere with sky view — no ground infrastructure needed
+Power draw: ~25W which needs to be budgeted into your power system
+
+
+Hybrid Architecture Recommendation
+Don't pick one or the other — design for both with automatic failover:
+[EC2 eu-central-1 Frankfurt]
+         ↓
+    ┌────┴────┐
+    │         │
+[Starlink  [LTE SIM
+  Mini]    (backup)]
+    └────┬────┘
+         │
+      [CM4]
+         ↓
+    [RFD900x]
+         ↓
+  [FPV Drones]
+
+Primary uplink: Starlink Mini — works anywhere, no infrastructure dependency
+Failover: Waveshare SIM7600G-H with a roaming SIM — kicks in if Starlink is jammed or dish is damaged
+The CM4 manages the failover in software using a simple connectivity watchdog
+
+
+The EW Consideration for Starlink
+Starlink has been jammed by Russian forces in Ukraine — it's a known vulnerability. This actually reinforces the hybrid approach:
+
+Starlink gets jammed → fall back to LTE
+LTE tower destroyed → fall back to Starlink
+Both fail → RFD900x still maintains local drone-to-drone comms independently since it doesn't depend on the uplink
+
+This means even in a total uplink blackout, the FPV drones maintain their last known mission parameters locally on their flight controllers via ArduPilot's failsafe modes.
+
+Revised Hardware Addition
+ItemPurposeApprox costStarlink MiniPrimary uplink~$599 hardware + $50/monthKeep Waveshare SIM7600G-HBackup uplinkAlready on listRoaming IoT SIM (Ukraine coverage)Backup connectivity~$20-30/month
+The X8 airframe can carry the Starlink Mini but it will be close to its payload limit — you'd need to audit the total weight carefully once all components are weighed together.
+Want me to do a payload weight budget for the X8 with all the components we've selected?The starlink would simply be the connection from the relay to the cloud (like what we are trying to do with wavelength) and the relay would still have all teh downstream hardware to interface with each drone individually, just deciding how to connect the relay to the user. asuming the user can be infinitely far from the location where the drone is used (as long as there is an internet connection where the user is and clear sky view where the relay isApr 5Exactly — you've clarified the architecture perfectly. The Starlink is just the backhaul pipe replacing the cellular uplink. Everything downstream stays the same.
+
+Corrected Architecture
+[User UI - anywhere with internet]
+          ↓ (public internet)
+[EC2 eu-central-1 Frankfurt]
+          ↓ (public internet)
+[Starlink Mini on loiterer - clear sky view]
+          ↓ (internal)
+[CM4 - relay logic]
+          ↓ (RFD900x 900MHz FHSS)
+    ┌─────┼─────┐
+[FPV 1] [FPV 2] [FPV 3]
+
+Why This is Actually Better Than Wavelength
+You've landed on a cleaner architecture than the original Wavelength plan:
+Wavelength + LTEStarlink + EC2Geographic constraintMust be near Vodafone towersAnywhere with sky viewInfrastructure dependencyCell towers (destroyable)LEO satellites (not destroyable)Latency~5-10ms~25-50msBandwidth150Mbps Cat-450-200MbpsSetup complexitySIM provisioning, carrier gatewayPlug in dish, connect to CM4CostCarrier plan + AWS Wavelength$50/month Starlink + standard EC2
+The latency difference is real but irrelevant for MAVLink command relay — ArduPilot handles 50ms round trips comfortably. Wavelength's sub-10ms was overkill for this use case anyway.
+
+What This Removes From the Hardware List
+
+Waveshare SIM7600G-H HAT — no longer needed as primary
+IoT SIM card — no longer needed as primary
+Carrier gateway / Wavelength complexity — gone entirely
+
+You could still keep the SIM7600G-H as a backup failover for if Starlink gets jammed, but it's optional now rather than core.
+
+What Gets Added
+Starlink Mini
+
+~1.1kg — needs weight budget check against X8
+Connects to CM4 via ethernet (Starlink Mini has an ethernet port via adapter)
+CM4 routes traffic over it transparently — no special software, it just looks like an internet connection
+~25W power draw — needs to be factored into battery budget
+
+
+The One Remaining Concern — Weight
+The Starlink Mini at 1.1kg is heavy for an X8. Let's check your total payload:
+ComponentEst. weightHolybro CM4 + Pixhawk baseboard~200gStarlink Mini~1,100gRFD900x modem~15gWaveshare SIM HAT (if kept)~50gGPS module~20gWiring/mounts~100gTotal payload~1,485g
+The X8 valid payload is 1,000-2,000g — so you're within range but on the heavier side. You'd want a 5000-6000mAh 4S battery minimum, and flight time will likely be 15-20 minutes rather than the 25 minute spec.
+This is workable but tight. Do you want to look at a larger airframe to give more payload and endurance headroom?

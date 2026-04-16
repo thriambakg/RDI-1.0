@@ -181,7 +181,7 @@ export function RegisterRelayDialog({
           <DialogContent sx={{ pt: 0, backgroundColor: '#1e293b', color: '#f8fafc' }}>
             {zoneLabel && (
               <Typography sx={{ color: '#94a3b8', fontSize: '0.875rem', mb: 1 }}>
-                Zone: {zoneLabel}
+                Region: {zoneLabel}
               </Typography>
             )}
             <TextField

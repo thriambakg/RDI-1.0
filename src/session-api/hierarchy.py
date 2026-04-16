@@ -145,7 +145,7 @@ def _ensure_hierarchy(h: dict | None) -> dict:
 # --- Relay helpers (user profile relays array) ---
 
 def add_relay_to_profile(relays: list, relay: dict) -> list:
-    """Add relay ref to user profile relays list. relay: {relay_id, wavelength_zone_id, name, relay_type, status}."""
+    """Add relay ref to user profile relays list. relay: {relay_id, wavelength_zone_id (AWS region id), name, relay_type, status}."""
     rl = list(relays) if isinstance(relays, list) else []
     # Avoid duplicate (same relay_id + zone)
     rid = relay.get("relay_id")
