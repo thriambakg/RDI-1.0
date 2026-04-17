@@ -1,5 +1,5 @@
 //! RDI Proxy - Low-latency MAVLink relay for drone control.
-//! Bridges WebSocket: frontend <-> agent (tunnel to local PX4/Gazebo).
+//! Bridges WebSocket: frontend <-> relay peer (`agent:` handshake = rdi-agent on the relay → MAVLink UDP → PX4).
 //! Respects session status from Lambda: only active sessions are allowed;
 //! idle sessions are disconnected and cleared from memory.
 
@@ -557,59 +557,86 @@ async fn handle_ws(
                     } else if data.starts_with(CTRL_PREFIX) && data.len() > CTRL_PREFIX.len() {
                         // Frontend sent CTRL: proxy handles (convert to MAVLink), agent just forwards.
                         if let Ok(json) = std::str::from_utf8(&data[CTRL_PREFIX.len()..]) {
-                            if let Ok(ctrl) = serde_json::from_str::<CtrlCmd>(json) {
-                                let agent_tx = resolve_agent_tx(&*sessions_for_peer.read().await, &session_id_for_peer);
-                                if let Some(tx) = agent_tx {
-                                    let cmd_lower = ctrl.cmd.to_lowercase();
-                                    if cmd_lower == "takeoff" {
-                                        let arm_bytes = build_command_long_bytes(
-                                            MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
-                                            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                                        );
-                                        if !arm_bytes.is_empty() {
-                                            let _ = tx.send(arm_bytes);
-                                            let _ = client_tx_peer.send(ToClient::Binary(build_rlog_bytes("CTRL sent: arm (pre-takeoff)")));
-                                        }
-                                        tokio::time::sleep(Duration::from_millis(500)).await;
-                                        let alt = ctrl.alt.unwrap_or(2.5);
-                                        let takeoff_bytes = build_command_long_bytes(
-                                            MavCmd::MAV_CMD_NAV_TAKEOFF,
-                                            0.0, 0.0, 0.0, f32::NAN, f32::NAN, f32::NAN, alt,
-                                        );
-                                        if !takeoff_bytes.is_empty() {
-                                            let _ = tx.send(takeoff_bytes);
-                                            let _ = client_tx_peer.send(ToClient::Binary(build_rlog_bytes(&format!("CTRL sent: takeoff (alt={})", alt))));
-                                        }
-                                    } else {
-                                        let bytes = match cmd_lower.as_str() {
-                                            "arm" => build_command_long_bytes(
+                            match serde_json::from_str::<CtrlCmd>(json) {
+                                Ok(ctrl) => {
+                                    let agent_tx = resolve_agent_tx(&*sessions_for_peer.read().await, &session_id_for_peer);
+                                    if let Some(tx) = agent_tx {
+                                        let cmd_lower = ctrl.cmd.to_lowercase();
+                                        if cmd_lower == "takeoff" {
+                                            let arm_bytes = build_command_long_bytes(
                                                 MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
                                                 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                                            ),
-                                            "disarm" => build_command_long_bytes(
-                                                MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
-                                                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                                            ),
-                                            "land" => build_command_long_bytes(
-                                                MavCmd::MAV_CMD_NAV_LAND,
-                                                0.0, 0.0, 0.0, f32::NAN, f32::NAN, f32::NAN, f32::NAN,
-                                            ),
-                                            "rtl" => build_command_long_bytes(
-                                                MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH,
-                                                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                                            ),
-                                            _ => {
-                                                warn!("Unknown CTRL cmd: {}", ctrl.cmd);
-                                                vec![]
+                                            );
+                                            if !arm_bytes.is_empty() {
+                                                let _ = tx.send(arm_bytes);
+                                                let _ = client_tx_peer.send(ToClient::Binary(build_rlog_bytes("CTRL sent: arm (pre-takeoff)")));
                                             }
-                                        };
-                                        if !bytes.is_empty() {
-                                            let _ = tx.send(bytes);
-                                            let _ = client_tx_peer.send(ToClient::Binary(build_rlog_bytes(&format!("CTRL sent: {}", ctrl.cmd))));
+                                            tokio::time::sleep(Duration::from_millis(500)).await;
+                                            let alt = ctrl.alt.unwrap_or(2.5);
+                                            let takeoff_bytes = build_command_long_bytes(
+                                                MavCmd::MAV_CMD_NAV_TAKEOFF,
+                                                0.0, 0.0, 0.0, f32::NAN, f32::NAN, f32::NAN, alt,
+                                            );
+                                            if !takeoff_bytes.is_empty() {
+                                                let _ = tx.send(takeoff_bytes);
+                                                let _ = client_tx_peer.send(ToClient::Binary(build_rlog_bytes(&format!("CTRL sent: takeoff (alt={})", alt))));
+                                            }
+                                        } else {
+                                            let bytes = match cmd_lower.as_str() {
+                                                "arm" => build_command_long_bytes(
+                                                    MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+                                                    1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                                ),
+                                                "disarm" => build_command_long_bytes(
+                                                    MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+                                                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                                ),
+                                                "land" => build_command_long_bytes(
+                                                    MavCmd::MAV_CMD_NAV_LAND,
+                                                    0.0, 0.0, 0.0, f32::NAN, f32::NAN, f32::NAN, f32::NAN,
+                                                ),
+                                                "rtl" => build_command_long_bytes(
+                                                    MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH,
+                                                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                                ),
+                                                _ => {
+                                                    warn!("Unknown CTRL cmd: {}", ctrl.cmd);
+                                                    vec![]
+                                                }
+                                            };
+                                            if !bytes.is_empty() {
+                                                let _ = tx.send(bytes);
+                                                let _ = client_tx_peer.send(ToClient::Binary(build_rlog_bytes(&format!("CTRL sent: {}", ctrl.cmd))));
+                                            } else if !cmd_lower.is_empty() {
+                                                let _ = client_tx_peer.send(ToClient::Binary(build_rlog_bytes(&format!(
+                                                    "CTRL ignored: unknown cmd {:?}",
+                                                    ctrl.cmd
+                                                ))));
+                                            }
                                         }
+                                    } else {
+                                        warn!(
+                                            "CTRL session_id={} cmd={} — no agent WebSocket; MAVLink not sent",
+                                            session_id_for_peer, ctrl.cmd
+                                        );
+                                        let _ = client_tx_peer.send(ToClient::Binary(build_rlog_bytes(
+                                            "CTRL not delivered: no agent connected. Run rdi-agent on the relay (RDI_PROXY_URL + RDI_SESSION_ID) so MAVLink reaches PX4.",
+                                        )));
                                     }
                                 }
+                                Err(e) => {
+                                    warn!("CTRL JSON parse error session_id={}: {}", session_id_for_peer, e);
+                                    let _ = client_tx_peer.send(ToClient::Binary(build_rlog_bytes(&format!(
+                                        "CTRL parse error: {}",
+                                        e
+                                    ))));
+                                }
                             }
+                        } else {
+                            warn!("CTRL invalid UTF-8 session_id={}", session_id_for_peer);
+                            let _ = client_tx_peer.send(ToClient::Binary(build_rlog_bytes(
+                                "CTRL error: payload is not valid UTF-8",
+                            )));
                         }
                     } else {
                         // Frontend sent other binary (e.g. MAVLink): forward to agent.

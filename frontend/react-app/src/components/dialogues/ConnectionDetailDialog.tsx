@@ -74,14 +74,23 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
         setCtrlError('Connection not ready. Wait for the connection to establish.')
         return
       }
+      if (ws.readyState !== WebSocket.OPEN) {
+        setCtrlError('WebSocket is not open.')
+        return
+      }
       setCtrlError(null)
       try {
         sendDroneCommand(ws, cmd, alt)
+        const localLine =
+          alt != null && cmd === 'takeoff'
+            ? `[local] Sent CTRL ${cmd} (alt=${alt}m) over WebSocket`
+            : `[local] Sent CTRL ${cmd} over WebSocket`
+        addLog(localLine)
       } catch (e) {
         setCtrlError(e instanceof Error ? e.message : 'Failed to send command')
       }
     },
-    [data?.session_id, getWs]
+    [data?.session_id, getWs, addLog]
   )
 
   useEffect(() => {

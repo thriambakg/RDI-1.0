@@ -105,6 +105,16 @@ Users pick a **Region** (AWS region id) in the console; relays and sessions are 
 
 ---
 
+## Relay registration vs real-time tunnel (important)
+
+**Registration (REST)** — already implemented: operators use **Register relay** in the console (or call **Relay Registry** `POST /relays` with Cognito). That creates a `relay_id`, stores metadata in DynamoDB, and ties the relay to a deployment region (`wavelength_zone_id` field = region id). No physical hardware is required to exercise the API; you can register a placeholder relay for testing.
+
+**When you have hardware**, the same registration flow applies: the device (or a provisioning script) must obtain a **Cognito ID token** and call the same APIs. The relay then runs **rdi-agent** with `RDI_PROXY_URL`, `RDI_SESSION_ID`, and MAVLink env — that is separate from registration.
+
+**Why we keep the `agent:` WebSocket in `rdi-proxy`:** the proxy’s job is to pair **two** WebSocket legs per `session_id`: `frontend:` (browser) and **`agent:`** (binary peer). That second leg is **rdi-agent on the relay** talking outbound to `wss://`. It is *not* a cloud “edge agent” and it is not optional if you want browser → MAVLink → PX4 through this stack. Removing “agent logic” from the proxy would remove the MAVLink tunnel until a different transport (e.g. relay polling, MQTT) is designed and implemented end-to-end.
+
+---
+
 ## Flight logs (S3)
 
 Planned: logs under `{user_id}/{wavelength_zone_id}/{drone_id}-{session_id}.log` in the flight-logs bucket (see Base Infra). Buffering and upload on session close are implementation follow-ups.
