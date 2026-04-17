@@ -71,82 +71,9 @@ env:
   AWS_REGION: us-east-1
 
 jobs:
-  # Wait for application infrastructure deployment if both pipelines are running (push only)
-  wait-for-infrastructure:
-    runs-on: ubuntu-latest
-    outputs:
-      should_wait: ${{ steps.check.outputs.should_wait }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 2  # Need at least 2 commits to compare
-
-      - name: Check if infrastructure changes exist
-        id: check
-        run: |
-          if [ "${{ github.event_name }}" != "push" ]; then
-            echo "Manual/workflow_call trigger - skip waiting for infrastructure"
-            echo "should_wait=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          echo "🔍 Checking for infrastructure changes in this push..."
-          
-          # Check if there are terraform changes in this push
-          if [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-            # Normal push - compare with previous commit
-            TERRAFORM_CHANGES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -E '^terraform/|deploy-application\.yml' || true)
-          else
-            # Initial commit or force push - check if terraform files exist
-            TERRAFORM_CHANGES=$(git ls-files | grep -E '^terraform/|deploy-application\.yml' || true)
-          fi
-          
-          if [ -n "$TERRAFORM_CHANGES" ]; then
-            echo "📁 Terraform changes detected:"
-            echo "$TERRAFORM_CHANGES"
-            echo "should_wait=true" >> $GITHUB_OUTPUT
-            echo "⏳ Will wait for infrastructure deployment to complete"
-          else
-            echo "✅ No terraform changes detected, proceeding immediately"
-            echo "should_wait=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Wait for infrastructure deployment
-        if: steps.check.outputs.should_wait == 'true'
-        run: |
-          echo "⏳ Waiting for infrastructure deployment to complete..."
-          echo "💡 This prevents race conditions between infrastructure and frontend deployments"
-          
-          # Wait up to 25 minutes for infrastructure deployment
-          # Infrastructure typically takes 3-10 minutes
-          MAX_WAIT_MINUTES=25
-          WAIT_SECONDS=$((MAX_WAIT_MINUTES * 60))
-          
-          echo "🕐 Starting wait period (max ${MAX_WAIT_MINUTES} minutes)..."
-          echo "🔍 You can monitor the infrastructure deployment in the Actions tab"
-          
-          # Sleep in 2-minute intervals to avoid timeout and provide progress updates
-          ELAPSED=0
-          INTERVAL=120  # 2 minutes
-          
-          while [ $ELAPSED -lt $WAIT_SECONDS ]; do
-            MINUTES_ELAPSED=$((ELAPSED / 60))
-            MINUTES_REMAINING=$(( (WAIT_SECONDS - ELAPSED) / 60 ))
-            
-            echo "⏳ Waited ${MINUTES_ELAPSED} minutes, ${MINUTES_REMAINING} minutes remaining..."
-            echo "💡 Infrastructure deployment typically completes within 10 minutes"
-            
-            sleep $INTERVAL
-            ELAPSED=$((ELAPSED + INTERVAL))
-          done
-          
-          echo "✅ Wait period completed - proceeding with frontend deployment"
-          echo "🚀 Frontend deployment will now verify infrastructure is ready before proceeding"
-
   # Determine environment based on branch or input
   setup:
     runs-on: ubuntu-latest
-    needs: [wait-for-infrastructure]
     environment:
       # Use manual input when workflow_dispatch/workflow_call; otherwise derive from branch.
       # Ensure staging/production environments exist in repo Settings → Environments (add "Required reviewers" for approval gate).
