@@ -24,6 +24,15 @@ export interface RegisterRelayResponse {
   name: string
   relay_type: string
   status: string
+  claim_status?: string
+}
+
+export interface ClaimRelayParams {
+  claim_code: string
+  wavelength_zone_id: string
+  name: string
+  relay_type: 'local' | 'sim_relay'
+  config?: Record<string, unknown>
 }
 
 export async function registerRelay(params: RegisterRelayParams): Promise<RegisterRelayResponse> {
@@ -43,6 +52,28 @@ export async function registerRelay(params: RegisterRelayParams): Promise<Regist
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     throw new Error((err as { error?: string }).error || `Register relay failed: ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function claimRelay(params: ClaimRelayParams): Promise<RegisterRelayResponse> {
+  const url = `${getApiBaseUrl()}/relays/claim`
+  const body = {
+    claim_code: params.claim_code.trim().toUpperCase(),
+    wavelength_zone_id: params.wavelength_zone_id,
+    name: params.name.trim() || 'relay',
+    relay_type: params.relay_type,
+    config: params.config ?? {},
+  }
+  const headers = await getAuthHeaders()
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as { error?: string }).error || `Claim relay failed: ${res.status}`)
   }
   return res.json()
 }

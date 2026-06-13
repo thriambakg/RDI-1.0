@@ -9,8 +9,10 @@ import {
   MenuItem,
   Box,
   Typography,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material'
-import { registerRelay } from '../../services/relayApi'
+import { registerRelay, claimRelay } from '../../services/relayApi'
 import type { RegisterRelayResponse } from '../../services/relayApi'
 import './CreateConnectionDialog.css'
 
@@ -58,6 +60,8 @@ export interface RegisterRelayDialogProps {
   onSuccess?: (result: RegisterRelayResponse) => void
 }
 
+type RegisterMode = 'claim' | 'manual'
+
 export function RegisterRelayDialog({
   isOpen,
   onClose,
@@ -65,8 +69,10 @@ export function RegisterRelayDialog({
   zoneLabel,
   onSuccess,
 }: RegisterRelayDialogProps) {
+  const [mode, setMode] = useState<RegisterMode>('claim')
   const [name, setName] = useState('')
-  const [relayType, setRelayType] = useState<'local' | 'sim_relay'>('local')
+  const [claimCode, setClaimCode] = useState('')
+  const [relayType, setRelayType] = useState<'local' | 'sim_relay'>('sim_relay')
   const [mavlinkHost, setMavlinkHost] = useState('127.0.0.1')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -81,12 +87,21 @@ export function RegisterRelayDialog({
       if (relayType === 'local') {
         config.mavlink_host = mavlinkHost.trim() || '127.0.0.1'
       }
-      const res = await registerRelay({
-        wavelength_zone_id: wavelengthZoneId,
-        name: name.trim() || 'relay',
-        relay_type: relayType,
-        config: Object.keys(config).length > 0 ? config : undefined,
-      })
+      const res =
+        mode === 'claim'
+          ? await claimRelay({
+              claim_code: claimCode,
+              wavelength_zone_id: wavelengthZoneId,
+              name: name.trim() || 'relay',
+              relay_type: relayType,
+              config: Object.keys(config).length > 0 ? config : undefined,
+            })
+          : await registerRelay({
+              wavelength_zone_id: wavelengthZoneId,
+              name: name.trim() || 'relay',
+              relay_type: relayType,
+              config: Object.keys(config).length > 0 ? config : undefined,
+            })
       setResult(res)
       onSuccess?.(res)
     } catch (err) {
@@ -97,12 +112,23 @@ export function RegisterRelayDialog({
   }
 
   const handleClose = () => {
+    setMode('claim')
     setName('')
-    setRelayType('local')
+    setClaimCode('')
+    setRelayType('sim_relay')
     setMavlinkHost('127.0.0.1')
     setError(null)
     setResult(null)
     onClose()
+  }
+
+  const copyRelayId = async () => {
+    if (!result?.relay_id) return
+    try {
+      await navigator.clipboard.writeText(result.relay_id)
+    } catch {
+      /* ignore */
+    }
   }
 
   return (
@@ -138,13 +164,13 @@ export function RegisterRelayDialog({
           backgroundColor: '#1e293b',
         }}
       >
-        Register Relay
+        Add Relay
       </DialogTitle>
 
       {result ? (
         <DialogContent sx={{ pt: 0, backgroundColor: '#1e293b', color: '#f8fafc' }}>
           <Typography sx={{ color: '#f8fafc', mb: 2 }}>
-            Relay registered successfully.
+            {mode === 'claim' ? 'Relay claimed successfully.' : 'Relay registered successfully.'}
           </Typography>
           <Box
             sx={{
@@ -167,10 +193,15 @@ export function RegisterRelayDialog({
               </Typography>
             )}
             <Typography sx={{ color: '#94a3b8', fontSize: '0.8rem' }}>
-              You can now select this relay when creating a new connection.
+              {mode === 'claim'
+                ? 'Your device will detect the claim automatically. You can now create a connection with this relay.'
+                : 'You can now select this relay when creating a new connection.'}
             </Typography>
           </Box>
-          <DialogActions sx={{ px: 0, backgroundColor: '#1e293b' }}>
+          <DialogActions sx={{ px: 0, backgroundColor: '#1e293b', gap: 1 }}>
+            <Button onClick={copyRelayId} disableRipple sx={{ color: '#3b82f6' }}>
+              Copy Relay ID
+            </Button>
             <Button onClick={handleClose} variant="contained" disableRipple>
               Done
             </Button>
@@ -184,10 +215,46 @@ export function RegisterRelayDialog({
                 Region: {zoneLabel}
               </Typography>
             )}
+            <ToggleButtonGroup
+              value={mode}
+              exclusive
+              onChange={(_, v: RegisterMode | null) => v && setMode(v)}
+              fullWidth
+              sx={{ mb: 2, '& .MuiToggleButton-root': { color: '#94a3b8', borderColor: '#334155' } }}
+            >
+              <ToggleButton value="claim" sx={{ '&.Mui-selected': { color: '#f8fafc', backgroundColor: '#0f172a' } }}>
+                Claim device
+              </ToggleButton>
+              <ToggleButton value="manual" sx={{ '&.Mui-selected': { color: '#f8fafc', backgroundColor: '#0f172a' } }}>
+                Register manually
+              </ToggleButton>
+            </ToggleButtonGroup>
+            {mode === 'claim' && (
+              <Box sx={{ mb: 2, p: 1.5, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '0.375rem' }}>
+                <Typography sx={{ color: '#94a3b8', fontSize: '0.8rem' }}>
+                  Power on your relay and run the device setup script. Enter the 8-character pairing code shown on the device (or in its logs).
+                </Typography>
+              </Box>
+            )}
+            {mode === 'claim' && (
+              <TextField
+                fullWidth
+                label="Pairing code"
+                placeholder="e.g. A1B2C3D4"
+                value={claimCode}
+                onChange={(e) => setClaimCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8))}
+                required
+                autoComplete="off"
+                margin="normal"
+                inputProps={{ style: { letterSpacing: '0.2em', fontFamily: 'monospace' } }}
+                sx={inputSx}
+                helperText="8-character code from the relay device"
+              />
+            )}
             <TextField
               fullWidth
               label="Relay Name"
-              placeholder="e.g. My laptop"
+              placeholder="e.g. RDIRelay"
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
@@ -239,8 +306,13 @@ export function RegisterRelayDialog({
             <Button onClick={handleClose} disableRipple sx={{ color: '#3b82f6' }}>
               Cancel
             </Button>
-            <Button type="submit" variant="contained" disabled={loading} disableRipple>
-              {loading ? 'Registering...' : 'Register'}
+            <Button
+              type="submit"
+              variant="contained"
+              disabled={loading || (mode === 'claim' && claimCode.length !== 8)}
+              disableRipple
+            >
+              {loading ? (mode === 'claim' ? 'Claiming...' : 'Registering...') : mode === 'claim' ? 'Claim relay' : 'Register'}
             </Button>
           </DialogActions>
         </form>

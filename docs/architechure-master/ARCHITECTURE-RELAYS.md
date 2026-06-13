@@ -91,6 +91,12 @@ Attributes:
   config           — M: type-specific (mavlink_host, radio_port, iccid, etc.)
   created_at       — N
   updated_at       — N
+  claim_status     — "pending" | "claimed" (hardware claim flow)
+  claim_code       — 8-char pairing code (pending only, ClaimCodeIndex)
+  device_serial    — stable hardware id (DeviceSerialIndex)
+  device_secret_hash — sha256 of device secret (never store plain secret)
+  claim_expires_at — N (pending TTL, default 7 days)
+  claimed_at       — N (when user claimed)
 ```
 
 **GSI:** `UserRelayIndex` — PK `user_id`, SK `user_relay_sk` — for "my relays" views.
@@ -120,6 +126,30 @@ Body: `{ "relay_id", "wavelength_zone_id", "name?", "config?" }`
 
 **DELETE /relays** — Unregister relay  
 Body: `{ "relay_id", "wavelength_zone_id" }`
+
+---
+
+## Hardware claim flow (Path B)
+
+Unclaimed devices sit in a synthetic DynamoDB partition `wavelength_zone_id = __unclaimed__` until a user claims them. The same `relay_id` is preserved when moved to the user's region partition — the Pi polls until claimed and writes `/etc/rdi/relay.conf`.
+
+| Step | Actor | Endpoint | Auth |
+|------|-------|----------|------|
+| 1 | Pi on boot | `POST /relays/announce` | None (`device_serial` + `device_secret`) |
+| 2 | User in console | `POST /relays/claim` | Cognito |
+| 3 | Pi poll | `GET /relays/claim-status` | None (`device_serial` + `device_secret`) |
+
+**Announce response (new device):** `{ "status": "pending", "claim_code": "A1B2C3D4", "device_secret": "...", "expires_at": N }`
+
+**Claim body:** `{ "claim_code", "name", "wavelength_zone_id", "relay_type" }`
+
+**Claim-status (claimed):** `{ "status": "claimed", "relay_id", "wavelength_zone_id", "name" }`
+
+GSIs on relay-registry: `ClaimCodeIndex` (PK `claim_code`), `DeviceSerialIndex` (PK `device_serial`).
+
+Pi setup script: `scripts/relay-device/rdi-relay-claim.py`
+
+Manual registration (`POST /relays`) remains available for dev laptops and placeholders.
 
 ---
 

@@ -1,0 +1,21 @@
+# Example systemd unit for hardware claim on boot.
+# Install:
+#   sudo cp rdi-relay-claim.py /opt/rdi/
+#   sudo cp rdi-relay-claim.service /etc/systemd/system/
+#   sudo systemctl edit rdi-relay-claim  # set RDI_API_BASE_URL
+#   sudo systemctl enable --now rdi-relay-claim
+
+[Unit]
+Description=RDI relay device claim and provisioning
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=RDI_API_BASE_URL=https://YOUR_API_GATEWAY_URL/production
+ExecStart=/usr/bin/python3 /opt/rdi/rdi-relay-claim.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
