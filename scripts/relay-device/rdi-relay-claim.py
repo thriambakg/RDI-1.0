@@ -87,7 +87,7 @@ def _http_json(method: str, url: str, body: dict | None = None) -> tuple[int, di
         try:
             payload = json.loads(e.read().decode("utf-8"))
         except Exception:
-            payload = {"error": str(e)}
+            payload = {"error": str(e), "hint": "API Gateway 403 often means route not deployed yet"}
         return e.code, payload
 
 
@@ -97,7 +97,7 @@ def announce(api_base: str, device_serial: str, device_secret: str | None) -> di
         body["device_secret"] = device_secret
     status, data = _http_json("POST", f"{api_base}/relays/announce", body)
     if status not in (200, 201):
-        raise RuntimeError(data.get("error") or f"announce failed ({status})")
+        raise RuntimeError(f"announce failed ({status}): {data}")
     return data
 
 
