@@ -105,6 +105,22 @@ resource "aws_api_gateway_resource" "child" {
   }
 }
 
+# Preserve state after splitting aws_api_gateway_resource.this into root/child
+moved {
+  from = aws_api_gateway_resource.this["sessions"]
+  to   = aws_api_gateway_resource.root["sessions"]
+}
+
+moved {
+  from = aws_api_gateway_resource.this["user_profile"]
+  to   = aws_api_gateway_resource.root["user_profile"]
+}
+
+moved {
+  from = aws_api_gateway_resource.this["relays"]
+  to   = aws_api_gateway_resource.root["relays"]
+}
+
 # Methods - dynamically created based on var.methods
 resource "aws_api_gateway_method" "this" {
   for_each = var.methods
