@@ -479,6 +479,8 @@ module "session_api" {
   api_description       = "RDI Session API for connection pool"
   stage_name            = "production"
   cognito_user_pool_arn = local.cognito_pool_arn
+  # Per-method auth: announce/claim-status are NONE; user routes stay COGNITO_USER_POOLS
+  force_cognito_authorization = false
 
   # Extensible: add new resources here (e.g. connections, folders) and corresponding methods
   resources = {
@@ -613,7 +615,7 @@ module "session_api" {
     get_relays_claim_status = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "GET", resource_path = "relays/claim-status" }
   }
 
-  deployment_trigger = "3"
+  deployment_trigger = "4"
 }
 
 # Scheduled idle-expiry: mark sessions idle when idle_after has passed (no DynamoDB TTL delete)
