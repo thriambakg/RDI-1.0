@@ -1,0 +1,78 @@
+Here is a structured, markdown-formatted implementation plan designed to be pasted directly into Cursor or your IDE AI assistant. It provides clear technical specifications to map out the WebRTC data plane, serverless infrastructure, and fail-safe logic while cleanly integrating with your existing REST/DynamoDB control plane planes.markdown# Implementation Plan: Ultra-Low Latency Global Drone WebRTC Data Plane
+
+## Objective
+Migrate the teleoperation data plane from standard HTTP WebSockets and ECS Fargate to an Edge-Optimized, Forward-Only WebRTC architecture using AWS Kinesis Video Streams (KVS). This architecture supports real-time H.264 video and bidirectional UDP-like MAVLink/radio data channels with a global target latency under 200ms.
+
+---
+
+## 1. Architecture Map & Signal Flow
+Keep the existing HTTP REST/DynamoDB plane for registration (`/relays`) and session pooling (`/sessions`), but completely bypass ECS Fargate for real-time bytes.
+
+Use code with caution.[ Browser UI Dashboard ] ◄──(Signaling via Local Edge)──► [ AWS KVS Signaling ]│                                                       ▲└───────◄──(Direct WebRTC Tunnel / Secure UDP)──►───────┘▲│ (Outbound WSS / Peer-to-Peer Data Channel)[ Raspberry Pi Relay Node ]│ (Serial / Local Radio Bridge)[ Drone Hardware / Laptop ]
+---
+
+## 2. Phase 1: Infrastructure Migration (AWS Serverless)
+*Target: Move video and data pipes from Fargate to KVS WebRTC Signaling Channels.*
+
+### Task 1.1: KVS Provisioning Setup
+- Remove Fargate routing for active telemetry/video streaming tasks.
+- Configure an **Edge-Optimized API Gateway** endpoint for session creation to ensure TLS handshakes terminate at the nearest CloudFront edge location.
+- **API Update:** Modify the `POST /sessions` lambda function to dynamically spin up a unique AWS Kinesis Video Signaling Channel per session if one does not exist, and return the scoped signaling endpoint.
+
+### Task 1.2: Scoped Security Credentials
+- Instead of using broad AWS keys, configure an IAM Role with a strict least-privilege policy allowing connection *only* to the specific session channel ID:
+  ```json
+  {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "kinesisvideo:ConnectAsMaster",
+          "kinesisvideo:ConnectAsViewer",
+          "kinesisvideo:GetSignalingChannelEndpoint"
+        ],
+        "Resource": "arn:aws:kinesisvideo:*:*:channel/\${SessionID}/*"
+      }
+    ]
+  }
+  ```
+
+---
+
+## 3. Phase 2: Raspberry Pi Relay Update (`rdi-agent` / Daemon)
+*Target: Replace generic web sockets with the AWS KVS WebRTC C/Embedded or Python SDK to drive the radio bridge.*
+
+### Task 2.1: Hardware Accelerated Video Pipeline
+- Update the systemd service or daemon configuration to access the Raspberry Pi's hardware encoder (`h264_v4l2m2m`) to minimize encoding lag.
+- Construct the local pipeline profile: Capture V4L2 raw frames -> Compress to H.264 (CBR mode, zero B-frames, I-frame interval = 30) -> Stream to the KVS WebRTC SDK channel master connection.
+
+### Task 2.2: Dual-Track WebRTC Setup
+- Initialize the WebRTC peer connection with two distinct sub-tracks:
+  1. **Media Track:** Constantly drains the H.264 camera loop buffer.
+  2. **Data Channel:** Creates an un-ordered, unreliable (UDP-like) WebRTC Data Channel specifically for raw telemetry packets and downstream commands.
+
+### Task 2.3: Implement the Hardware Watchdog Fail-Safe
+- Add a high-precision hardware heartbeat thread directly inside the Pi's relay daemon script.
+- **Logic Rule:** If the WebRTC data channel goes silent and fails to register a manual control packet for more than **500 milliseconds**, automatically execute an emergency fallback function to override manual inputs and send a MAVLink command over the serial interface to put the vehicle into a **Loiter/Hover** or **Return-to-Launch (RTL)** state.
+
+---
+
+## 4. Phase 3: Web UI & Pilot Cockpit Optimization
+*Target: Serve assets at the closest edge and build a resilient browser video interface.*
+
+### Task 3.1: Global Asset Delivery
+- Ensure all pilot front-end dashboard files are hosted inside an **Amazon S3** bucket paired directly with an **Amazon CloudFront** distribution. This guarantees the UI loads from a local California cache even if the drone is deployed in Frankfurt.
+
+### Task 3.2: Resilient Frontend Video Rendering
+- Bind the incoming WebRTC video stream directly to an HTML5 `<video>` element canvas layer.
+- **Frame-Drop Rule:** Disable any native browser buffer caching mechanisms. Ensure the player drops dropped or late frames immediately instead of stalling or pausing to wait for them.
+- **Connection Interruption Masking:** Implement a custom connection state event listener. If WebRTC changes to `disconnected`, instantly freeze the final valid video frame on screen, desaturate it to greyscale, and trigger a prominent UI HUD warning display reading: `LINK INTERRUPTED - BLIND INTERVAL: [X] Seconds`.
+
+---
+
+## 5. Verification Checklist for Cursor Code Generation
+When validating or writing files against this plan, make sure the generated scripts adhere to these strict validation criteria:
+1. **Network Layer Verification:** No hardcoded inbound IP routing rules or open firewall ports are added to the Pi relay config. Connections must always be outbound-initiated WSS or WebRTC signaling vectors.
+2. **Protocol Strictness:** The real-time control data channel is explicitly instantiated with `{ ordered: false, maxRetransmits: 0 }` to force pure, unblocked UDP-style stream processing.
+3. **Environment Isolation:** Ensure the `rdi-relay-claim.py` and daemon configura

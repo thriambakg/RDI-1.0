@@ -21,6 +21,8 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
+from kvs_signaling import build_webrtc_master_bundle
+
 
 def _to_dynamo(obj: Any) -> dict:
     from boto3.dynamodb.types import TypeSerializer
@@ -102,6 +104,10 @@ def lambda_handler(event: dict, context: Any) -> dict:
         if path.endswith("/claim-status") and http_method == "GET":
             params = event.get("queryStringParameters") or {}
             return _device_claim_status(params, headers)
+
+        if path.endswith("/webrtc-master") and http_method == "GET":
+            params = event.get("queryStringParameters") or {}
+            return _device_webrtc_master(params, headers)
 
         user_id = _get_user_id(event)
         if not user_id:
@@ -326,6 +332,48 @@ def _device_claim_status(params: dict, headers: dict) -> dict:
         )
 
     return _response(404, {"error": "Device not found; run announce first"}, headers)
+
+
+def _device_webrtc_master(params: dict, headers: dict) -> dict:
+    """GET /relays/webrtc-master — Pi fetches MASTER signaling creds for its active session."""
+    device_serial = (params.get("device_serial") or "").strip().lower()
+    device_secret = (params.get("device_secret") or "").strip()
+
+    if not device_serial or not device_secret:
+        return _response(400, {"error": "device_serial and device_secret required"}, headers)
+
+    dynamodb = boto3.client("dynamodb")
+    resp = dynamodb.query(
+        TableName=TABLE_NAME,
+        IndexName="DeviceSerialIndex",
+        KeyConditionExpression="device_serial = :ds",
+        ExpressionAttributeValues={":ds": {"S": device_serial}},
+        Limit=10,
+    )
+    relay_item = None
+    for item in resp.get("Items", []):
+        if (item.get("claim_status") or {}).get("S") != "claimed":
+            continue
+        if _hash_secret(device_secret) != (item.get("device_secret_hash") or {}).get("S", ""):
+            continue
+        relay_item = item
+        break
+
+    if not relay_item:
+        return _response(404, {"error": "Device not found or invalid secret"}, headers)
+
+    session_id = (relay_item.get("active_session_id") or {}).get("S", "")
+    channel_arn = (relay_item.get("signaling_channel_arn") or {}).get("S", "")
+    if not session_id or not channel_arn:
+        return _response(200, {"status": "no_active_session"}, headers)
+
+    try:
+        master = build_webrtc_master_bundle(session_id, channel_arn)
+    except Exception as e:
+        _log("webrtc-master creds failed", session_id=session_id, error=str(e))
+        return _response(500, {"error": str(e)}, headers)
+
+    return _response(200, master, headers)
 
 
 def _claim_relay(user_id: str, body: dict, headers: dict) -> dict:

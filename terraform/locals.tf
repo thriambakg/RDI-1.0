@@ -1,6 +1,6 @@
 # Shared locals (base state, region, session API / Lambda wiring)
 locals {
-  proxy_status_secret_value       = length(module.proxy_secrets) > 0 ? module.proxy_secrets[0].secret_values["proxy_status"]["value"] : random_password.proxy_status_secret.result
+  proxy_status_secret_value       = var.use_proxy_ecs && length(module.proxy_secrets) > 0 ? module.proxy_secrets[0].secret_values["proxy_status"]["value"] : random_password.proxy_status_secret.result
   is_primary_region               = var.primary_region != "" && var.region == var.primary_region
   region                          = data.aws_region.current.name
   base_state_key                  = var.base_state_key != "" ? var.base_state_key : "base-infra/${var.environment}/${var.region}/terraform.tfstate"

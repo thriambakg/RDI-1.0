@@ -241,7 +241,7 @@ jobs:
           else
             echo "has_proxy=false" >> $GITHUB_OUTPUT
           fi
-          USE_ECS=$(grep -E '^\s*use_proxy_ecs\s*=' terraform/environments/${{ needs.determine-environment.outputs.environment }}.auto.tfvars 2>/dev/null | sed 's/.*=\s*//' | tr -d ' "' || echo "true")
+          USE_ECS=$(grep -E '^\s*use_proxy_ecs\s*=' terraform/environments/${{ needs.determine-environment.outputs.environment }}.auto.tfvars 2>/dev/null | sed 's/.*=\s*//' | tr -d ' "' || echo "false")
           echo "use_proxy_ecs=${USE_ECS}" >> $GITHUB_OUTPUT
 
   check-agent:
@@ -439,7 +439,7 @@ jobs:
       - name: Check use_proxy_ecs
         id: ecs
         run: |
-          USE_ECS=$(grep -E '^\s*use_proxy_ecs\s*=' terraform/environments/${{ needs.determine-environment.outputs.environment }}.auto.tfvars 2>/dev/null | sed 's/.*=\s*//' | tr -d ' "' || echo "true")
+          USE_ECS=$(grep -E '^\s*use_proxy_ecs\s*=' terraform/environments/${{ needs.determine-environment.outputs.environment }}.auto.tfvars 2>/dev/null | sed 's/.*=\s*//' | tr -d ' "' || echo "false")
           echo "use_ecs=${USE_ECS}" >> $GITHUB_OUTPUT
 
       - name: Download Proxy Artifact

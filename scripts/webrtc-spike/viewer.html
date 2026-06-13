@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>RDI WebRTC Spike Viewer</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; padding: 2rem; }
+    button { padding: 0.5rem 1rem; margin-bottom: 1rem; }
+    pre { background: #1e293b; padding: 1rem; height: 320px; overflow: auto; font-size: 12px; }
+    .warn { color: #fbbf24; }
+  </style>
+</head>
+<body>
+  <h1>RDI Phase 1 — WebRTC Viewer</h1>
+  <p class="warn">Set signaling URL to your laptop IP if Pi is remote.</p>
+  <label>Signaling: <input id="sig" size="40" value="ws://127.0.0.1:8780/ws?role=viewer" /></label>
+  <br /><br />
+  <button id="connect">Connect</button>
+  <pre id="log"></pre>
+  <script>
+    const logEl = document.getElementById('log');
+    const log = (m) => { logEl.textContent += m + '\n'; logEl.scrollTop = logEl.scrollHeight; };
+
+    document.getElementById('connect').onclick = async () => {
+      const sigUrl = document.getElementById('sig').value;
+      const ws = new WebSocket(sigUrl);
+      const pc = new RTCPeerConnection();
+
+      pc.ondatachannel = (ev) => {
+        const ch = ev.channel;
+        log('data channel: ' + ch.label + ' ordered=' + ch.ordered);
+        ch.onmessage = (e) => log('RX: ' + e.data);
+        ch.onopen = () => log('channel open');
+      };
+
+      ws.onmessage = async (ev) => {
+        const data = JSON.parse(ev.data);
+        if (data.type === 'offer') {
+          await pc.setRemoteDescription({ type: 'offer', sdp: data.sdp });
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          ws.send(JSON.stringify({ to: 'master', type: 'answer', sdp: answer.sdp }));
+          log('sent answer');
+        }
+      };
+
+      ws.onopen = () => log('signaling connected');
+    };
+  </script>
+</body>
+</html>

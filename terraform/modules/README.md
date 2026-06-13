@@ -9,6 +9,10 @@ This directory contains reusable Terraform modules for the Cosine2.0 project.
 - Origin Access Control (OAC) for secure S3 access
 - Custom error pages and caching configurations
 
+### KVS WebRTC Module (`./kvs-webrtc`)
+- IAM role + policies for WebRTC signaling (per-session channels created at runtime by Session API)
+- Replaces deprecated ECS `rdi-proxy` data plane when `data_plane = "webrtc"`
+
 ### Lambda Module (`./lambda`)
 - AWS Lambda function with IAM roles
 - CloudWatch logging with KMS encryption

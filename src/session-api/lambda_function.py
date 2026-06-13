@@ -19,10 +19,16 @@ import boto3
 from botocore.exceptions import ClientError
 
 from hierarchy import add_session_to_folder, update_session_status, remove_session
+from kvs_signaling import (
+    build_webrtc_viewer_bundle,
+    create_signaling_channel,
+    delete_signaling_channel,
+    webrtc_enabled,
+)
 
 TABLE_NAME = os.environ["CONNECTION_POOL_TABLE"]
 REGION = os.environ["AWS_REGION"]
-PROXY_ENDPOINT = os.environ["PROXY_ENDPOINT"]
+PROXY_ENDPOINT = os.environ.get("PROXY_ENDPOINT", "")
 USER_PROFILES_TABLE = os.environ.get("USER_PROFILES_TABLE", "")
 RELAY_REGISTRY_TABLE = os.environ.get("RELAY_REGISTRY_TABLE", "")
 PROXY_STATUS_URL = os.environ.get("PROXY_STATUS_URL", "")
@@ -101,6 +107,61 @@ def _fetch_relay_config(dynamodb, user_id: str, relay_id: str, wavelength_zone_i
         except (json.JSONDecodeError, TypeError):
             pass
     return out
+
+
+def _bind_relay_webrtc_session(
+    dynamodb,
+    user_id: str,
+    relay_id: str,
+    wavelength_zone_id: str,
+    session_id: str,
+    channel_arn: str,
+) -> None:
+    if not RELAY_REGISTRY_TABLE or not relay_id or not channel_arn:
+        return
+    try:
+        dynamodb.update_item(
+            TableName=RELAY_REGISTRY_TABLE,
+            Key={
+                "wavelength_zone_id": {"S": wavelength_zone_id},
+                "relay_id": {"S": relay_id},
+            },
+            UpdateExpression=(
+                "SET active_session_id = :sid, signaling_channel_arn = :arn, "
+                "webrtc_status = :ws, last_seen = :now"
+            ),
+            ConditionExpression="user_id = :uid",
+            ExpressionAttributeValues={
+                ":sid": {"S": session_id},
+                ":arn": {"S": channel_arn},
+                ":ws": {"S": "awaiting_master"},
+                ":now": {"N": str(int(time.time()))},
+                ":uid": {"S": user_id},
+            },
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+
+
+def _clear_relay_webrtc_session(
+    dynamodb, user_id: str, relay_id: str, wavelength_zone_id: str
+) -> None:
+    if not RELAY_REGISTRY_TABLE or not relay_id:
+        return
+    try:
+        dynamodb.update_item(
+            TableName=RELAY_REGISTRY_TABLE,
+            Key={
+                "wavelength_zone_id": {"S": wavelength_zone_id},
+                "relay_id": {"S": relay_id},
+            },
+            UpdateExpression="REMOVE active_session_id, signaling_channel_arn, webrtc_status",
+            ConditionExpression="user_id = :uid",
+            ExpressionAttributeValues={":uid": {"S": user_id}},
+        )
+    except ClientError:
+        pass
 
 
 def _update_relay_status(
@@ -404,6 +465,21 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
 
     dynamodb = boto3.client("dynamodb")
     relay_config = _fetch_relay_config(dynamodb, user_id, relay_id, wavelength_zone_id) if relay_id else None
+
+    signaling_channel_arn = ""
+    webrtc_viewer = None
+    if webrtc_enabled():
+        try:
+            ch = create_signaling_channel(session_id)
+            signaling_channel_arn = ch["channel_arn"]
+            item["signaling_channel_arn"] = {"S": signaling_channel_arn}
+            item["transport"] = {"S": "webrtc"}
+            webrtc_viewer = build_webrtc_viewer_bundle(session_id, signaling_channel_arn)
+            _log("kvs channel created", session_id=session_id, channel_arn=signaling_channel_arn)
+        except Exception as e:
+            _log("kvs channel create failed", session_id=session_id, error=str(e))
+            return _response(500, {"error": f"WebRTC signaling setup failed: {e}"}, headers)
+
     try:
         dynamodb.put_item(
             TableName=TABLE_NAME,
@@ -438,7 +514,14 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
         idle_desc=idle_desc,
         wavelength_zone_id=wavelength_zone_id,
     )
-    _notify_proxy_session_status(session_id, "active")
+    # Legacy proxy path (deprecated when DATA_PLANE=webrtc)
+    if not webrtc_enabled():
+        _notify_proxy_session_status(session_id, "active")
+
+    if webrtc_enabled() and relay_id and signaling_channel_arn:
+        _bind_relay_webrtc_session(
+            dynamodb, user_id, relay_id, wavelength_zone_id, session_id, signaling_channel_arn
+        )
 
     if not WAVELENGTH_INSTANCE_ID:
         _log("add_session skipped", reason="proxy_only_mode", session_id=session_id)
@@ -468,7 +551,10 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
         "drone_id": drone_id,
         "endpoint": PROXY_ENDPOINT,
         "expires_at": display_expires_at,
+        "transport": "webrtc" if webrtc_enabled() else "websocket",
     }
+    if webrtc_viewer:
+        payload["webrtc"] = webrtc_viewer
     if relay_id:
         payload["relay_id"] = relay_id
     if relay_config:
@@ -493,6 +579,31 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
         payload["carrier_ip"] = WAVELENGTH_CARRIER_IP
     _log("create_session success", session_id=session_id, drone_id=drone_id)
     return _response(200, payload, headers)
+
+
+def _teardown_webrtc_session(dynamodb, user_id: str, session_id: str) -> None:
+    """Delete KVS signaling channel and clear relay WebRTC binding for a session."""
+    if not webrtc_enabled():
+        return
+    try:
+        resp = dynamodb.get_item(
+            TableName=TABLE_NAME,
+            Key={"user_id": {"S": user_id}, "session_id": {"S": session_id}},
+        )
+        item = resp.get("Item") or {}
+        channel_arn = (item.get("signaling_channel_arn") or {}).get("S", "")
+        relay_id = (item.get("relay_id") or {}).get("S", "")
+        zone = (item.get("wavelength_zone_id") or {}).get("S", REGION)
+        if channel_arn:
+            try:
+                delete_signaling_channel(channel_arn)
+                _log("kvs channel deleted", session_id=session_id, channel_arn=channel_arn)
+            except Exception as e:
+                _log("kvs channel delete failed", session_id=session_id, error=str(e))
+        if relay_id:
+            _clear_relay_webrtc_session(dynamodb, user_id, relay_id, zone)
+    except ClientError:
+        pass
 
 
 def _release_session(user_id: str, session_id: str | None, headers: dict, *, permanent: bool = False) -> dict:
@@ -522,6 +633,7 @@ def _release_session(user_id: str, session_id: str | None, headers: dict, *, per
                 raise
         if USER_PROFILES_TABLE:
             _upsert_profile_remove_session(dynamodb, user_id, session_id)
+        _teardown_webrtc_session(dynamodb, user_id, session_id)
         _log("release_session permanent done", session_id=session_id, existed=session_existed)
         return _response(
             200,
@@ -554,7 +666,9 @@ def _release_session(user_id: str, session_id: str | None, headers: dict, *, per
     _log("release_session -> idle", session_id=session_id)
     if USER_PROFILES_TABLE:
         _upsert_profile_update_status(dynamodb, user_id, session_id, "idle")
-    _notify_proxy_session_status(session_id, "idle")
+    _teardown_webrtc_session(dynamodb, user_id, session_id)
+    if not webrtc_enabled():
+        _notify_proxy_session_status(session_id, "idle")
     if WAVELENGTH_INSTANCE_ID:
         _remove_session_from_agent(WAVELENGTH_INSTANCE_ID, session_id)
 
@@ -602,7 +716,9 @@ def _idle_expired_sessions() -> None:
                 raise
             if USER_PROFILES_TABLE:
                 _upsert_profile_update_status(dynamodb, user_id, session_id, "idle")
-            _notify_proxy_session_status(session_id, "idle")
+            _teardown_webrtc_session(dynamodb, user_id, session_id)
+            if not webrtc_enabled():
+                _notify_proxy_session_status(session_id, "idle")
             if WAVELENGTH_INSTANCE_ID:
                 _remove_session_from_agent(WAVELENGTH_INSTANCE_ID, session_id)
     _log("idle_expired_sessions done")
@@ -668,7 +784,10 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
 
     if USER_PROFILES_TABLE:
         _upsert_profile_update_status(dynamodb, user_id, session_id, status)
-    _notify_proxy_session_status(session_id, status)
+    if status == "idle":
+        _teardown_webrtc_session(dynamodb, user_id, session_id)
+    if not webrtc_enabled():
+        _notify_proxy_session_status(session_id, status)
     if status == "idle" and WAVELENGTH_INSTANCE_ID:
         _remove_session_from_agent(WAVELENGTH_INSTANCE_ID, session_id)
     elif status == "active" and WAVELENGTH_INSTANCE_ID and (

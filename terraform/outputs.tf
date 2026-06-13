@@ -88,3 +88,13 @@ output "mavlink_port" {
   description = "MAVLink UDP port"
   value       = var.mavlink_port
 }
+
+output "data_plane" {
+  description = "Session data plane mode (webrtc or websocket)"
+  value       = var.data_plane
+}
+
+output "kvs_webrtc_session_role_arn" {
+  description = "IAM role for per-session KVS WebRTC Master/Viewer STS credentials"
+  value       = length(module.kvs_webrtc) > 0 ? module.kvs_webrtc[0].session_role_arn : null
+}

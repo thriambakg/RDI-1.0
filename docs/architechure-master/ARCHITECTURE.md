@@ -8,7 +8,11 @@ High-level architecture for Remote Drone Infrastructure. Use this doc to orient 
 
 **Control plane:** User → **REST Session API** (allocate `session_id`, proxy URL) → DynamoDB.
 
-**Data plane (MAVLink):** User browser ↔ **WSS** → **ALB** → **ECS Fargate (proxy)** ↔ **agent** ↔ **MAVLink UDP** ↔ PX4. The agent runs **on the relay or dev machine** (outbound `wss://` to the proxy), not inside the Fargate task.
+**Data plane (WebRTC):** User browser ↔ **KVS WebRTC** ↔ **Pi Master (rdi-agent)** ↔ serial/MAVLink ↔ PX4.
+
+> **Migration (2026):** ECS `rdi-proxy` WebSocket path is deprecated. See [WEBRTC-ARCHITECTURE.md](./WEBRTC-ARCHITECTURE.md).
+
+**Legacy data plane (deprecated):** User browser ↔ **WSS** → **ALB** → **ECS Fargate (proxy)** ↔ **agent** ↔ **MAVLink UDP** ↔ PX4.
 
 **Legacy name:** DynamoDB and REST bodies still use the field name `wavelength_zone_id`; values are **AWS region ids** (e.g. `us-east-1`) for partitioning sessions and relays—not carrier Wavelength zones.
 

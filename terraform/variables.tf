@@ -114,7 +114,13 @@ variable "proxy_status_secret" {
 }
 
 variable "use_proxy_ecs" {
-  description = "Use ECS Fargate for proxy (true) instead of EC2 rdi_edge (false)."
+  description = "DEPRECATED: ECS Fargate rdi-proxy (WebSocket). Set false — data plane is WebRTC/KVS."
   type        = bool
-  default     = true
+  default     = false
+}
+
+variable "data_plane" {
+  description = "Session data plane: webrtc (KVS signaling) or websocket (legacy proxy)."
+  type        = string
+  default     = "webrtc"
 }

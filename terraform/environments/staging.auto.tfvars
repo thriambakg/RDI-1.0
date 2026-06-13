@@ -10,8 +10,9 @@ base_state_region = "eu-central-1"
 # ECS proxy image only contains rdi-proxy (WebSocket hub), not the MAVLink UDP agent.
 skip_agent_build = true
 
-# Proxy: ECS Fargate (true) or EC2 rdi_edge (false)
-use_proxy_ecs = true
+# Proxy: DEPRECATED — WebRTC/KVS data plane (use_proxy_ecs=false)
+use_proxy_ecs = false
+data_plane    = "webrtc"
 
 # Proxy subnet CIDRs (within 10.200.0.0/16). Used when use_proxy_ecs=false.
 proxy_subnet_cidr = "10.200.82.0/24"

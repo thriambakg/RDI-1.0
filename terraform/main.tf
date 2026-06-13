@@ -58,10 +58,10 @@ resource "random_password" "proxy_status_secret" {
   special = true
 }
 
-# Store proxy status secret in Secrets Manager so it stays stable (avoids Lambda/proxy drift when random_password is recreated)
+# Store proxy status secret in Secrets Manager (legacy WebSocket proxy only)
 module "proxy_secrets" {
   source = "./modules/secrets-manager"
-  count  = 1
+  count  = var.use_proxy_ecs ? 1 : 0
 
   project_name = var.project_name
   environment  = var.environment
@@ -236,6 +236,18 @@ resource "aws_s3_object" "agent_binary" {
   depends_on = [null_resource.agent_build]
 }
 
+# -----------------------------------------------------------------------------
+# KVS WebRTC data plane (IAM) — per-session signaling channels created at runtime
+# -----------------------------------------------------------------------------
+module "kvs_webrtc" {
+  count  = var.base_state_bucket != "" && var.data_plane == "webrtc" ? 1 : 0
+  source = "./modules/kvs-webrtc"
+
+  project_name = var.project_name
+  environment  = var.environment
+  tags         = {}
+}
+
 # Session API and Proxy - require base infra (connection pool, Cognito)
 module "session_api_lambda" {
   count  = var.base_state_bucket != "" ? 1 : 0
@@ -255,13 +267,16 @@ module "session_api_lambda" {
     RELAY_REGISTRY_TABLE    = local.relay_registry_tbl
     PROXY_ENDPOINT          = local.proxy_endpoint
     PROXY_STATUS_URL        = local.proxy_status_url
-    PROXY_STATUS_SECRET_ARN = length(module.proxy_secrets) > 0 ? module.proxy_secrets[0].secret_arns["proxy_status"] : ""
+    PROXY_STATUS_SECRET_ARN = var.use_proxy_ecs && length(module.proxy_secrets) > 0 ? module.proxy_secrets[0].secret_arns["proxy_status"] : ""
     MAVLINK_PORT            = tostring(var.mavlink_port)
+    DATA_PLANE              = var.data_plane
+    KVS_WEBRTC_ROLE_ARN     = length(module.kvs_webrtc) > 0 ? module.kvs_webrtc[0].session_role_arn : ""
   }
 
   additional_policy_arns = concat(
     [aws_iam_policy.session_api_dynamodb[0].arn],
-    length(aws_iam_policy.session_api_proxy_secret) > 0 ? [aws_iam_policy.session_api_proxy_secret[0].arn] : []
+    var.use_proxy_ecs && length(aws_iam_policy.session_api_proxy_secret) > 0 ? [aws_iam_policy.session_api_proxy_secret[0].arn] : [],
+    length(module.kvs_webrtc) > 0 ? [module.kvs_webrtc[0].session_api_policy_arn] : []
   )
   depends_on = [aws_iam_policy.session_api_dynamodb]
   layers     = [module.core_layer.layer_arn]
@@ -271,7 +286,7 @@ module "session_api_lambda" {
 
 # Allow Session API Lambda to read proxy status secret from Secrets Manager (same source as proxy ECS)
 resource "aws_iam_policy" "session_api_proxy_secret" {
-  count       = length(module.proxy_secrets) > 0 ? 1 : 0
+  count       = var.use_proxy_ecs && length(module.proxy_secrets) > 0 ? 1 : 0
   name        = "${var.project_name}-session-api-proxy-secret-${var.environment}"
   description = "Read proxy status secret for session-status API (Lambda + proxy share same source)"
 
@@ -401,12 +416,14 @@ module "relay_registry_api_lambda" {
   environment_variables = {
     RELAY_REGISTRY_TABLE = local.relay_registry_tbl
     USER_PROFILES_TABLE  = local.user_profiles_tbl
+    KVS_WEBRTC_ROLE_ARN  = length(module.kvs_webrtc) > 0 ? module.kvs_webrtc[0].session_role_arn : ""
   }
 
-  additional_policy_arns = [
-    aws_iam_policy.relay_registry_api_dynamodb[0].arn,
-    aws_iam_policy.relay_registry_api_user_profiles[0].arn,
-  ]
+  additional_policy_arns = concat(
+    [aws_iam_policy.relay_registry_api_dynamodb[0].arn],
+    [aws_iam_policy.relay_registry_api_user_profiles[0].arn],
+    length(module.kvs_webrtc) > 0 ? [module.kvs_webrtc[0].relay_registry_api_policy_arn] : []
+  )
   depends_on = [aws_iam_policy.relay_registry_api_dynamodb, aws_iam_policy.relay_registry_api_user_profiles]
   layers     = [module.core_layer.layer_arn]
 
@@ -484,12 +501,13 @@ module "session_api" {
 
   # Extensible: add new resources here (e.g. connections, folders) and corresponding methods
   resources = {
-    sessions            = { path_part = "sessions" }
-    user_profile        = { path_part = "user-profile" }
-    relays              = { path_part = "relays" }
-    relays_claim        = { path_part = "claim", parent_resource_key = "relays" }
-    relays_announce     = { path_part = "announce", parent_resource_key = "relays" }
-    relays_claim_status = { path_part = "claim-status", parent_resource_key = "relays" }
+    sessions             = { path_part = "sessions" }
+    user_profile         = { path_part = "user-profile" }
+    relays               = { path_part = "relays" }
+    relays_claim         = { path_part = "claim", parent_resource_key = "relays" }
+    relays_announce      = { path_part = "announce", parent_resource_key = "relays" }
+    relays_claim_status  = { path_part = "claim-status", parent_resource_key = "relays" }
+    relays_webrtc_master = { path_part = "webrtc-master", parent_resource_key = "relays" }
   }
 
   methods = {
@@ -597,25 +615,34 @@ module "session_api" {
       lambda_arn              = module.relay_registry_api_lambda[0].function_arn
       authorization_type      = "NONE"
     }
+    get_relays_webrtc_master = {
+      resource_key            = "relays_webrtc_master"
+      http_method             = "GET"
+      integration_type        = "AWS_PROXY"
+      integration_http_method = "POST"
+      lambda_arn              = module.relay_registry_api_lambda[0].function_arn
+      authorization_type      = "NONE"
+    }
   }
 
   lambda_permissions = {
-    post                    = { function_arn = module.session_api_lambda[0].function_arn, http_method = "POST", resource_path = "sessions" }
-    get                     = { function_arn = module.session_api_lambda[0].function_arn, http_method = "GET", resource_path = "sessions" }
-    delete                  = { function_arn = module.session_api_lambda[0].function_arn, http_method = "DELETE", resource_path = "sessions" }
-    patch                   = { function_arn = module.session_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "sessions" }
-    get_user_profile        = { function_arn = module.user_profile_api_lambda[0].function_arn, http_method = "GET", resource_path = "user-profile" }
-    patch_user_profile      = { function_arn = module.user_profile_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "user-profile" }
-    post_relays             = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "POST", resource_path = "relays" }
-    get_relays              = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "GET", resource_path = "relays" }
-    patch_relays            = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "relays" }
-    delete_relays           = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "DELETE", resource_path = "relays" }
-    post_relays_claim       = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "POST", resource_path = "relays/claim" }
-    post_relays_announce    = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "POST", resource_path = "relays/announce" }
-    get_relays_claim_status = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "GET", resource_path = "relays/claim-status" }
+    post                     = { function_arn = module.session_api_lambda[0].function_arn, http_method = "POST", resource_path = "sessions" }
+    get                      = { function_arn = module.session_api_lambda[0].function_arn, http_method = "GET", resource_path = "sessions" }
+    delete                   = { function_arn = module.session_api_lambda[0].function_arn, http_method = "DELETE", resource_path = "sessions" }
+    patch                    = { function_arn = module.session_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "sessions" }
+    get_user_profile         = { function_arn = module.user_profile_api_lambda[0].function_arn, http_method = "GET", resource_path = "user-profile" }
+    patch_user_profile       = { function_arn = module.user_profile_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "user-profile" }
+    post_relays              = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "POST", resource_path = "relays" }
+    get_relays               = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "GET", resource_path = "relays" }
+    patch_relays             = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "relays" }
+    delete_relays            = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "DELETE", resource_path = "relays" }
+    post_relays_claim        = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "POST", resource_path = "relays/claim" }
+    post_relays_announce     = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "POST", resource_path = "relays/announce" }
+    get_relays_claim_status  = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "GET", resource_path = "relays/claim-status" }
+    get_relays_webrtc_master = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "GET", resource_path = "relays/webrtc-master" }
   }
 
-  deployment_trigger = "4"
+  deployment_trigger = "5"
 }
 
 # Scheduled idle-expiry: mark sessions idle when idle_after has passed (no DynamoDB TTL delete)
