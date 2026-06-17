@@ -58,8 +58,10 @@ def get_signaling_endpoint(channel_arn: str, role: str) -> str:
     """Return WSS URL for MASTER or VIEWER."""
     resp = _kinesisvideo().get_signaling_channel_endpoint(
         ChannelARN=channel_arn,
-        SingleMasterConfiguration={"ViewerProtocol": "WSS", "MasterProtocol": "WSS"},
-        Role=role,
+        SingleMasterChannelEndpointConfiguration={
+            "Protocols": ["WSS"],
+            "Role": role,
+        },
     )
     endpoints = resp.get("ResourceEndpointList") or []
     for ep in endpoints:
