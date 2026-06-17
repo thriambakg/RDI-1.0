@@ -20,7 +20,7 @@ resource "aws_iam_role" "session" {
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
-      Principal = { Service = "lambda.amazonaws.com" }
+      Principal = { AWS = var.trusted_assumer_role_arns }
       Action    = "sts:AssumeRole"
     }]
   })

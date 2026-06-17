@@ -13,3 +13,8 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "trusted_assumer_role_arns" {
+  description = "IAM role ARNs allowed to call sts:AssumeRole on the KVS session credentials role (Session API + Relay Registry Lambda execution roles)"
+  type        = list(string)
+}

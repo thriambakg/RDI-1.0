@@ -22,4 +22,10 @@ locals {
     "https://${var.subdomain}.${var.domain_name}/session-status" :
     module.proxy_ecs[0].session_status_url
   ) : ""
+
+  # Lambda execution role names are fixed by modules/lambda; used to break IAM trust cycle with kvs-webrtc.
+  kvs_webrtc_trusted_assumer_role_arns = [
+    "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-session-api-${var.environment}-${local.region}-execution-role",
+    "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-relay-registry-api-${var.environment}-${local.region}-execution-role",
+  ]
 }

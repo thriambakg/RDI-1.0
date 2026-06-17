@@ -243,9 +243,10 @@ module "kvs_webrtc" {
   count  = var.base_state_bucket != "" && var.data_plane == "webrtc" ? 1 : 0
   source = "./modules/kvs-webrtc"
 
-  project_name = var.project_name
-  environment  = var.environment
-  tags         = {}
+  project_name              = var.project_name
+  environment               = var.environment
+  trusted_assumer_role_arns = local.kvs_webrtc_trusted_assumer_role_arns
+  tags                      = {}
 }
 
 # Session API and Proxy - require base infra (connection pool, Cognito)

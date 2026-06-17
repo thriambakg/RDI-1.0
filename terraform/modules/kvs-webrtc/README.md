@@ -23,11 +23,17 @@ module "kvs_webrtc" {
   count  = var.data_plane == "webrtc" ? 1 : 0
   source = "./modules/kvs-webrtc"
 
-  project_name = var.project_name
-  environment  = var.environment
-  tags         = {}
+  project_name              = var.project_name
+  environment               = var.environment
+  trusted_assumer_role_arns = [
+    "arn:aws:iam::ACCOUNT:role/rdi-session-api-staging-us-east-1-execution-role",
+    "arn:aws:iam::ACCOUNT:role/rdi-relay-registry-api-staging-us-east-1-execution-role",
+  ]
+  tags = {}
 }
 ```
+
+The KVS session role **trust policy** must list the Session API and Relay Registry Lambda **execution role** ARNs (not `lambda.amazonaws.com`). Those Lambdas call `sts:AssumeRole` from code to mint scoped viewer/master creds.
 
 Attach policies to Lambdas and set `KVS_WEBRTC_ROLE_ARN = module.kvs_webrtc[0].session_role_arn`.
 
