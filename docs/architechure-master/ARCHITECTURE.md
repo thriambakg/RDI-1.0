@@ -1,154 +1,317 @@
 # RDI Architecture
 
-High-level architecture for Remote Drone Infrastructure. Use this doc to orient before making changes.
+High-level architecture for **Remote Drone Infrastructure**. Use this doc to orient before making changes.
+
+**Last updated:** WebRTC / KVS data plane (ECS `rdi-proxy` removed).
 
 ---
 
 ## System overview
 
-**Control plane:** User → **REST Session API** (allocate `session_id`, proxy URL) → DynamoDB.
+RDI has two layers:
 
-**Data plane (WebRTC):** User browser ↔ **KVS WebRTC** ↔ **Pi Master (rdi-agent)** ↔ serial/MAVLink ↔ PX4.
+| Layer | Technology | Purpose |
+|-------|------------|---------|
+| **Control plane** | API Gateway (EDGE) + Lambda + DynamoDB + Cognito | Register relays, create connections, user profile, session lifecycle |
+| **Data plane** | **WebRTC** + **Kinesis Video Streams signaling** | Live commands, telemetry, and video between pilot browser and field relay |
 
-> **Migration (2026):** ECS `rdi-proxy` WebSocket path is deprecated. See [WEBRTC-ARCHITECTURE.md](./WEBRTC-ARCHITECTURE.md).
-
-**Legacy data plane (deprecated):** User browser ↔ **WSS** → **ALB** → **ECS Fargate (proxy)** ↔ **agent** ↔ **MAVLink UDP** ↔ PX4.
-
-**Legacy name:** DynamoDB and REST bodies still use the field name `wavelength_zone_id`; values are **AWS region ids** (e.g. `us-east-1`) for partitioning sessions and relays—not carrier Wavelength zones.
+**Legacy field name:** DynamoDB and REST bodies use `wavelength_zone_id`; values are **AWS region ids** (e.g. `us-east-1`) for partitioning—not carrier Wavelength zones.
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  OPERATOR (browser)                                                          │
-│  React app · Cognito · REST for sessions · WSS for MAVLink binary tunnel     │
-└───────────────────────────────┬─────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  OPERATOR (browser)                                                           │
+│  React app · Cognito · REST (sessions, relays, profile)                      │
+│  WebRTC Viewer per connection (data channel + video)                          │
+└───────────────────────────────┬──────────────────────────────────────────────┘
                                 │
-        ┌───────────────────────┴───────────────────────┐
-        │  REST · API Gateway + Lambda (Session API)   │
-        │  POST/GET/PATCH/DELETE sessions, profile      │
-        │  → DynamoDB (connection pool, relay registry)│
-        └───────────────────────┬───────────────────────┘
+        ┌───────────────────────┴────────────────────────┐
+        │  CONTROL PLANE · API Gateway EDGE + Lambda        │
+        │  /sessions  /relays  /user-profile                │
+        │  → DynamoDB (connection-pool, relay-registry,     │
+        │              user-profiles)                       │
+        │  → KVS CreateSignalingChannel (per session)       │
+        └───────────────────────┬────────────────────────┘
+                                │ signaling WSS only (handshake)
+        ┌───────────────────────┴────────────────────────┐
+        │  AWS Kinesis Video Streams · WebRTC signaling     │
+        │  One signaling channel per session_id             │
+        └───────────────────────┬────────────────────────┘
                                 │
-        ┌───────────────────────┴───────────────────────┐
-        │  WSS · ALB (TLS) → ECS Fargate · rdi-proxy     │
-        │  Pairs frontend:{session_id} + agent:{session_id} │
-        └───────────────────────┬───────────────────────┘
+        ┌───────────────────────┴────────────────────────┐
+        │  WebRTC peer connection (UDP-like, direct)      │
+        │  Browser (Viewer) ◄────────────────► Pi (Master) │
+        └───────────────────────┬────────────────────────┘
                                 │
-        ┌───────────────────────┴───────────────────────┐
-        │  RELAY / GCS (internet: Starlink, LTE, etc.)   │
-        │  rdi-agent · WebSocket ↔ MAVLink UDP ↔ PX4   │
-        └───────────────────────────────────────────────┘
+        ┌───────────────────────┴────────────────────────┐
+        │  RELAY · Raspberry Pi CM4 (Holybro baseboard)   │
+        │  rdi-relay-daemon + rdi-agent                   │
+        │  serial / MAVLink / radio ↔ drone               │
+        └─────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Key points
+## What Kinesis is (and is not)
 
-### Proxy does not talk to PX4
+**Amazon Kinesis Video Streams (KVS)** is used for **WebRTC signaling only**—not as a pipe for drone bytes.
 
-The **proxy** (Rust in **ECS**) only bridges two WebSocket clients that share the same `session_id`:
+| Traffic | Path | Through KVS? |
+|---------|------|--------------|
+| Signaling (SDP, ICE, connect) | KVS WSS endpoints | **Yes** (small control messages) |
+| Commands (arm, takeoff, stick) | WebRTC **data channel** | **No** |
+| Telemetry (GPS, battery, mode) | WebRTC **data channel** | **No** |
+| Video / audio | WebRTC **media track** (H.264) | **No** |
 
-- **Frontend** (browser)
-- **Agent** (runs with PX4)
+After the WebRTC session is established, **all real-time payload** flows browser ↔ Pi. KVS is the matchmaker, not the phone call.
 
-It does not parse MAVLink and does not open UDP to the autopilot.
-
-### Agent runs beside PX4
-
-The **agent** connects **outbound** to the same `wss://` endpoint returned by the Session API. It forwards bytes between the proxy WebSocket and **MAVLink UDP** (e.g. `127.0.0.1:18570`). Typical deployment: **relay hardware** on the field; local dev: laptop.
-
-### Lambda is not in the MAVLink path
-
-Session API Lambda creates rows and notifies the proxy of **active/idle** via `POST /session-status` (control plane only). After the REST response, the browser and agent open WebSockets **directly** to the ALB.
+We do **not** use Kinesis Data Streams or Firehose for teleoperation.
 
 ---
 
-## APIs
+## Console model: relays parent connections (drones)
 
-### REST — Session lifecycle & profile
+```
+Region (wavelength_zone_id = AWS region id)
+ └── Relay (relay_id)              ← one physical Pi / ground station
+      ├── Connection A (session_id) ← one WebRTC session → drone A
+      └── Connection B (session_id) ← one WebRTC session → drone B
+```
 
-| Purpose | Notes |
-|---------|--------|
-| Create session | `POST /sessions` — body may include `wavelength_zone_id` (region id), `relay_id`, `metadata` (e.g. MAVLink port) |
-| Session list / get | `GET /sessions` — optional `?wavelength_zone_id=` filter |
-| Release / delete | `DELETE /sessions` |
-| User profile | `GET` / `PATCH /user-profile` — folders, hierarchy |
+| Entity | ID | Meaning |
+|--------|-----|---------|
+| **Relay** | `relay_id` | Registered ground node (CM4). Parent in UI hierarchy. |
+| **Connection** | `session_id` | One live pilot link. Child of relay in practice. |
+| **Drone** | `drone_id` | User-facing name + UUID in session row. |
+| **Local target** | `metadata` (e.g. `mavlink_port`, serial device) | Which radio/serial endpoint on the Pi serves this drone. |
 
-Auth: Cognito. **No real-time MAVLink** on this API.
+**Multiple drones on one relay:** each new connection creates a **new** KVS signaling channel and **new** WebRTC peer connection. The Pi runs **one async task per active `session_id`**, each mapped to its own local port or serial device via session metadata.
 
-### WebSocket — Drone control
+**Target (multi-session Pi):** daemon polls for all active sessions bound to `relay_id`, spawns/stops WebRTC Master tasks concurrently. **Current code:** single `active_session_id` on relay row and `GET /relays/webrtc-master`—multi-session device API is planned (`GET /relays/active-sessions`).
 
-| Item | Detail |
+---
+
+## WebRTC session structure
+
+Each connection uses **one WebRTC peer connection** with two lanes:
+
+| Lane | WebRTC piece | Direction | Content |
+|------|----------------|-----------|---------|
+| **Control + telemetry** | Data channel (`ordered: false`, `maxRetransmits: 0`) | Bidirectional | MAVLink frames, stick/CTRL bytes |
+| **Video (and optional audio)** | Media track (H.264 via Pi HW encoder when ready) | Pi → browser | FPV from radio/camera |
+
+Commands and feedback share the **data channel**. Video is a **separate track** on the **same** peer connection—not a second AWS service.
+
+---
+
+## Relay hardware role
+
+The Pi is the **translator** between internet and air side:
+
+```
+Browser  ──WebRTC──►  Pi relay  ──serial / radio──►  Drone
+              ▲              │
+              └── telemetry, video back ──┘
+```
+
+- **Outbound-only** from Pi to cloud (signaling WSS, then WebRTC). No inbound firewall holes on the relay.
+- Cloud never speaks to the radio directly.
+- **Safety (planned):** watchdog on Pi—if data channel drops, send MAVLink RTL/Loiter over serial.
+
+---
+
+## Control plane APIs
+
+Auth: **Cognito** Bearer token on user routes. Device routes use `device_serial` + `device_secret`.
+
+### Session API (`/sessions`)
+
+| Method | Purpose |
+|--------|---------|
+| `POST /sessions` | Create connection; creates KVS signaling channel; returns `transport: "webrtc"` + viewer creds |
+| `GET /sessions` | List/get sessions |
+| `PATCH /sessions` | Reactivate idle session (new signaling setup TBD on reactivate) |
+| `DELETE /sessions` | Release (idle) or permanent delete; deletes KVS channel |
+
+**Create body (typical):** `relay_id`, `wavelength_zone_id`, `folder_path`, `metadata.mavlink_port`, `drone_name`, `ttl_seconds`.
+
+**Response (WebRTC):** `session_id`, `drone_id`, `relay_id`, `transport`, `webrtc` (viewer signaling endpoint + STS credentials), `mavlink_port`, `mavlink_host`.
+
+### Relay Registry API (`/relays`)
+
+| Method | Auth | Purpose |
+|--------|------|---------|
+| `POST /relays` | Cognito | Manual relay registration |
+| `POST /relays/claim` | Cognito | Claim device by pairing code |
+| `POST /relays/announce` | Device | Pi announces; gets `claim_code` |
+| `GET /relays/claim-status` | Device | Pi polls until claimed |
+| `GET /relays/webrtc-master` | Device | Pi fetches MASTER WebRTC creds for active session |
+| `GET/PATCH/DELETE /relays` | Cognito | List, update, delete relays |
+
+### User profile (`/user-profile`)
+
+Folders, `connection_hierarchy`, relay list—unchanged. See [USER-PROFILES-SCHEMA.md](./USER-PROFILES-SCHEMA.md).
+
+**No real-time drone bytes on REST.** Session API is provisioning only.
+
+---
+
+## End-to-end: create connection
+
+1. User selects **relay** and clicks **New connection** in console.
+2. Frontend `POST /sessions` with `relay_id` and metadata.
+3. Session API Lambda:
+   - Writes **connection-pool** row (`user_id`, `session_id`, `relay_id`, `drone_id`, `status: active`).
+   - Calls `CreateSignalingChannel` (KVS), stores `signaling_channel_arn`.
+   - Binds session to relay (`active_session_id`, channel ARN on relay-registry item).
+   - Returns **viewer** WebRTC bundle (signaling WSS + scoped STS creds).
+4. Frontend opens **WebRTC Viewer** for that `session_id` (implementation in progress).
+5. Pi **relay daemon** polls `GET /relays/webrtc-master` (→ future: `active-sessions`).
+6. Pi **rdi-agent** connects as KVS **Master**, bridges data channel ↔ MAVLink/serial/radio.
+7. Browser and Pi complete WebRTC handshake via KVS signaling; telemetry and commands flow on data channel.
+
+**Pause / delete:** Session API marks idle or deletes row, calls `DeleteSignalingChannel`, clears relay binding. Pi daemon stops the matching task.
+
+---
+
+## Hardware claim flow (Path B)
+
+Separate from the live tunnel—provisions identity only.
+
+1. Pi `POST /relays/announce` → `claim_code` on stdout.
+2. User **Add Relay → Claim device** in console with code.
+3. Pi polls `GET /relays/claim-status` until `claimed`.
+4. Pi writes `/etc/rdi/relay.conf` (`relay_id`, zone, `api_base_url`).
+
+See [ARCHITECTURE-RELAYS.md](./ARCHITECTURE-RELAYS.md) for registry schema and claim details.
+
+---
+
+## Pi software stack
+
+| Component | Role |
+|-----------|------|
+| `rdi-relay-claim.py` | One-time (or re-) provisioning; pairing code |
+| `rdi-relay-daemon` | Polls API for active sessions; spawn/stop agent tasks (**planned**) |
+| `rdi-agent` | Per-session WebRTC Master + local MAVLink/serial bridge (**rewrite in progress**) |
+
+### Concurrency on CM4
+
+Use **async tasks (Tokio)**, not one OS thread per drone:
+
+```text
+rdi-relay-daemon (one process)
+  ├─ task: poll /relays/active-sessions
+  ├─ task: session_id=A → WebRTC Master → mavlink :18570 → drone A
+  └─ task: session_id=B → WebRTC Master → mavlink :18571 → drone B
+```
+
+The legacy WebSocket agent already used `HashMap<session_id, JoinHandle>` for multi-session daemon mode; the WebRTC agent follows the same pattern.
+
+**Bench:** one Pixhawk on USB serial. **Field:** one RF link per drone unless multiple UARTs/radios on the baseboard.
+
+---
+
+## DynamoDB (RDI-Base-Infra)
+
+| Table | PK / SK | Purpose |
+|-------|---------|---------|
+| `connection-pool` | `user_id` / `session_id` | Sessions; adds `signaling_channel_arn`, `transport` in WebRTC mode |
+| `relay-registry` | `wavelength_zone_id` / `relay_id` | Relays; claim flow; `active_session_id` (→ multi-session list planned) |
+| `user-profiles` | `user_id` | Hierarchy, relay refs |
+
+See [CONNECTION-POOL-SCHEMA.md](./CONNECTION-POOL-SCHEMA.md).
+
+---
+
+## Terraform (RDI-1.0 application root)
+
+| Module | Role |
+|--------|------|
+| `session_api` | API Gateway + Session API Lambda |
+| `relay_registry_api` | Relay Registry Lambda (in same gateway module) |
+| `user_profile_api` | Profile Lambda |
+| **`kvs-webrtc`** | IAM role + policies for KVS signaling and STS creds |
+| `lambda-layer` | Python deps for Lambdas |
+| `lambda` | Function packaging |
+
+**Key variables** (`terraform/environments/*.auto.tfvars`):
+
+```hcl
+use_proxy_ecs = false   # deprecated — do not enable
+data_plane    = "webrtc"
+```
+
+**Removed / deprecated:** `module.proxy_ecs`, ECR proxy image, ALB WSS for data plane, `rdi-proxy` byte forwarding, `PROXY_ENDPOINT` as session tunnel URL.
+
+**KVS signaling channels** are **not** in Terraform—they are created at runtime per `POST /sessions`.
+
+**Base Infra** (separate repo): Cognito, DynamoDB tables, frontend S3/CloudFront—unchanged.
+
+---
+
+## Frontend
+
+| Area | Status |
 |------|--------|
-| Endpoint | `wss://` host from session response (often custom domain, e.g. `wss.example.com`) |
-| Handshake | First message: `frontend:{session_id}` or `agent:{session_id}` |
-| Payload | Binary MAVLink frames |
+| Console, folders, relay register/claim | Implemented |
+| Create connection → `POST /sessions` | Implemented |
+| WebRTC Viewer per session | **In progress** (replaces `SessionWebSocketContext`) |
+| Video `<video>` + link-loss HUD | Planned |
 
-Backend: **ALB + ECS Fargate** (`rdi-proxy` container). No Lambda in the tunnel.
-
-### Session status (control plane)
-
-Lambda → `https://<alb>/session-status` with shared secret — tells proxy which `session_id` may connect (active vs idle).
+Hosted on **S3 + CloudFront** (RDI-Base-Infra).
 
 ---
 
-## Connection creation flow
+## Implementation status
 
-1. Frontend `POST /sessions` (auth).
-2. Lambda writes **connection pool** DynamoDB item; returns `{ session_id, drone_id, endpoint, … }`.
-3. Frontend opens WebSocket to `endpoint`, sends `frontend:{session_id}`.
-4. Agent (same `session_id`) opens WebSocket to `endpoint`, sends `agent:{session_id}`.
-5. Proxy pairs the two and forwards bytes both ways.
+| Piece | Status |
+|-------|--------|
+| Claim flow (Pi + console) | Done |
+| `module.kvs-webrtc` IAM | Done |
+| Session API: create/delete KVS channel | Done |
+| `GET /relays/webrtc-master` | Done (single session) |
+| ECS / proxy deprecation in tfvars | Done |
+| Multi-session Pi (`active-sessions` API) | Planned |
+| `rdi-relay-daemon` | Planned |
+| `rdi-agent` WebRTC rewrite | Planned |
+| Frontend WebRTC viewer | Planned |
+| Video pipeline (`h264_v4l2m2m`) | Planned |
+| 500ms safety watchdog | Planned |
 
-**DynamoDB (connection pool):** PK `user_id`, SK `session_id`. Attributes include `wavelength_zone_id` (region key), `status`, `endpoint`, `metadata`, etc. See [CONNECTION-POOL-SCHEMA.md](./CONNECTION-POOL-SCHEMA.md).
-
----
-
-## Console (UI)
-
-Users pick a **Region** (AWS region id) in the console; relays and sessions are filtered by that key (same Dynamo field name as above). Operations: folders, new connection, register relay — backed by Session API and Relay Registry API.
-
----
-
-## Relay registration vs real-time tunnel (important)
-
-**Registration (REST)** — already implemented: operators use **Register relay** in the console (or call **Relay Registry** `POST /relays` with Cognito). That creates a `relay_id`, stores metadata in DynamoDB, and ties the relay to a deployment region (`wavelength_zone_id` field = region id). No physical hardware is required to exercise the API; you can register a placeholder relay for testing.
-
-**When you have hardware**, the same registration flow applies: the device (or a provisioning script) must obtain a **Cognito ID token** and call the same APIs. The relay then runs **rdi-agent** with `RDI_PROXY_URL`, `RDI_SESSION_ID`, and MAVLink env — that is separate from registration.
-
-**Why we keep the `agent:` WebSocket in `rdi-proxy`:** the proxy’s job is to pair **two** WebSocket legs per `session_id`: `frontend:` (browser) and **`agent:`** (binary peer). That second leg is **rdi-agent on the relay** talking outbound to `wss://`. It is *not* a cloud “edge agent” and it is not optional if you want browser → MAVLink → PX4 through this stack. Removing “agent logic” from the proxy would remove the MAVLink tunnel until a different transport (e.g. relay polling, MQTT) is designed and implemented end-to-end.
+**Local dev spike (no AWS):** `scripts/webrtc-spike/` — Pi ↔ laptop data channel on LAN.
 
 ---
 
 ## Flight logs (S3)
 
-Planned: logs under `{user_id}/{wavelength_zone_id}/{drone_id}-{session_id}.log` in the flight-logs bucket (see Base Infra). Buffering and upload on session close are implementation follow-ups.
+Planned: `{user_id}/{wavelength_zone_id}/{drone_id}-{session_id}.log` in flight-logs bucket (Base Infra). Upload on session close—not implemented.
 
 ---
 
-## Terraform (application root)
+## Cost (order of magnitude)
 
-| Module / resource | Role |
-|-------------------|------|
-| `proxy-ecs` | VPC, ALB, ECR, ECS Fargate — **rdi-proxy** container |
-| `session_api` (API Gateway + Lambda) | REST sessions |
-| `user_profile_api`, `relay_registry_api` | Profile and relays |
-| `secrets-manager` | Shared secret for session-status |
-| `lambda-layer` | Python deps for Lambdas |
-| **Not in root:** `modules/wavelength-ec2` is kept in-repo for a possible future carrier-edge stack; it is **not** instantiated from root `main.tf`. |
-
-**Variables:** `use_proxy_ecs` (default `true`), `skip_agent_build` (skip S3 upload of `rdi-agent` when agents are built only on relays), `mavlink_port`, custom domain for WSS, etc.
-
-**Per environment:** `terraform/environments/<env>.auto.tfvars` and region-specific `-var-file` as needed.
-
----
-
-## Cost (order of magnitude, per region)
-
-Rough monthly (single region, light traffic): ALB + Fargate task + Lambda + API Gateway + DynamoDB + ECR + KMS — on the order of **tens of USD/month**, excluding data transfer. No Wavelength EC2 or carrier charges in the default stack.
+Without always-on Fargate/ALB: API Gateway + Lambda + DynamoDB + KVS signaling minutes + CloudFront—typically **lower** than the old proxy stack at dev scale. No per-byte AWS charge for WebRTC payload (media goes peer-to-peer or via STUN/TURN).
 
 ---
 
 ## References
 
-- [src/README.md](../../src/README.md) — MAVLink ports, components
-- [CONNECTION-POOL-SCHEMA.md](./CONNECTION-POOL-SCHEMA.md), [USER-PROFILES-SCHEMA.md](./USER-PROFILES-SCHEMA.md) — Dynamo shapes (field names may still say `wavelength_zone_id`)
+- [ARCHITECTURE-RELAYS.md](./ARCHITECTURE-RELAYS.md) — relay registry, claim flow, relay types
+- [CONNECTION-POOL-SCHEMA.md](./CONNECTION-POOL-SCHEMA.md) — session table shape
+- [USER-PROFILES-SCHEMA.md](./USER-PROFILES-SCHEMA.md) — profile and hierarchy
+- [LOCAL-VS-SIM-CONNECTION-PLAN.md](./LOCAL-VS-SIM-CONNECTION-PLAN.md) — `local` vs `sim_relay` (sim path legacy)
+- [src/README.md](../../src/README.md) — component map, MAVLink ports
+- `terraform/modules/kvs-webrtc/README.md` — IAM module for signaling
+
+---
+
+## Removed architecture (historical)
+
+The following is **no longer deployed** (`use_proxy_ecs = false`):
+
+- Browser + Pi → **ECS Fargate `rdi-proxy`** via `wss://` ALB
+- WebSocket pairing: `frontend:{session_id}` + `agent:{session_id}`
+- Lambda → proxy `POST /session-status` for active/idle gating
+- CTRL→MAVLink conversion in proxy (moves to Pi or browser)
+
+Do not extend the proxy path for new features.
