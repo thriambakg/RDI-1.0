@@ -86,7 +86,7 @@ Region (wavelength_zone_id = AWS region id)
 
 **Multiple drones on one relay:** each new connection creates a **new** KVS signaling channel and **new** WebRTC peer connection. The Pi runs **one async task per active `session_id`**, each mapped to its own local port or serial device via session metadata.
 
-**Target (multi-session Pi):** daemon polls for all active sessions bound to `relay_id`, spawns/stops WebRTC Master tasks concurrently. **Current code:** single `active_session_id` on relay row and `GET /relays/webrtc-master`—multi-session device API is planned (`GET /relays/active-sessions`).
+**Target (multi-session Pi):** daemon polls `GET /relays/active-sessions`, spawns/stops WebRTC Master tasks concurrently. Relay-registry stores `active_sessions` JSON (one entry per `session_id`). `GET /relays/webrtc-master` remains for backward compatibility (first session only).
 
 ---
 
@@ -162,10 +162,10 @@ Folders, `connection_hierarchy`, relay list—unchanged. See [USER-PROFILES-SCHE
 3. Session API Lambda:
    - Writes **connection-pool** row (`user_id`, `session_id`, `relay_id`, `drone_id`, `status: active`).
    - Calls `CreateSignalingChannel` (KVS), stores `signaling_channel_arn`.
-   - Binds session to relay (`active_session_id`, channel ARN on relay-registry item).
+   - Binds session to relay (`active_sessions` list on relay-registry item).
    - Returns **viewer** WebRTC bundle (signaling WSS + scoped STS creds).
 4. Frontend opens **WebRTC Viewer** for that `session_id` (implementation in progress).
-5. Pi **relay daemon** polls `GET /relays/webrtc-master` (→ future: `active-sessions`).
+5. Pi **relay daemon** polls `GET /relays/active-sessions` (legacy: `webrtc-master` for one session).
 6. Pi **rdi-agent** connects as KVS **Master**, bridges data channel ↔ MAVLink/serial/radio.
 7. Browser and Pi complete WebRTC handshake via KVS signaling; telemetry and commands flow on data channel.
 
@@ -269,9 +269,10 @@ Hosted on **S3 + CloudFront** (RDI-Base-Infra).
 | Claim flow (Pi + console) | Done |
 | `module.kvs-webrtc` IAM | Done |
 | Session API: create/delete KVS channel | Done |
-| `GET /relays/webrtc-master` | Done (single session) |
+| `GET /relays/webrtc-master` | Done (legacy: first session only) |
+| `GET /relays/active-sessions` | Done |
 | ECS / proxy deprecation in tfvars | Done |
-| Multi-session Pi (`active-sessions` API) | Planned |
+| Multi-session relay row (`active_sessions`) | Done |
 | `rdi-relay-daemon` | Planned |
 | `rdi-agent` WebRTC rewrite | Planned |
 | Frontend WebRTC viewer | Planned |

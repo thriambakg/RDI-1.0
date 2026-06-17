@@ -501,13 +501,14 @@ module "session_api" {
 
   # Extensible: add new resources here (e.g. connections, folders) and corresponding methods
   resources = {
-    sessions             = { path_part = "sessions" }
-    user_profile         = { path_part = "user-profile" }
-    relays               = { path_part = "relays" }
-    relays_claim         = { path_part = "claim", parent_resource_key = "relays" }
-    relays_announce      = { path_part = "announce", parent_resource_key = "relays" }
-    relays_claim_status  = { path_part = "claim-status", parent_resource_key = "relays" }
-    relays_webrtc_master = { path_part = "webrtc-master", parent_resource_key = "relays" }
+    sessions               = { path_part = "sessions" }
+    user_profile           = { path_part = "user-profile" }
+    relays                 = { path_part = "relays" }
+    relays_claim           = { path_part = "claim", parent_resource_key = "relays" }
+    relays_announce        = { path_part = "announce", parent_resource_key = "relays" }
+    relays_claim_status    = { path_part = "claim-status", parent_resource_key = "relays" }
+    relays_webrtc_master   = { path_part = "webrtc-master", parent_resource_key = "relays" }
+    relays_active_sessions = { path_part = "active-sessions", parent_resource_key = "relays" }
   }
 
   methods = {
@@ -623,26 +624,35 @@ module "session_api" {
       lambda_arn              = module.relay_registry_api_lambda[0].function_arn
       authorization_type      = "NONE"
     }
+    get_relays_active_sessions = {
+      resource_key            = "relays_active_sessions"
+      http_method             = "GET"
+      integration_type        = "AWS_PROXY"
+      integration_http_method = "POST"
+      lambda_arn              = module.relay_registry_api_lambda[0].function_arn
+      authorization_type      = "NONE"
+    }
   }
 
   lambda_permissions = {
-    post                     = { function_arn = module.session_api_lambda[0].function_arn, http_method = "POST", resource_path = "sessions" }
-    get                      = { function_arn = module.session_api_lambda[0].function_arn, http_method = "GET", resource_path = "sessions" }
-    delete                   = { function_arn = module.session_api_lambda[0].function_arn, http_method = "DELETE", resource_path = "sessions" }
-    patch                    = { function_arn = module.session_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "sessions" }
-    get_user_profile         = { function_arn = module.user_profile_api_lambda[0].function_arn, http_method = "GET", resource_path = "user-profile" }
-    patch_user_profile       = { function_arn = module.user_profile_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "user-profile" }
-    post_relays              = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "POST", resource_path = "relays" }
-    get_relays               = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "GET", resource_path = "relays" }
-    patch_relays             = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "relays" }
-    delete_relays            = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "DELETE", resource_path = "relays" }
-    post_relays_claim        = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "POST", resource_path = "relays/claim" }
-    post_relays_announce     = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "POST", resource_path = "relays/announce" }
-    get_relays_claim_status  = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "GET", resource_path = "relays/claim-status" }
-    get_relays_webrtc_master = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "GET", resource_path = "relays/webrtc-master" }
+    post                       = { function_arn = module.session_api_lambda[0].function_arn, http_method = "POST", resource_path = "sessions" }
+    get                        = { function_arn = module.session_api_lambda[0].function_arn, http_method = "GET", resource_path = "sessions" }
+    delete                     = { function_arn = module.session_api_lambda[0].function_arn, http_method = "DELETE", resource_path = "sessions" }
+    patch                      = { function_arn = module.session_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "sessions" }
+    get_user_profile           = { function_arn = module.user_profile_api_lambda[0].function_arn, http_method = "GET", resource_path = "user-profile" }
+    patch_user_profile         = { function_arn = module.user_profile_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "user-profile" }
+    post_relays                = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "POST", resource_path = "relays" }
+    get_relays                 = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "GET", resource_path = "relays" }
+    patch_relays               = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "PATCH", resource_path = "relays" }
+    delete_relays              = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "DELETE", resource_path = "relays" }
+    post_relays_claim          = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "POST", resource_path = "relays/claim" }
+    post_relays_announce       = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "POST", resource_path = "relays/announce" }
+    get_relays_claim_status    = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "GET", resource_path = "relays/claim-status" }
+    get_relays_webrtc_master   = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "GET", resource_path = "relays/webrtc-master" }
+    get_relays_active_sessions = { function_arn = module.relay_registry_api_lambda[0].function_arn, http_method = "GET", resource_path = "relays/active-sessions" }
   }
 
-  deployment_trigger = "5"
+  deployment_trigger = "6"
 }
 
 # Scheduled idle-expiry: mark sessions idle when idle_after has passed (no DynamoDB TTL delete)

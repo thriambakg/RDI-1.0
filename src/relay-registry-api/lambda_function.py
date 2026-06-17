@@ -22,6 +22,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from kvs_signaling import build_webrtc_master_bundle
+from relay_active_sessions import parse_active_sessions
 
 
 def _to_dynamo(obj: Any) -> dict:
@@ -108,6 +109,10 @@ def lambda_handler(event: dict, context: Any) -> dict:
         if path.endswith("/webrtc-master") and http_method == "GET":
             params = event.get("queryStringParameters") or {}
             return _device_webrtc_master(params, headers)
+
+        if path.endswith("/active-sessions") and http_method == "GET":
+            params = event.get("queryStringParameters") or {}
+            return _device_active_sessions(params, headers)
 
         user_id = _get_user_id(event)
         if not user_id:
@@ -334,15 +339,10 @@ def _device_claim_status(params: dict, headers: dict) -> dict:
     return _response(404, {"error": "Device not found; run announce first"}, headers)
 
 
-def _device_webrtc_master(params: dict, headers: dict) -> dict:
-    """GET /relays/webrtc-master — Pi fetches MASTER signaling creds for its active session."""
-    device_serial = (params.get("device_serial") or "").strip().lower()
-    device_secret = (params.get("device_secret") or "").strip()
-
-    if not device_serial or not device_secret:
-        return _response(400, {"error": "device_serial and device_secret required"}, headers)
-
-    dynamodb = boto3.client("dynamodb")
+def _authenticate_claimed_device(
+    dynamodb, device_serial: str, device_secret: str
+) -> dict | None:
+    """Return relay-registry item for a claimed device, or None."""
     resp = dynamodb.query(
         TableName=TABLE_NAME,
         IndexName="DeviceSerialIndex",
@@ -350,20 +350,96 @@ def _device_webrtc_master(params: dict, headers: dict) -> dict:
         ExpressionAttributeValues={":ds": {"S": device_serial}},
         Limit=10,
     )
-    relay_item = None
     for item in resp.get("Items", []):
         if (item.get("claim_status") or {}).get("S") != "claimed":
             continue
         if _hash_secret(device_secret) != (item.get("device_secret_hash") or {}).get("S", ""):
             continue
-        relay_item = item
-        break
+        return item
+    return None
 
+
+def _device_active_sessions(params: dict, headers: dict) -> dict:
+    """GET /relays/active-sessions — Pi lists all active WebRTC sessions for this relay."""
+    device_serial = (params.get("device_serial") or "").strip().lower()
+    device_secret = (params.get("device_secret") or "").strip()
+
+    if not device_serial or not device_secret:
+        return _response(400, {"error": "device_serial and device_secret required"}, headers)
+
+    dynamodb = boto3.client("dynamodb")
+    relay_item = _authenticate_claimed_device(dynamodb, device_serial, device_secret)
     if not relay_item:
         return _response(404, {"error": "Device not found or invalid secret"}, headers)
 
-    session_id = (relay_item.get("active_session_id") or {}).get("S", "")
-    channel_arn = (relay_item.get("signaling_channel_arn") or {}).get("S", "")
+    relay_id = (relay_item.get("relay_id") or {}).get("S", "")
+    zone = (relay_item.get("wavelength_zone_id") or {}).get("S", "")
+    entries = parse_active_sessions(relay_item)
+    if not entries:
+        return _response(
+            200,
+            {
+                "relay_id": relay_id,
+                "wavelength_zone_id": zone,
+                "sessions": [],
+                "status": "no_active_sessions",
+            },
+            headers,
+        )
+
+    sessions_out = []
+    for entry in entries:
+        session_id = entry.get("session_id", "")
+        channel_arn = entry.get("signaling_channel_arn", "")
+        if not session_id or not channel_arn:
+            continue
+        try:
+            master = build_webrtc_master_bundle(session_id, channel_arn)
+        except Exception as e:
+            _log("active-sessions creds failed", session_id=session_id, error=str(e))
+            continue
+        sessions_out.append(
+            {
+                "session_id": session_id,
+                "drone_id": entry.get("drone_id", ""),
+                "mavlink_port": entry.get("mavlink_port"),
+                "mavlink_host": entry.get("mavlink_host") or "127.0.0.1",
+                "webrtc": master,
+            }
+        )
+
+    return _response(
+        200,
+        {
+            "relay_id": relay_id,
+            "wavelength_zone_id": zone,
+            "sessions": sessions_out,
+            "status": "ok",
+        },
+        headers,
+    )
+
+
+def _device_webrtc_master(params: dict, headers: dict) -> dict:
+    """GET /relays/webrtc-master — legacy: MASTER creds for first active session only."""
+    device_serial = (params.get("device_serial") or "").strip().lower()
+    device_secret = (params.get("device_secret") or "").strip()
+
+    if not device_serial or not device_secret:
+        return _response(400, {"error": "device_serial and device_secret required"}, headers)
+
+    dynamodb = boto3.client("dynamodb")
+    relay_item = _authenticate_claimed_device(dynamodb, device_serial, device_secret)
+    if not relay_item:
+        return _response(404, {"error": "Device not found or invalid secret"}, headers)
+
+    entries = parse_active_sessions(relay_item)
+    if not entries:
+        return _response(200, {"status": "no_active_session"}, headers)
+
+    entry = entries[0]
+    session_id = entry.get("session_id", "")
+    channel_arn = entry.get("signaling_channel_arn", "")
     if not session_id or not channel_arn:
         return _response(200, {"status": "no_active_session"}, headers)
 
@@ -373,6 +449,9 @@ def _device_webrtc_master(params: dict, headers: dict) -> dict:
         _log("webrtc-master creds failed", session_id=session_id, error=str(e))
         return _response(500, {"error": str(e)}, headers)
 
+    master["drone_id"] = entry.get("drone_id", "")
+    master["mavlink_port"] = entry.get("mavlink_port")
+    master["mavlink_host"] = entry.get("mavlink_host") or "127.0.0.1"
     return _response(200, master, headers)
 
 

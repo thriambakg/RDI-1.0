@@ -25,6 +25,12 @@ from kvs_signaling import (
     delete_signaling_channel,
     webrtc_enabled,
 )
+from relay_active_sessions import (
+    make_session_entry,
+    parse_active_sessions,
+    remove_session_entry,
+    upsert_session_entry,
+)
 
 TABLE_NAME = os.environ["CONNECTION_POOL_TABLE"]
 REGION = os.environ["AWS_REGION"]
@@ -109,17 +115,42 @@ def _fetch_relay_config(dynamodb, user_id: str, relay_id: str, wavelength_zone_i
     return out
 
 
-def _bind_relay_webrtc_session(
+def _add_relay_active_session(
     dynamodb,
     user_id: str,
     relay_id: str,
     wavelength_zone_id: str,
     session_id: str,
     channel_arn: str,
+    *,
+    drone_id: str = "",
+    mavlink_port: int | None = None,
+    mavlink_host: str = "",
 ) -> None:
+    """Append or update one active WebRTC session on the relay (multi-drone)."""
     if not RELAY_REGISTRY_TABLE or not relay_id or not channel_arn:
         return
     try:
+        resp = dynamodb.get_item(
+            TableName=RELAY_REGISTRY_TABLE,
+            Key={
+                "wavelength_zone_id": {"S": wavelength_zone_id},
+                "relay_id": {"S": relay_id},
+            },
+        )
+        item = resp.get("Item") or {}
+        if (item.get("user_id") or {}).get("S") != user_id:
+            _log("add_relay_active_session skipped", relay_id=relay_id, reason="wrong user")
+            return
+        sessions = parse_active_sessions(item)
+        entry = make_session_entry(
+            session_id,
+            channel_arn,
+            drone_id=drone_id,
+            mavlink_port=mavlink_port,
+            mavlink_host=mavlink_host,
+        )
+        sessions = upsert_session_entry(sessions, entry)
         dynamodb.update_item(
             TableName=RELAY_REGISTRY_TABLE,
             Key={
@@ -127,39 +158,74 @@ def _bind_relay_webrtc_session(
                 "relay_id": {"S": relay_id},
             },
             UpdateExpression=(
-                "SET active_session_id = :sid, signaling_channel_arn = :arn, "
-                "webrtc_status = :ws, last_seen = :now"
+                "SET active_sessions = :sessions, webrtc_status = :ws, last_seen = :now "
+                "REMOVE active_session_id, signaling_channel_arn"
             ),
             ConditionExpression="user_id = :uid",
             ExpressionAttributeValues={
-                ":sid": {"S": session_id},
-                ":arn": {"S": channel_arn},
+                ":sessions": {"S": json.dumps(sessions)},
                 ":ws": {"S": "awaiting_master"},
                 ":now": {"N": str(int(time.time()))},
                 ":uid": {"S": user_id},
             },
+        )
+        _log(
+            "relay active_sessions updated",
+            relay_id=relay_id,
+            session_id=session_id,
+            count=len(sessions),
         )
     except ClientError as e:
         if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
             raise
 
 
-def _clear_relay_webrtc_session(
-    dynamodb, user_id: str, relay_id: str, wavelength_zone_id: str
+def _remove_relay_active_session(
+    dynamodb, user_id: str, relay_id: str, wavelength_zone_id: str, session_id: str
 ) -> None:
-    if not RELAY_REGISTRY_TABLE or not relay_id:
+    """Remove one session from relay active_sessions list."""
+    if not RELAY_REGISTRY_TABLE or not relay_id or not session_id:
         return
     try:
-        dynamodb.update_item(
+        resp = dynamodb.get_item(
             TableName=RELAY_REGISTRY_TABLE,
             Key={
                 "wavelength_zone_id": {"S": wavelength_zone_id},
                 "relay_id": {"S": relay_id},
             },
-            UpdateExpression="REMOVE active_session_id, signaling_channel_arn, webrtc_status",
-            ConditionExpression="user_id = :uid",
-            ExpressionAttributeValues={":uid": {"S": user_id}},
         )
+        item = resp.get("Item") or {}
+        if (item.get("user_id") or {}).get("S") != user_id:
+            return
+        sessions = remove_session_entry(parse_active_sessions(item), session_id)
+        if sessions:
+            dynamodb.update_item(
+                TableName=RELAY_REGISTRY_TABLE,
+                Key={
+                    "wavelength_zone_id": {"S": wavelength_zone_id},
+                    "relay_id": {"S": relay_id},
+                },
+                UpdateExpression="SET active_sessions = :sessions, last_seen = :now",
+                ConditionExpression="user_id = :uid",
+                ExpressionAttributeValues={
+                    ":sessions": {"S": json.dumps(sessions)},
+                    ":now": {"N": str(int(time.time()))},
+                    ":uid": {"S": user_id},
+                },
+            )
+        else:
+            dynamodb.update_item(
+                TableName=RELAY_REGISTRY_TABLE,
+                Key={
+                    "wavelength_zone_id": {"S": wavelength_zone_id},
+                    "relay_id": {"S": relay_id},
+                },
+                UpdateExpression="REMOVE active_sessions, webrtc_status, active_session_id, signaling_channel_arn",
+                ConditionExpression="user_id = :uid",
+                ExpressionAttributeValues={":uid": {"S": user_id}},
+            )
+            _update_relay_status(dynamodb, user_id, relay_id, wavelength_zone_id, "offline")
+        _log("relay active_sessions removed", relay_id=relay_id, session_id=session_id)
     except ClientError:
         pass
 
@@ -519,8 +585,26 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
         _notify_proxy_session_status(session_id, "active")
 
     if webrtc_enabled() and relay_id and signaling_channel_arn:
-        _bind_relay_webrtc_session(
-            dynamodb, user_id, relay_id, wavelength_zone_id, session_id, signaling_channel_arn
+        eff_port = None
+        metadata = body.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("mavlink_port") is not None:
+            try:
+                eff_port = int(metadata["mavlink_port"])
+            except (TypeError, ValueError):
+                pass
+        if eff_port is None:
+            eff_port = int(MAVLINK_PORT) if MAVLINK_PORT else 18570
+        eff_host = (relay_config or {}).get("mavlink_host") or "127.0.0.1"
+        _add_relay_active_session(
+            dynamodb,
+            user_id,
+            relay_id,
+            wavelength_zone_id,
+            session_id,
+            signaling_channel_arn,
+            drone_id=drone_id,
+            mavlink_port=eff_port,
+            mavlink_host=eff_host,
         )
 
     if not WAVELENGTH_INSTANCE_ID:
@@ -601,7 +685,7 @@ def _teardown_webrtc_session(dynamodb, user_id: str, session_id: str) -> None:
             except Exception as e:
                 _log("kvs channel delete failed", session_id=session_id, error=str(e))
         if relay_id:
-            _clear_relay_webrtc_session(dynamodb, user_id, relay_id, zone)
+            _remove_relay_active_session(dynamodb, user_id, relay_id, zone, session_id)
     except ClientError:
         pass
 
