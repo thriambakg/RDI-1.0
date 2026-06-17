@@ -45,6 +45,7 @@ import {
 import { deleteSession, releaseSession, activateSession, getSession } from '../../services/sessionApi'
 import { deleteRelay, updateRelayStatus } from '../../services/relayApi'
 import type { CreateSessionResponse } from '../../services/sessionApi'
+import { usesWebSocketTransport } from '../../utils/sessionTransport'
 import './Console.css'
 
 const { regions: REGION_OPTIONS } = getEnvironmentRegions()
@@ -274,13 +275,13 @@ export default function Console() {
     const allSessions = collectSessions(hierarchy, [])
     const active = allSessions.filter((s) => s.status === 'active')
     if (active.length === 0) return
-    // Fetch endpoint for each active session and open WebSocket (skip already connected or connecting)
+    // Fetch endpoint for each active WebSocket session (skip WebRTC and failed retries)
     active.forEach((s) => {
       const state = connectionState(s.session_id)
-      if (state === 'open' || state === 'connecting') return
+      if (state === 'open' || state === 'connecting' || state === 'failed') return
       getSession(s.session_id)
         .then((data) => {
-          if (data.status === 'active' && data.endpoint) {
+          if (data.status === 'active' && data.endpoint && usesWebSocketTransport(data)) {
             openSessionWs(s.session_id, data.endpoint)
           }
         })
@@ -298,7 +299,9 @@ export default function Console() {
           relay_id: res.relay_id,
         })
       )
-      openSessionWs(res.session_id, res.endpoint)
+      if (usesWebSocketTransport(res)) {
+        openSessionWs(res.session_id, res.endpoint)
+      }
       if (res.relay_id) {
         updateRelays((r) =>
           updateRelayStatusInRelays(r, res.relay_id!, selectedZone.id, 'online')
@@ -372,7 +375,7 @@ export default function Console() {
     try {
       await activateSession(sessionId)
       const data = await getSession(sessionId)
-      if (data.status === 'active' && data.endpoint) {
+      if (data.status === 'active' && data.endpoint && usesWebSocketTransport(data)) {
         openSessionWs(sessionId, data.endpoint)
       }
     } catch (err) {

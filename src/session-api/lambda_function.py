@@ -924,6 +924,11 @@ def _get_session(
             "endpoint": item.get("endpoint", {}).get("S"),
             "status": item.get("status", {}).get("S"),
         }
+        transport = (item.get("transport") or {}).get("S")
+        if transport:
+            out["transport"] = transport
+        elif webrtc_enabled():
+            out["transport"] = "webrtc"
         relay_id = item.get("relay_id", {}).get("S")
         wl_zone = item.get("wavelength_zone_id", {}).get("S")
         if relay_id:
@@ -1001,6 +1006,11 @@ def _get_session(
             "endpoint": item.get("endpoint", {}).get("S"),
             "expires_at": expires_at_val,
         }
+        transport = (item.get("transport") or {}).get("S")
+        if transport:
+            sess["transport"] = transport
+        elif webrtc_enabled():
+            sess["transport"] = "webrtc"
         if item.get("relay_id", {}).get("S"):
             sess["relay_id"] = item["relay_id"]["S"]
         metadata_raw = item.get("metadata", {}).get("S")

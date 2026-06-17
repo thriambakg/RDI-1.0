@@ -36,11 +36,15 @@ export interface RelayConfig {
   mavlink_port?: number
 }
 
+export type SessionTransport = 'webrtc' | 'websocket'
+
 export interface CreateSessionResponse {
   session_id: string
   drone_id: string
   endpoint: string
   expires_at: number
+  transport?: SessionTransport
+  webrtc?: Record<string, unknown>
   relay_id?: string
   relay_config?: RelayConfig
   carrier_ip?: string
@@ -55,6 +59,7 @@ export interface SessionInfo {
   status: string
   wavelength_zone_id?: string
   endpoint?: string
+  transport?: SessionTransport
   expires_at?: number
 }
 
@@ -93,6 +98,7 @@ export async function createSession(params: CreateSessionParams): Promise<Create
   console.log('✅ [RDI Session API] Session created:', {
     session_id: data.session_id,
     drone_id: data.drone_id,
+    transport: data.transport,
     endpoint: data.endpoint,
   })
   return data
@@ -156,6 +162,7 @@ export async function getSession(session_id: string): Promise<{
   drone_id: string
   endpoint: string
   status: string
+  transport?: SessionTransport
 }> {
   const url = `${getApiBaseUrl()}/sessions?session_id=${encodeURIComponent(session_id)}`
   const headers = await getAuthHeaders()

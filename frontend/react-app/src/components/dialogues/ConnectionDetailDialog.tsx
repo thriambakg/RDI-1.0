@@ -10,6 +10,7 @@ import {
 import { useCallback, useEffect, useState } from 'react'
 import { getSession } from '../../services/sessionApi'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
+import { usesWebSocketTransport } from '../../utils/sessionTransport'
 import type { RelayRef } from '../../services/profileApi'
 
 const PING_BYTES = new Uint8Array([0x50, 0x49, 0x4e, 0x47]) // "PING"
@@ -48,6 +49,7 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
     drone_id: string
     endpoint: string
     status: string
+    transport?: string
     relay_id?: string
     carrier_ip?: string
     mavlink_host?: string
@@ -110,11 +112,12 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
       .finally(() => setLoading(false))
   }, [open, sessionId])
 
-  // Keep WebSocket open for active sessions when dialog is open
+  // Keep WebSocket open for legacy WebSocket sessions when dialog is open
   useEffect(() => {
     if (!open || !sessionId || !data?.endpoint || data?.status !== 'active') return
+    if (!usesWebSocketTransport(data)) return
     openSession(sessionId, data.endpoint)
-  }, [open, sessionId, data?.endpoint, data?.status, openSession])
+  }, [open, sessionId, data?.endpoint, data?.status, data?.transport, openSession])
 
   // Listen for agent log messages (RLOG) when WebSocket is connected
   useEffect(() => {
@@ -248,10 +251,11 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
   }, [data?.session_id, getWs, addLog])
 
   const name = data?.drone_id ? data.drone_id.split('-').slice(0, -1).join('-') || data.drone_id : ''
+  const isWebRtc = !usesWebSocketTransport(data ?? undefined)
   const wsState = sessionId ? connectionState(sessionId) : 'closed'
   const wsError = sessionId ? connectionError(sessionId) : null
-  const isConnected = wsState === 'open'
-  const isFailed = wsState === 'failed'
+  const isConnected = isWebRtc ? data?.status === 'active' : wsState === 'open'
+  const isFailed = !isWebRtc && wsState === 'failed'
 
   return (
     <Dialog
@@ -290,27 +294,39 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
                 height: 10,
                 borderRadius: '50%',
                 backgroundColor:
-                  wsState === 'open'
-                    ? '#22c55e'
-                    : wsState === 'failed'
-                      ? '#ef4444'
-                      : wsState === 'connecting'
-                        ? '#eab308'
-                        : '#64748b',
+                  isWebRtc
+                    ? '#3b82f6'
+                    : wsState === 'open'
+                      ? '#22c55e'
+                      : wsState === 'failed'
+                        ? '#ef4444'
+                        : wsState === 'connecting'
+                          ? '#eab308'
+                          : '#64748b',
                 flexShrink: 0,
               }}
               aria-label={
-                isConnected ? 'Connection established' : isFailed ? 'Connection failed' : wsState === 'connecting' ? 'Connecting' : 'Not connected'
+                isWebRtc
+                  ? 'WebRTC session active (viewer pending)'
+                  : isConnected
+                    ? 'Connection established'
+                    : isFailed
+                      ? 'Connection failed'
+                      : wsState === 'connecting'
+                        ? 'Connecting'
+                        : 'Not connected'
               }
             />
             <Typography component="span" variant="caption" sx={{ color: '#94a3b8', textTransform: 'none' }}>
-              {wsState === 'open'
-                ? 'Connection established'
-                : isFailed
-                  ? 'Connection failed'
-                  : wsState === 'connecting'
-                    ? 'Connecting…'
-                    : 'Not connected'}
+              {isWebRtc
+                ? 'WebRTC — awaiting Pi + browser viewer'
+                : wsState === 'open'
+                  ? 'Connection established'
+                  : isFailed
+                    ? 'Connection failed'
+                    : wsState === 'connecting'
+                      ? 'Connecting…'
+                      : 'Not connected'}
             </Typography>
           </Box>
         )}
@@ -318,10 +334,16 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
       <DialogContent sx={{ color: '#f8fafc' }}>
         {loading && <Typography sx={{ color: '#94a3b8' }}>Loading…</Typography>}
         {error && <Typography sx={{ color: '#f87171' }}>{error}</Typography>}
+        {isWebRtc && data?.status === 'active' && (
+          <Typography sx={{ color: '#94a3b8', fontSize: '0.875rem', mb: 2 }}>
+            Session is provisioned on AWS (KVS signaling). Live control uses WebRTC, not the legacy proxy at{' '}
+            <code style={{ color: '#cbd5e1' }}>{data.endpoint}</code>. Pi daemon and browser WebRTC viewer are not connected yet.
+          </Typography>
+        )}
         {isFailed && wsError && (
           <Box sx={{ mb: 2 }}>
             <Typography sx={{ color: '#f87171', fontSize: '0.875rem' }}>{wsError}</Typography>
-            {data?.endpoint && (
+            {data?.endpoint && usesWebSocketTransport(data) && (
               <Button
                 variant="outlined"
                 size="small"

@@ -184,8 +184,13 @@ export function CreateConnectionDialog({
               <strong>Drone ID:</strong> {result.drone_id}
             </Typography>
             <Typography sx={{ color: '#f8fafc', fontSize: '0.875rem', mb: 1 }}>
-              <strong>Endpoint:</strong> {result.endpoint}
+              <strong>Transport:</strong> {result.transport === 'webrtc' ? 'WebRTC (KVS signaling)' : 'WebSocket proxy'}
             </Typography>
+            {result.transport !== 'webrtc' && (
+              <Typography sx={{ color: '#f8fafc', fontSize: '0.875rem', mb: 1 }}>
+                <strong>Endpoint:</strong> {result.endpoint}
+              </Typography>
+            )}
             <Typography sx={{ color: '#94a3b8', fontSize: '0.8rem' }}>
               Run the agent with RDI_SESSION_ID={result.session_id} RDI_MAVLINK_HOST=
               {result.mavlink_host ?? result.relay_config?.mavlink_host ?? '127.0.0.1'}{' '}
