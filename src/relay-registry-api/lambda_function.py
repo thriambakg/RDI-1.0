@@ -388,15 +388,20 @@ def _device_active_sessions(params: dict, headers: dict) -> dict:
         )
 
     sessions_out = []
+    creds_errors: list[str] = []
     for entry in entries:
         session_id = entry.get("session_id", "")
         channel_arn = entry.get("signaling_channel_arn", "")
         if not session_id or not channel_arn:
+            creds_errors.append(
+                f"{session_id or 'unknown'}: missing session_id or signaling_channel_arn"
+            )
             continue
         try:
             master = build_webrtc_master_bundle(session_id, channel_arn)
         except Exception as e:
             _log("active-sessions creds failed", session_id=session_id, error=str(e))
+            creds_errors.append(f"{session_id}: {e}")
             continue
         sessions_out.append(
             {
@@ -408,16 +413,15 @@ def _device_active_sessions(params: dict, headers: dict) -> dict:
             }
         )
 
-    return _response(
-        200,
-        {
-            "relay_id": relay_id,
-            "wavelength_zone_id": zone,
-            "sessions": sessions_out,
-            "status": "ok",
-        },
-        headers,
-    )
+    payload = {
+        "relay_id": relay_id,
+        "wavelength_zone_id": zone,
+        "sessions": sessions_out,
+        "status": "ok" if sessions_out else ("creds_error" if creds_errors else "ok"),
+    }
+    if creds_errors and not sessions_out:
+        payload["errors"] = creds_errors[:5]
+    return _response(200, payload, headers)
 
 
 def _device_webrtc_master(params: dict, headers: dict) -> dict:
