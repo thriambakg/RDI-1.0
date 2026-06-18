@@ -1,0 +1,4 @@
+# Full install (laptop / CI). On Pi prefer apt python3-boto3 + requirements-worker.txt.
+-r requirements-worker.txt
+boto3>=1.34.0
+botocore>=1.34.0

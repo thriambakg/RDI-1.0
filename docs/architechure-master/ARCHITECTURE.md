@@ -191,7 +191,7 @@ See [ARCHITECTURE-RELAYS.md](./ARCHITECTURE-RELAYS.md) for registry schema and c
 | Component | Role |
 |-----------|------|
 | `rdi-relay-claim.py` | One-time (or re-) provisioning; pairing code |
-| `rdi-relay-daemon` | Polls API for active sessions; spawn/stop agent tasks (**planned**) |
+| `rdi-relay-daemon` | Polls API for active sessions; spawn/stop agent tasks (**Python on Pi — manual install**) |
 | `rdi-agent` | Per-session WebRTC Master + local MAVLink/serial bridge (**rewrite in progress**) |
 
 ### Concurrency on CM4
@@ -273,7 +273,7 @@ Hosted on **S3 + CloudFront** (RDI-Base-Infra).
 | `GET /relays/active-sessions` | Done |
 | ECS / proxy deprecation in tfvars | Done |
 | Multi-session relay row (`active_sessions`) | Done |
-| `rdi-relay-daemon` | Planned |
+| `rdi-relay-daemon` | Done (Python; `scripts/relay-device/`, manual SSH install) |
 | `rdi-agent` WebRTC rewrite | Planned |
 | Frontend WebRTC viewer | Planned |
 | Video pipeline (`h264_v4l2m2m`) | Planned |

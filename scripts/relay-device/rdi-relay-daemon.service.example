@@ -1,0 +1,27 @@
+# Relay daemon — polls GET /relays/active-sessions and spawns WebRTC workers.
+#
+# Install (on Pi, after rdi-relay-claim.py):
+#   sudo mkdir -p /opt/rdi
+#   sudo cp rdi-relay-daemon.py kvs_master_worker.py rdi_device_config.py /opt/rdi/
+#   sudo pip3 install -r requirements.txt
+#   sudo cp rdi-relay-daemon.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now rdi-relay-daemon
+
+[Unit]
+Description=RDI relay daemon (WebRTC session workers)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/rdi
+Environment=PYTHONUNBUFFERED=1
+# Optional override if not in /etc/rdi/relay.conf:
+# Environment=RDI_API_BASE_URL=https://YOUR_API.execute-api.us-east-1.amazonaws.com/production
+ExecStart=/usr/bin/python3 /opt/rdi/rdi-relay-daemon.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

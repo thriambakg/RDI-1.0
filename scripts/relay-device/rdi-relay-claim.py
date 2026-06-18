@@ -31,6 +31,10 @@ DEVICE_STATE_PATH = Path(os.environ.get("RDI_DEVICE_STATE", "/etc/rdi/device.jso
 POLL_INTERVAL_SEC = int(os.environ.get("RDI_CLAIM_POLL_SEC", "5"))
 
 
+def _clean_credential(value: str) -> str:
+    return value.replace("\x00", "").strip()
+
+
 def _api_base() -> str:
     base = (os.environ.get("RDI_API_BASE_URL") or "").strip().rstrip("/")
     if not base:
@@ -45,15 +49,16 @@ def _device_serial() -> str:
         Path("/proc/cpuinfo"),
     ):
         if path.name == "serial-number" and path.exists():
-            return path.read_text().strip().lower()[:32]
+            raw = path.read_bytes().decode("utf-8", errors="ignore")
+            return _clean_credential(raw).lower()[:32]
         if path.name == "cpuinfo":
             for line in path.read_text().splitlines():
                 if line.lower().startswith("serial"):
-                    return line.split(":", 1)[1].strip().lower()[:32]
+                    return _clean_credential(line.split(":", 1)[1]).lower()[:32]
     for iface in ("wlan0", "eth0"):
         addr = Path(f"/sys/class/net/{iface}/address")
         if addr.exists():
-            return addr.read_text().strip().replace(":", "").lower()
+            return _clean_credential(addr.read_text()).replace(":", "").lower()
     import uuid
     return uuid.getnode().to_bytes(6, "big").hex()
 
@@ -66,6 +71,10 @@ def _load_state() -> dict:
 
 def _save_state(state: dict) -> None:
     DEVICE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if "device_serial" in state and isinstance(state["device_serial"], str):
+        state["device_serial"] = _clean_credential(state["device_serial"]).lower()
+    if "device_secret" in state and isinstance(state["device_secret"], str):
+        state["device_secret"] = _clean_credential(state["device_secret"])
     DEVICE_STATE_PATH.write_text(json.dumps(state, indent=2))
     try:
         os.chmod(DEVICE_STATE_PATH, 0o600)

@@ -82,24 +82,48 @@ print(
 )
 
 
+def _get_relay_registry_item(
+    dynamodb, user_id: str, relay_id: str, wavelength_zone_id: str | None = None
+) -> dict | None:
+    """Load relay-registry item by relay_id (direct key, then UserRelayIndex fallback)."""
+    if not RELAY_REGISTRY_TABLE or not relay_id:
+        return None
+    if wavelength_zone_id:
+        try:
+            resp = dynamodb.get_item(
+                TableName=RELAY_REGISTRY_TABLE,
+                Key={
+                    "wavelength_zone_id": {"S": wavelength_zone_id},
+                    "relay_id": {"S": relay_id},
+                },
+            )
+            item = resp.get("Item")
+            if item and item.get("user_id", {}).get("S") == user_id:
+                return item
+        except ClientError:
+            pass
+    try:
+        resp = dynamodb.query(
+            TableName=RELAY_REGISTRY_TABLE,
+            IndexName="UserRelayIndex",
+            KeyConditionExpression="user_id = :uid",
+            ExpressionAttributeValues={":uid": {"S": user_id}},
+        )
+        for item in resp.get("Items", []):
+            if item.get("relay_id", {}).get("S") == relay_id:
+                if item.get("user_id", {}).get("S") == user_id:
+                    return item
+    except ClientError:
+        return None
+    return None
+
+
 def _fetch_relay_config(dynamodb, user_id: str, relay_id: str, wavelength_zone_id: str) -> dict | None:
     """Fetch relay from registry; return config (relay_type, mavlink_host) if user owns it."""
     if not RELAY_REGISTRY_TABLE or not relay_id:
         return None
-    try:
-        resp = dynamodb.get_item(
-            TableName=RELAY_REGISTRY_TABLE,
-            Key={
-                "wavelength_zone_id": {"S": wavelength_zone_id},
-                "relay_id": {"S": relay_id},
-            },
-        )
-    except ClientError:
-        return None
-    item = resp.get("Item")
+    item = _get_relay_registry_item(dynamodb, user_id, relay_id, wavelength_zone_id)
     if not item:
-        return None
-    if item.get("user_id", {}).get("S") != user_id:
         return None
     out: dict = {
         "relay_type": (item.get("relay_type", {}).get("S") or "local").strip().lower(),
@@ -131,17 +155,11 @@ def _add_relay_active_session(
     if not RELAY_REGISTRY_TABLE or not relay_id or not channel_arn:
         return
     try:
-        resp = dynamodb.get_item(
-            TableName=RELAY_REGISTRY_TABLE,
-            Key={
-                "wavelength_zone_id": {"S": wavelength_zone_id},
-                "relay_id": {"S": relay_id},
-            },
-        )
-        item = resp.get("Item") or {}
-        if (item.get("user_id") or {}).get("S") != user_id:
-            _log("add_relay_active_session skipped", relay_id=relay_id, reason="wrong user")
+        item = _get_relay_registry_item(dynamodb, user_id, relay_id, wavelength_zone_id)
+        if not item:
+            _log("add_relay_active_session skipped", relay_id=relay_id, reason="relay not found")
             return
+        relay_zone = (item.get("wavelength_zone_id") or {}).get("S") or wavelength_zone_id
         sessions = parse_active_sessions(item)
         entry = make_session_entry(
             session_id,
@@ -154,7 +172,7 @@ def _add_relay_active_session(
         dynamodb.update_item(
             TableName=RELAY_REGISTRY_TABLE,
             Key={
-                "wavelength_zone_id": {"S": wavelength_zone_id},
+                "wavelength_zone_id": {"S": relay_zone},
                 "relay_id": {"S": relay_id},
             },
             UpdateExpression=(
@@ -187,22 +205,16 @@ def _remove_relay_active_session(
     if not RELAY_REGISTRY_TABLE or not relay_id or not session_id:
         return
     try:
-        resp = dynamodb.get_item(
-            TableName=RELAY_REGISTRY_TABLE,
-            Key={
-                "wavelength_zone_id": {"S": wavelength_zone_id},
-                "relay_id": {"S": relay_id},
-            },
-        )
-        item = resp.get("Item") or {}
-        if (item.get("user_id") or {}).get("S") != user_id:
+        item = _get_relay_registry_item(dynamodb, user_id, relay_id, wavelength_zone_id)
+        if not item:
             return
+        relay_zone = (item.get("wavelength_zone_id") or {}).get("S") or wavelength_zone_id
         sessions = remove_session_entry(parse_active_sessions(item), session_id)
         if sessions:
             dynamodb.update_item(
                 TableName=RELAY_REGISTRY_TABLE,
                 Key={
-                    "wavelength_zone_id": {"S": wavelength_zone_id},
+                    "wavelength_zone_id": {"S": relay_zone},
                     "relay_id": {"S": relay_id},
                 },
                 UpdateExpression="SET active_sessions = :sessions, last_seen = :now",
@@ -217,14 +229,14 @@ def _remove_relay_active_session(
             dynamodb.update_item(
                 TableName=RELAY_REGISTRY_TABLE,
                 Key={
-                    "wavelength_zone_id": {"S": wavelength_zone_id},
+                    "wavelength_zone_id": {"S": relay_zone},
                     "relay_id": {"S": relay_id},
                 },
                 UpdateExpression="REMOVE active_sessions, webrtc_status, active_session_id, signaling_channel_arn",
                 ConditionExpression="user_id = :uid",
                 ExpressionAttributeValues={":uid": {"S": user_id}},
             )
-            _update_relay_status(dynamodb, user_id, relay_id, wavelength_zone_id, "offline")
+            _update_relay_status(dynamodb, user_id, relay_id, relay_zone, "offline")
         _log("relay active_sessions removed", relay_id=relay_id, session_id=session_id)
     except ClientError:
         pass
