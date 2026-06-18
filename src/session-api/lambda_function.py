@@ -713,6 +713,8 @@ def _release_session(user_id: str, session_id: str | None, headers: dict, *, per
 
     if permanent:
         session_existed = True
+        # Teardown while session row still exists (needs relay_id + channel_arn).
+        _teardown_webrtc_session(dynamodb, user_id, session_id)
         try:
             dynamodb.delete_item(
                 TableName=TABLE_NAME,
@@ -729,7 +731,6 @@ def _release_session(user_id: str, session_id: str | None, headers: dict, *, per
                 raise
         if USER_PROFILES_TABLE:
             _upsert_profile_remove_session(dynamodb, user_id, session_id)
-        _teardown_webrtc_session(dynamodb, user_id, session_id)
         _log("release_session permanent done", session_id=session_id, existed=session_existed)
         return _response(
             200,
