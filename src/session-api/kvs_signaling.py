@@ -54,9 +54,23 @@ def delete_signaling_channel(channel_arn: str) -> None:
             raise
 
 
-def get_signaling_endpoint(channel_arn: str, role: str) -> str:
+def _kinesisvideo_client(credentials: dict[str, str] | None = None):
+    if credentials:
+        return boto3.client(
+            "kinesisvideo",
+            region_name=REGION,
+            aws_access_key_id=credentials["accessKeyId"],
+            aws_secret_access_key=credentials["secretAccessKey"],
+            aws_session_token=credentials.get("sessionToken"),
+        )
+    return boto3.client("kinesisvideo", region_name=REGION)
+
+
+def get_signaling_endpoint(
+    channel_arn: str, role: str, credentials: dict[str, str] | None = None
+) -> str:
     """Return WSS URL for MASTER or VIEWER."""
-    resp = _kinesisvideo().get_signaling_channel_endpoint(
+    resp = _kinesisvideo_client(credentials).get_signaling_channel_endpoint(
         ChannelARN=channel_arn,
         SingleMasterChannelEndpointConfiguration={
             "Protocols": ["WSS"],
@@ -109,18 +123,20 @@ def _session_credentials(channel_arn: str, role: str, session_id: str) -> dict[s
 
 
 def build_webrtc_viewer_bundle(session_id: str, channel_arn: str) -> dict[str, Any]:
+    credentials = _session_credentials(channel_arn, "VIEWER", session_id)
     return {
         "transport": "webrtc",
         "channel_arn": channel_arn,
         "channel_name": session_id,
         "region": REGION,
         "role": "VIEWER",
-        "signaling_endpoint": get_signaling_endpoint(channel_arn, "VIEWER"),
-        "credentials": _session_credentials(channel_arn, "VIEWER", session_id),
+        "signaling_endpoint": get_signaling_endpoint(channel_arn, "VIEWER", credentials),
+        "credentials": credentials,
     }
 
 
 def build_webrtc_master_bundle(session_id: str, channel_arn: str) -> dict[str, Any]:
+    credentials = _session_credentials(channel_arn, "MASTER", session_id)
     return {
         "transport": "webrtc",
         "session_id": session_id,
@@ -128,6 +144,6 @@ def build_webrtc_master_bundle(session_id: str, channel_arn: str) -> dict[str, A
         "channel_name": session_id,
         "region": REGION,
         "role": "MASTER",
-        "signaling_endpoint": get_signaling_endpoint(channel_arn, "MASTER"),
-        "credentials": _session_credentials(channel_arn, "MASTER", session_id),
+        "signaling_endpoint": get_signaling_endpoint(channel_arn, "MASTER", credentials),
+        "credentials": credentials,
     }

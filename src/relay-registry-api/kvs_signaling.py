@@ -12,7 +12,15 @@ REGION = os.environ.get("AWS_REGION", "us-east-1")
 KVS_WEBRTC_ROLE_ARN = os.environ.get("KVS_WEBRTC_ROLE_ARN", "")
 
 
-def _kinesisvideo():
+def _kinesisvideo_client(credentials: dict[str, str] | None = None):
+    if credentials:
+        return boto3.client(
+            "kinesisvideo",
+            region_name=REGION,
+            aws_access_key_id=credentials["accessKeyId"],
+            aws_secret_access_key=credentials["secretAccessKey"],
+            aws_session_token=credentials.get("sessionToken"),
+        )
     return boto3.client("kinesisvideo", region_name=REGION)
 
 
@@ -20,8 +28,10 @@ def _sts():
     return boto3.client("sts", region_name=REGION)
 
 
-def get_signaling_endpoint(channel_arn: str, role: str) -> str:
-    resp = _kinesisvideo().get_signaling_channel_endpoint(
+def get_signaling_endpoint(
+    channel_arn: str, role: str, credentials: dict[str, str] | None = None
+) -> str:
+    resp = _kinesisvideo_client(credentials).get_signaling_channel_endpoint(
         ChannelARN=channel_arn,
         SingleMasterChannelEndpointConfiguration={
             "Protocols": ["WSS"],
@@ -62,6 +72,12 @@ def build_webrtc_master_bundle(session_id: str, channel_arn: str) -> dict[str, A
         DurationSeconds=3600,
     )
     creds = assumed["Credentials"]
+    cred_dict = {
+        "accessKeyId": creds["AccessKeyId"],
+        "secretAccessKey": creds["SecretAccessKey"],
+        "sessionToken": creds["SessionToken"],
+        "expiration": creds["Expiration"].isoformat(),
+    }
     return {
         "transport": "webrtc",
         "session_id": session_id,
@@ -69,11 +85,6 @@ def build_webrtc_master_bundle(session_id: str, channel_arn: str) -> dict[str, A
         "channel_name": session_id,
         "region": REGION,
         "role": "MASTER",
-        "signaling_endpoint": get_signaling_endpoint(channel_arn, "MASTER"),
-        "credentials": {
-            "accessKeyId": creds["AccessKeyId"],
-            "secretAccessKey": creds["SecretAccessKey"],
-            "sessionToken": creds["SessionToken"],
-            "expiration": creds["Expiration"].isoformat(),
-        },
+        "signaling_endpoint": get_signaling_endpoint(channel_arn, "MASTER", cred_dict),
+        "credentials": cred_dict,
     }
