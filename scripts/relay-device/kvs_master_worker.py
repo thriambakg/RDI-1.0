@@ -26,6 +26,9 @@ from botocore.credentials import Credentials
 
 LOG = logging.getLogger("rdi.kvs_master")
 
+PING_BYTES = b"PING"
+PONG_BYTES = b"PONG"
+
 
 def _load_config() -> dict:
     raw = os.environ.get("RDI_WORKER_CONFIG", "")
@@ -149,9 +152,28 @@ async def run_master(cfg: dict) -> None:
                         @channel.on("message")
                         def on_message(message, ch=channel) -> None:
                             if isinstance(message, bytes):
+                                if message == PING_BYTES:
+                                    ch.send(PONG_BYTES)
+                                    LOG.info(
+                                        "ping pong session_id=%s viewer=%s",
+                                        session_id,
+                                        client_id,
+                                    )
+                                    return
                                 LOG.debug("datachannel rx %d bytes", len(message))
                             else:
                                 LOG.debug("datachannel rx %s", message)
+
+                        @pc.on("icecandidate")
+                        async def on_ice(candidate, cid=client_id, sock=ws) -> None:
+                            if candidate is None:
+                                return
+                            payload = {
+                                "candidate": candidate.candidate,
+                                "sdpMid": candidate.sdpMid,
+                                "sdpMLineIndex": candidate.sdpMLineIndex,
+                            }
+                            await sock.send(_encode_msg("ICE_CANDIDATE", payload, cid))
 
                         @pc.on("connectionstatechange")
                         async def on_state_change(c=pc, cid=client_id) -> None:

@@ -119,6 +119,19 @@ RDI_WORKER_DRY_RUN=1 RDI_POLL_INTERVAL_SEC=3 python3 rdi-relay-daemon.py
 
 Create a connection in the console — logs should show `would start worker session_id=...`.
 
+## Ping / latency test
+
+Once the browser WebRTC viewer connects (open **Connection details** in the console), use **Ping** to measure round-trip latency over the WebRTC data channel. The Pi worker echoes binary `PING` → `PONG` (same protocol as the legacy proxy agent).
+
+On the Pi after code updates:
+
+```bash
+sudo cp /tmp/rdi-install/kvs_master_worker.py /opt/rdi/
+sudo systemctl restart rdi-relay-daemon
+```
+
+Deploy the Session API Lambda so `GET /sessions?session_id=...` returns a fresh `webrtc` viewer bundle with `signaling_endpoint_https`.
+
 ## Updating after code changes
 
 Same as install: `scp` changed files to `/opt/rdi/`, then:

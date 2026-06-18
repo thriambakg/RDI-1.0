@@ -10,11 +10,12 @@ import {
 import { useCallback, useEffect, useState } from 'react'
 import { getSession } from '../../services/sessionApi'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
+import { useSessionWebRtc } from '../../contexts/SessionWebRtcContext'
 import { usesWebSocketTransport } from '../../utils/sessionTransport'
+import { pingDataChannel, PING_BYTES, PONG_BYTES } from '../../utils/rdiPing'
+import type { WebRtcViewerBundle } from '../../services/sessionApi'
 import type { RelayRef } from '../../services/profileApi'
 
-const PING_BYTES = new Uint8Array([0x50, 0x49, 0x4e, 0x47]) // "PING"
-const PONG_BYTES = new Uint8Array([0x50, 0x4f, 0x4e, 0x47]) // "PONG"
 const RLOG_PREFIX = new Uint8Array([0x52, 0x4c, 0x4f, 0x47]) // "RLOG"
 const CTRL_PREFIX = new TextEncoder().encode('CTRL')
 
@@ -54,6 +55,7 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
     carrier_ip?: string
     mavlink_host?: string
     mavlink_port?: string | number
+    webrtc?: WebRtcViewerBundle
   } | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -63,6 +65,13 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
   const [ctrlError, setCtrlError] = useState<string | null>(null)
 
   const { getWs, openSession, connectionState, connectionError } = useSessionWebSocket()
+  const {
+    openSession: openWebRtcSession,
+    closeSession: closeWebRtcSession,
+    getDataChannel,
+    connectionState: webRtcState,
+    connectionError: webRtcError,
+  } = useSessionWebRtc()
 
   const addLog = useCallback((line: string) => {
     setLogLines((prev) => [...prev.slice(-98), line])
@@ -119,6 +128,19 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
     openSession(sessionId, data.endpoint)
   }, [open, sessionId, data?.endpoint, data?.status, data?.transport, openSession])
 
+  // Open WebRTC viewer when dialog is open for WebRTC sessions
+  useEffect(() => {
+    if (!open || !sessionId || !data?.webrtc || data?.status !== 'active') return
+    if (usesWebSocketTransport(data)) return
+    openWebRtcSession(sessionId, data.webrtc)
+  }, [open, sessionId, data?.webrtc, data?.status, data?.transport, openWebRtcSession])
+
+  useEffect(() => {
+    if (!open && sessionId) {
+      closeWebRtcSession(sessionId)
+    }
+  }, [open, sessionId, closeWebRtcSession])
+
   // Listen for agent log messages (RLOG) when WebSocket is connected
   useEffect(() => {
     if (!open || !sessionId || !data?.session_id) return
@@ -146,6 +168,39 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
 
   const runPing = useCallback(() => {
     if (!data?.session_id) return
+
+    const isWebRtcSession = !usesWebSocketTransport(data)
+
+    if (isWebRtcSession) {
+      const channel = getDataChannel(data.session_id)
+      if (!channel) {
+        const state = webRtcState(data.session_id)
+        if (state === 'connecting') {
+          setPingError('WebRTC is still connecting. Wait a moment, then try again.')
+        } else if (state === 'failed') {
+          setPingError(webRtcError(data.session_id) ?? 'WebRTC connection failed.')
+        } else {
+          setPingError('WebRTC not connected. Ensure the Pi relay daemon is running.')
+        }
+        return
+      }
+
+      setPingRunning(true)
+      setPingError(null)
+      addLog('Pinging over WebRTC data channel…')
+      pingDataChannel(channel)
+        .then((rttMs) => {
+          addLog(`Pi relay responded (round-trip ${rttMs}ms).`)
+        })
+        .catch((e) => {
+          const message = e instanceof Error ? e.message : 'Ping failed'
+          setPingError(message)
+          addLog(`Ping failed: ${message}`)
+        })
+        .finally(() => setPingRunning(false))
+      return
+    }
+
     const ws = getWs(data.session_id)
     if (!ws) {
       setPingError('Connection not ready. Wait a moment for the connection to establish, then try again.')
@@ -248,14 +303,17 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
       clearTimeout(t)
       if (!closed) ws.onmessage = prevOnMessage || (() => {})
     }
-  }, [data?.session_id, getWs, addLog])
+  }, [data, getWs, getDataChannel, webRtcState, webRtcError, addLog])
 
   const name = data?.drone_id ? data.drone_id.split('-').slice(0, -1).join('-') || data.drone_id : ''
   const isWebRtc = !usesWebSocketTransport(data ?? undefined)
   const wsState = sessionId ? connectionState(sessionId) : 'closed'
   const wsError = sessionId ? connectionError(sessionId) : null
-  const isConnected = isWebRtc ? data?.status === 'active' : wsState === 'open'
-  const isFailed = !isWebRtc && wsState === 'failed'
+  const rtcState = sessionId ? webRtcState(sessionId) : 'closed'
+  const rtcError = sessionId ? webRtcError(sessionId) : null
+  const isConnected = isWebRtc ? rtcState === 'connected' : wsState === 'open'
+  const isFailed = isWebRtc ? rtcState === 'failed' : wsState === 'failed'
+  const isConnecting = isWebRtc ? rtcState === 'connecting' : wsState === 'connecting'
 
   return (
     <Dialog
@@ -295,7 +353,13 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
                 borderRadius: '50%',
                 backgroundColor:
                   isWebRtc
-                    ? '#3b82f6'
+                    ? rtcState === 'connected'
+                      ? '#22c55e'
+                      : rtcState === 'failed'
+                        ? '#ef4444'
+                        : rtcState === 'connecting'
+                          ? '#eab308'
+                          : '#3b82f6'
                     : wsState === 'open'
                       ? '#22c55e'
                       : wsState === 'failed'
@@ -307,7 +371,13 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
               }}
               aria-label={
                 isWebRtc
-                  ? 'WebRTC session active (viewer pending)'
+                  ? isConnected
+                    ? 'WebRTC connected'
+                    : isFailed
+                      ? 'WebRTC connection failed'
+                      : isConnecting
+                        ? 'WebRTC connecting'
+                        : 'WebRTC not connected'
                   : isConnected
                     ? 'Connection established'
                     : isFailed
@@ -319,7 +389,13 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
             />
             <Typography component="span" variant="caption" sx={{ color: '#94a3b8', textTransform: 'none' }}>
               {isWebRtc
-                ? 'WebRTC — awaiting Pi + browser viewer'
+                ? isConnected
+                  ? 'WebRTC connected'
+                  : isFailed
+                    ? 'WebRTC failed'
+                    : isConnecting
+                      ? 'WebRTC connecting…'
+                      : 'WebRTC not connected'
                 : wsState === 'open'
                   ? 'Connection established'
                   : isFailed
@@ -334,11 +410,31 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
       <DialogContent sx={{ color: '#f8fafc' }}>
         {loading && <Typography sx={{ color: '#94a3b8' }}>Loading…</Typography>}
         {error && <Typography sx={{ color: '#f87171' }}>{error}</Typography>}
-        {isWebRtc && data?.status === 'active' && (
+        {isWebRtc && data?.status === 'active' && !isConnected && !isFailed && (
           <Typography sx={{ color: '#94a3b8', fontSize: '0.875rem', mb: 2 }}>
-            Session is provisioned on AWS (KVS signaling). Live control uses WebRTC, not the legacy proxy at{' '}
-            <code style={{ color: '#cbd5e1' }}>{data.endpoint}</code>. Pi daemon and browser WebRTC viewer are not connected yet.
+            Connecting WebRTC viewer to Pi via KVS signaling. Ensure <code style={{ color: '#cbd5e1' }}>rdi-relay-daemon</code> is running on the relay.
           </Typography>
+        )}
+        {isWebRtc && isFailed && rtcError && (
+          <Box sx={{ mb: 2 }}>
+            <Typography sx={{ color: '#f87171', fontSize: '0.875rem' }}>{rtcError}</Typography>
+            {data?.webrtc && (
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => openWebRtcSession(sessionId!, data.webrtc!)}
+                sx={{
+                  color: '#3b82f6',
+                  borderColor: '#475569',
+                  mt: 1,
+                  textTransform: 'none',
+                  '&:hover': { borderColor: '#3b82f6' },
+                }}
+              >
+                Retry WebRTC connection
+              </Button>
+            )}
+          </Box>
         )}
         {isFailed && wsError && (
           <Box sx={{ mb: 2 }}>
@@ -427,7 +523,7 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
               variant="outlined"
               size="small"
               onClick={runPing}
-              disabled={pingRunning}
+              disabled={pingRunning || (isWebRtc && isConnecting)}
               disableRipple
               sx={{
                 color: '#3b82f6',
@@ -445,11 +541,17 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
             <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 1, mt: 2 }}>
               Drone controls
             </Typography>
+            {isWebRtc && (
+              <Typography sx={{ color: '#64748b', fontSize: '0.8125rem', mb: 1 }}>
+                MAVLink commands will be available after the data channel bridge is wired on the Pi.
+              </Typography>
+            )}
             <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
               <Button
                 variant="outlined"
                 size="small"
                 onClick={() => sendCommand('takeoff', 2.5)}
+                disabled={isWebRtc}
                 disableRipple
                 sx={{
                   color: '#22c55e',
@@ -464,6 +566,7 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
                 variant="outlined"
                 size="small"
                 onClick={() => sendCommand('land')}
+                disabled={isWebRtc}
                 disableRipple
                 sx={{
                   color: '#eab308',

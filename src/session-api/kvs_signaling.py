@@ -122,15 +122,39 @@ def _session_credentials(channel_arn: str, role: str, session_id: str) -> dict[s
     }
 
 
+def _get_signaling_channel_endpoints(
+    channel_arn: str, role: str, credentials: dict[str, str]
+) -> tuple[str, str]:
+    """Return (https_endpoint, wss_endpoint) for MASTER or VIEWER."""
+    resp = _kinesisvideo_client(credentials).get_signaling_channel_endpoint(
+        ChannelARN=channel_arn,
+        SingleMasterChannelEndpointConfiguration={
+            "Protocols": ["HTTPS", "WSS"],
+            "Role": role,
+        },
+    )
+    https_ep = ""
+    wss_ep = ""
+    for ep in resp.get("ResourceEndpointList") or []:
+        protocol = ep.get("Protocol")
+        if protocol == "HTTPS":
+            https_ep = ep.get("ResourceEndpoint", "")
+        elif protocol == "WSS":
+            wss_ep = ep.get("ResourceEndpoint", "")
+    return https_ep, wss_ep
+
+
 def build_webrtc_viewer_bundle(session_id: str, channel_arn: str) -> dict[str, Any]:
     credentials = _session_credentials(channel_arn, "VIEWER", session_id)
+    https_ep, wss_ep = _get_signaling_channel_endpoints(channel_arn, "VIEWER", credentials)
     return {
         "transport": "webrtc",
         "channel_arn": channel_arn,
         "channel_name": session_id,
         "region": REGION,
         "role": "VIEWER",
-        "signaling_endpoint": get_signaling_endpoint(channel_arn, "VIEWER", credentials),
+        "signaling_endpoint": wss_ep or get_signaling_endpoint(channel_arn, "VIEWER", credentials),
+        "signaling_endpoint_https": https_ep,
         "credentials": credentials,
     }
 

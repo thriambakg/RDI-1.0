@@ -157,12 +157,30 @@ export async function listSessions(wavelengthZoneId?: string): Promise<ListSessi
   return data
 }
 
+export interface WebRtcViewerBundle {
+  channel_arn: string
+  region: string
+  signaling_endpoint: string
+  signaling_endpoint_https?: string
+  credentials: {
+    accessKeyId: string
+    secretAccessKey: string
+    sessionToken?: string
+    expiration?: string
+  }
+}
+
 export async function getSession(session_id: string): Promise<{
   session_id: string
   drone_id: string
   endpoint: string
   status: string
   transport?: SessionTransport
+  relay_id?: string
+  mavlink_host?: string
+  mavlink_port?: number
+  carrier_ip?: string
+  webrtc?: WebRtcViewerBundle
 }> {
   const url = `${getApiBaseUrl()}/sessions?session_id=${encodeURIComponent(session_id)}`
   const headers = await getAuthHeaders()

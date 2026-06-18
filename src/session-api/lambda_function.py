@@ -974,6 +974,13 @@ def _get_session(
         out["mavlink_port"] = eff_port
         if WAVELENGTH_CARRIER_IP and wl_zone and (not WAVELENGTH_ZONE_ID or wl_zone == WAVELENGTH_ZONE_ID):
             out["carrier_ip"] = WAVELENGTH_CARRIER_IP
+        if webrtc_enabled():
+            channel_arn = (item.get("signaling_channel_arn") or {}).get("S", "")
+            if channel_arn and out.get("status") == "active":
+                try:
+                    out["webrtc"] = build_webrtc_viewer_bundle(session_id, channel_arn)
+                except Exception as e:
+                    _log("get_session webrtc creds failed", session_id=session_id, error=str(e))
         return _response(200, out, headers)
 
     # List sessions for user
