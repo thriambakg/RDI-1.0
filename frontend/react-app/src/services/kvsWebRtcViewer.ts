@@ -1,30 +1,12 @@
 /**
  * KVS WebRTC Viewer client — connects browser to Pi MASTER for a session.
- * Signaling uses the official AWS KVS WebRTC SDK (same wire format as the Pi worker).
  */
 
 import {
   GetIceServerConfigCommand,
   KinesisVideoSignalingClient,
 } from '@aws-sdk/client-kinesis-video-signaling'
-import { Role, SignalingClient } from 'amazon-kinesis-video-streams-webrtc'
-
-type KvsSignalingEvents = {
-  on(event: 'open', listener: () => void): void
-  on(event: 'sdpAnswer', listener: (answer: RTCSessionDescriptionInit) => void): void
-  on(event: 'iceCandidate', listener: (candidate: RTCIceCandidateInit) => void): void
-  on(
-    event: 'statusResponse',
-    listener: (status: {
-      success?: boolean
-      errorType?: string
-      description?: string
-      statusCode?: string
-    }) => void,
-  ): void
-  on(event: 'error', listener: (err: unknown) => void): void
-  drainPendingIceCandidates(clientId?: string): void
-}
+import { KvsSignalingViewer } from './kvsSignalingClient'
 
 export interface WebRtcCredentials {
   accessKeyId: string
@@ -110,21 +92,16 @@ export async function connectKvsViewer(
     `viewer-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
   const iceServers = await fetchIceServers(bundle, viewerClientId)
   const pc = new RTCPeerConnection({ iceServers })
-  let signalingClient: SignalingClient | null = null
+  let signaling: KvsSignalingViewer | null = null
   let closed = false
 
-  // Viewer creates the data channel (included in SDP offer — more reliable with aiortc master).
   const dataChannel = pc.createDataChannel('mavlink', { ordered: false, maxRetransmits: 0 })
 
   const close = () => {
     if (closed) return
     closed = true
-    try {
-      signalingClient?.close()
-    } catch {
-      /* ignore */
-    }
-    signalingClient = null
+    signaling?.close()
+    signaling = null
     pc.close()
   }
 
@@ -174,51 +151,38 @@ export async function connectKvsViewer(
     }
 
     pc.onicecandidate = ({ candidate }) => {
-      if (!candidate || !signalingClient) return
-      try {
-        signalingClient.sendIceCandidate(candidate)
-      } catch {
-        /* signaling may be closing */
-      }
+      if (!candidate || !signaling) return
+      signaling.sendIceCandidate(candidate)
     }
 
     let remoteDescriptionSet = false
     const pendingRemoteIce: RTCIceCandidateInit[] = []
 
-    signalingClient = new SignalingClient({
-      channelARN: bundle.channel_arn,
-      channelEndpoint: bundle.signaling_endpoint,
+    signaling = new KvsSignalingViewer({
+      channelArn: bundle.channel_arn,
+      endpointWss: bundle.signaling_endpoint,
       region: bundle.region,
-      role: Role.VIEWER,
       clientId: viewerClientId,
-      enableEarlyIceCandidateBuffering: true,
-      credentials: {
-        accessKeyId: bundle.credentials.accessKeyId,
-        secretAccessKey: bundle.credentials.secretAccessKey,
-        sessionToken: bundle.credentials.sessionToken,
-      },
+      credentials: bundle.credentials,
     })
 
-    const sig = signalingClient as SignalingClient & KvsSignalingEvents
-
-    sig.on('open', async () => {
+    signaling.onOpen = async () => {
       try {
         const offer = await pc.createOffer()
         await pc.setLocalDescription(offer)
         await waitForIceGathering(pc)
         if (pc.localDescription) {
-          signalingClient?.sendSdpOffer(pc.localDescription)
+          signaling?.sendSdpOffer(pc.localDescription)
         }
       } catch (e) {
         fail(e instanceof Error ? e : new Error('Failed to create WebRTC offer'))
       }
-    })
+    }
 
-    sig.on('sdpAnswer', async (answer: RTCSessionDescriptionInit) => {
+    signaling.onSdpAnswer = async (answer) => {
       try {
-        await pc.setRemoteDescription(answer as RTCSessionDescriptionInit)
+        await pc.setRemoteDescription(answer)
         remoteDescriptionSet = true
-        sig.drainPendingIceCandidates()
         for (const candidate of pendingRemoteIce) {
           await pc.addIceCandidate(candidate)
         }
@@ -226,9 +190,9 @@ export async function connectKvsViewer(
       } catch (e) {
         fail(e instanceof Error ? e : new Error('Failed to apply SDP answer from Pi'))
       }
-    })
+    }
 
-    sig.on('iceCandidate', async (candidate: RTCIceCandidateInit) => {
+    signaling.onIceCandidate = async (candidate) => {
       if (!remoteDescriptionSet) {
         pendingRemoteIce.push(candidate)
         return
@@ -238,23 +202,12 @@ export async function connectKvsViewer(
       } catch {
         /* ignore duplicate or late candidates */
       }
-    })
+    }
 
-    sig.on('statusResponse', (status: { success?: boolean; errorType?: string; description?: string; statusCode?: string }) => {
-      if (status && status.success === false) {
-        fail(
-          new Error(
-            `KVS signaling error: ${status.errorType ?? 'unknown'} — ${status.description ?? status.statusCode ?? ''}`,
-          ),
-        )
-      }
-    })
+    signaling.onError = (err) => fail(err)
 
-    sig.on('error', (err: unknown) => {
-      const message = err instanceof Error ? err.message : 'KVS signaling error'
-      fail(new Error(message))
+    signaling.open().catch((e) => {
+      fail(e instanceof Error ? e : new Error('Failed to open KVS signaling'))
     })
-
-    signalingClient.open()
   })
 }
