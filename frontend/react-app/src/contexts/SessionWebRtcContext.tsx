@@ -51,6 +51,8 @@ export function SessionWebRtcProvider({ children }: { children: ReactNode }) {
     [setState],
   )
 
+  const viewerClientIdRef = useRef<Map<string, string>>(new Map())
+
   const openSession = useCallback(
     (sessionId: string, bundle: WebRtcViewerBundle) => {
       const existing = stateRef.current.get(sessionId)
@@ -61,7 +63,13 @@ export function SessionWebRtcProvider({ children }: { children: ReactNode }) {
       abortRef.current.set(sessionId, controller)
       setState(sessionId, 'connecting', null)
 
-      connectKvsViewer(bundle, { signal: controller.signal })
+      let viewerClientId = viewerClientIdRef.current.get(sessionId)
+      if (!viewerClientId) {
+        viewerClientId = `viewer-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
+        viewerClientIdRef.current.set(sessionId, viewerClientId)
+      }
+
+      connectKvsViewer(bundle, { signal: controller.signal, viewerClientId })
         .then((conn) => {
           if (controller.signal.aborted) {
             conn.close()

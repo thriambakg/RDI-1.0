@@ -131,6 +131,34 @@ async def run_master(cfg: dict) -> None:
     )
 
     pc_by_client: dict[str, RTCPeerConnection] = {}
+    pending_ice: dict[str, list[dict]] = {}
+
+    async def _apply_ice(pc: RTCPeerConnection, payload: dict) -> None:
+        candidate = candidate_from_sdp(payload["candidate"])
+        candidate.sdpMid = payload.get("sdpMid")
+        candidate.sdpMLineIndex = payload.get("sdpMLineIndex")
+        await pc.addIceCandidate(candidate)
+
+    async def _wait_ice_gathering(pc: RTCPeerConnection, timeout: float = 5.0) -> None:
+        if pc.iceGatheringState == "complete":
+            return
+        done = asyncio.Event()
+
+        @pc.on("icegatheringstatechange")
+        async def on_gathering() -> None:
+            if pc.iceGatheringState == "complete":
+                done.set()
+
+        try:
+            await asyncio.wait_for(done.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            LOG.warning("ice gathering timeout session_id=%s state=%s", session_id, pc.iceGatheringState)
+
+    async def _close_pc(pc: RTCPeerConnection) -> None:
+        try:
+            await pc.close()
+        except Exception:
+            pass
 
     while True:
         wss_url = _signed_wss_url(endpoint_wss, channel_arn, region, credentials, "MASTER")
@@ -139,49 +167,68 @@ async def run_master(cfg: dict) -> None:
                 LOG.info("KVS signaling connected session_id=%s", session_id)
                 async for message in ws:
                     msg_type, payload, client_id = _decode_msg(message)
+                    if msg_type:
+                        LOG.info(
+                            "signaling rx type=%s from=%s session_id=%s",
+                            msg_type,
+                            client_id or "?",
+                            session_id,
+                        )
                     if msg_type == "SDP_OFFER" and client_id:
+                        old = pc_by_client.pop(client_id, None)
+                        if old:
+                            await _close_pc(old)
                         ice = _ice_servers(channel_arn, endpoint_https, region, credentials)
                         pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=ice))
                         pc_by_client[client_id] = pc
-                        channel = pc.createDataChannel("mavlink", ordered=False, maxRetransmits=0)
+                        data_channel_ref: list = []
 
-                        @channel.on("open")
-                        def on_open(ch=channel) -> None:
-                            LOG.info("data channel open session_id=%s viewer=%s", session_id, client_id)
+                        @pc.on("datachannel")
+                        def on_datachannel(ch) -> None:
+                            if ch.label != "mavlink":
+                                return
+                            data_channel_ref.clear()
+                            data_channel_ref.append(ch)
 
-                        @channel.on("message")
-                        def on_message(message, ch=channel) -> None:
-                            if isinstance(message, bytes):
-                                if message == PING_BYTES:
-                                    ch.send(PONG_BYTES)
-                                    LOG.info(
-                                        "ping pong session_id=%s viewer=%s",
-                                        session_id,
-                                        client_id,
-                                    )
-                                    return
-                                LOG.debug("datachannel rx %d bytes", len(message))
-                            else:
-                                LOG.debug("datachannel rx %s", message)
+                            @ch.on("open")
+                            def on_open() -> None:
+                                LOG.info("data channel open session_id=%s viewer=%s", session_id, client_id)
+
+                            @ch.on("message")
+                            def on_message(message) -> None:
+                                if isinstance(message, bytes):
+                                    if message == PING_BYTES:
+                                        ch.send(PONG_BYTES)
+                                        LOG.info(
+                                            "ping pong session_id=%s viewer=%s",
+                                            session_id,
+                                            client_id,
+                                        )
+                                        return
+                                    LOG.debug("datachannel rx %d bytes", len(message))
+                                else:
+                                    LOG.debug("datachannel rx %s", message)
 
                         @pc.on("icecandidate")
                         async def on_ice(candidate, cid=client_id, sock=ws) -> None:
                             if candidate is None:
                                 return
-                            payload = {
+                            ice_payload = {
                                 "candidate": candidate.candidate,
                                 "sdpMid": candidate.sdpMid,
                                 "sdpMLineIndex": candidate.sdpMLineIndex,
                             }
-                            await sock.send(_encode_msg("ICE_CANDIDATE", payload, cid))
+                            await sock.send(_encode_msg("ICE_CANDIDATE", ice_payload, cid))
+                            LOG.debug("sent ICE_CANDIDATE to viewer=%s", cid)
 
                         @pc.on("connectionstatechange")
                         async def on_state_change(c=pc, cid=client_id) -> None:
                             LOG.info(
-                                "peer connection state session_id=%s viewer=%s state=%s",
+                                "peer connection state session_id=%s viewer=%s state=%s ice=%s",
                                 session_id,
                                 cid,
                                 c.connectionState,
+                                c.iceConnectionState,
                             )
 
                         await pc.setRemoteDescription(
@@ -189,12 +236,18 @@ async def run_master(cfg: dict) -> None:
                         )
                         answer = await pc.createAnswer()
                         await pc.setLocalDescription(answer)
+                        await _wait_ice_gathering(pc)
                         await ws.send(_encode_msg("SDP_ANSWER", pc.localDescription, client_id))
-                    elif msg_type == "ICE_CANDIDATE" and client_id in pc_by_client:
-                        candidate = candidate_from_sdp(payload["candidate"])
-                        candidate.sdpMid = payload.get("sdpMid")
-                        candidate.sdpMLineIndex = payload.get("sdpMLineIndex")
-                        await pc_by_client[client_id].addIceCandidate(candidate)
+                        LOG.info("sent SDP_ANSWER session_id=%s viewer=%s", session_id, client_id)
+                        for ice_payload in pending_ice.pop(client_id, []):
+                            await _apply_ice(pc, ice_payload)
+                    elif msg_type == "SDP_OFFER" and not client_id:
+                        LOG.warning("SDP_OFFER without senderClientId session_id=%s", session_id)
+                    elif msg_type == "ICE_CANDIDATE" and client_id:
+                        if client_id in pc_by_client:
+                            await _apply_ice(pc_by_client[client_id], payload)
+                        else:
+                            pending_ice.setdefault(client_id, []).append(payload)
         except websockets.ConnectionClosed:
             LOG.warning("KVS signaling closed; reconnecting session_id=%s", session_id)
             await asyncio.sleep(2)

@@ -24,7 +24,41 @@ sudo apt-get install -y python3-pip python3-venv python3-boto3 \
 
 `python3-boto3` avoids pip downloading large `botocore` wheels from piwheels (common failure on slow Wi‑Fi).
 
-## Install from your laptop
+## One-command deploy from laptop
+
+```bash
+cd RDI-1.0/scripts/relay-device
+chmod +x deploy-to-pi.sh pi-install.sh
+./deploy-to-pi.sh relay@RDIRelay.local
+```
+
+This uploads all Pi scripts + `pi-install.sh`, installs to `/opt/rdi`, configures systemd, and restarts the daemon.
+
+On Pi only (if you copied files manually):
+
+```bash
+sudo bash pi-install.sh
+```
+
+## Expected log flow (WebRTC + ping)
+
+| Step | Where | Log / UI |
+|------|-------|----------|
+| Daemon polls API | Pi `journalctl` | `active sessions: 1` |
+| Worker starts | Pi | `started worker`, `KVS signaling connected` |
+| Browser opens Connection details | Pi | `signaling rx type=SDP_OFFER from=viewer-...` |
+| Pi answers | Pi | `sent SDP_ANSWER` |
+| ICE completes | Pi | `peer connection state ... state=connected ice=completed` |
+| Data channel ready | Pi | `data channel open session_id=... viewer=...` |
+| UI ready | Browser | **WebRTC connected** (green) |
+| You click Ping | Browser log panel | `Pi relay responded (round-trip Nms)` |
+| Ping echo | Pi | `ping pong session_id=... viewer=...` |
+
+**Ping does not go through Lambda or API.** Path: browser → WebRTC data channel → Pi worker → PONG back.
+
+Session Lambda `GET /sessions` only supplies viewer credentials when you open Connection details.
+
+## Install from your laptop (manual)
 
 Replace `relay@RDIRelay.local` with your Pi host.
 
@@ -127,8 +161,11 @@ On the Pi after code updates:
 
 ```bash
 sudo cp /tmp/rdi-install/kvs_master_worker.py /opt/rdi/
+sudo cp /tmp/rdi-install/rdi-relay-daemon.py /opt/rdi/
 sudo systemctl restart rdi-relay-daemon
 ```
+
+The daemon restarts workers automatically when KVS STS credentials are within 5 minutes of expiry (default `RDI_CREDS_REFRESH_MARGIN_SEC=300`). Without this, workers keep expired creds and KVS returns **HTTP 403** on signaling reconnect.
 
 Deploy the Session API Lambda so `GET /sessions?session_id=...` returns a fresh `webrtc` viewer bundle with `signaling_endpoint_https`.
 

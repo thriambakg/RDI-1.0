@@ -24,20 +24,47 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 from rdi_device_config import load_device_config
 
 LOG = logging.getLogger("rdi.daemon")
 POLL_INTERVAL_SEC = int(os.environ.get("RDI_POLL_INTERVAL_SEC", "5"))
+CREDS_REFRESH_MARGIN_SEC = int(os.environ.get("RDI_CREDS_REFRESH_MARGIN_SEC", "300"))
 WORKER_SCRIPT = Path(__file__).resolve().parent / "kvs_master_worker.py"
 WORKER_DRY_RUN = os.environ.get("RDI_WORKER_DRY_RUN", "").strip() in ("1", "true", "yes")
 
 
 class WorkerProcess:
-    def __init__(self, session_id: str, proc: subprocess.Popen | None = None):
+    def __init__(
+        self,
+        session_id: str,
+        proc: subprocess.Popen | None = None,
+        creds_expiration: str | None = None,
+    ):
         self.session_id = session_id
         self.proc = proc
+        self.creds_expiration = creds_expiration
+
+
+def _creds_expiration(session: dict) -> str | None:
+    creds = (session.get("webrtc") or {}).get("credentials") or {}
+    exp = creds.get("expiration")
+    return str(exp) if exp else None
+
+
+def _creds_expire_within(expiration: str | None, margin_sec: int) -> bool:
+    """True if STS creds are expired or expire within margin_sec."""
+    if not expiration:
+        return False
+    try:
+        exp_dt = datetime.fromisoformat(expiration.replace("Z", "+00:00"))
+        if exp_dt.tzinfo is None:
+            exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+        return exp_dt.timestamp() - time.time() <= margin_sec
+    except (TypeError, ValueError):
+        return False
 
 
 def _http_get(url: str) -> tuple[int, dict]:
@@ -89,7 +116,7 @@ def start_worker(session: dict) -> WorkerProcess | None:
 
     if WORKER_DRY_RUN:
         LOG.info("[dry-run] would start worker session_id=%s mavlink=%s:%s", session_id, session.get("mavlink_host"), session.get("mavlink_port"))
-        return WorkerProcess(session_id, None)
+        return WorkerProcess(session_id, None, _creds_expiration(session))
 
     env = os.environ.copy()
     env["RDI_WORKER_CONFIG"] = json.dumps(_worker_config(session))
@@ -104,8 +131,8 @@ def start_worker(session: dict) -> WorkerProcess | None:
         bufsize=1,
         start_new_session=True,
     )
-    LOG.info("started worker pid=%s session_id=%s", proc.pid, session_id)
-    return WorkerProcess(session_id, proc)
+    LOG.info("started worker pid=%s session_id=%s creds_exp=%s", proc.pid, session_id, _creds_expiration(session) or "?")
+    return WorkerProcess(session_id, proc, _creds_expiration(session))
 
 
 def stop_worker(worker: WorkerProcess) -> None:
@@ -154,8 +181,15 @@ def reconcile(workers: dict[str, WorkerProcess], desired: list[dict]) -> dict[st
     for sid, session in by_id.items():
         existing = workers.get(sid)
         if existing and existing.proc and existing.proc.poll() is None:
-            continue
-        if existing:
+            if not _creds_expire_within(existing.creds_expiration, CREDS_REFRESH_MARGIN_SEC):
+                continue
+            LOG.info(
+                "refreshing worker session_id=%s (KVS creds expired or expiring within %ss)",
+                sid,
+                CREDS_REFRESH_MARGIN_SEC,
+            )
+            stop_worker(existing)
+        elif existing:
             LOG.warning("restarting dead worker session_id=%s", sid)
             stop_worker(existing)
         started = start_worker(session)
