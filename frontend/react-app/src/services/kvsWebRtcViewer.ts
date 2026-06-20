@@ -122,10 +122,10 @@ export async function connectKvsViewer(
     const connectTimeout = window.setTimeout(() => {
       fail(
         new Error(
-          `WebRTC connection timed out (30s). Pi state=${pc.connectionState}, ice=${pc.iceConnectionState}. Check Pi logs for "signaling rx SDP_OFFER".`,
+          `WebRTC connection timed out (45s). Pi state=${pc.connectionState}, ice=${pc.iceConnectionState}. Same-LAN? Allow UDP on the Pi firewall.`,
         ),
       )
-    }, 30000)
+    }, 45000)
 
     const finish = () => {
       clearTimeout(connectTimeout)

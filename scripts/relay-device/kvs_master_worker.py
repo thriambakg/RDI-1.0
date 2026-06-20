@@ -139,21 +139,6 @@ async def run_master(cfg: dict) -> None:
         candidate.sdpMLineIndex = payload.get("sdpMLineIndex")
         await pc.addIceCandidate(candidate)
 
-    async def _wait_ice_gathering(pc: RTCPeerConnection, timeout: float = 5.0) -> None:
-        if pc.iceGatheringState == "complete":
-            return
-        done = asyncio.Event()
-
-        @pc.on("icegatheringstatechange")
-        async def on_gathering() -> None:
-            if pc.iceGatheringState == "complete":
-                done.set()
-
-        try:
-            await asyncio.wait_for(done.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            LOG.warning("ice gathering timeout session_id=%s state=%s", session_id, pc.iceGatheringState)
-
     async def _close_pc(pc: RTCPeerConnection) -> None:
         try:
             await pc.close()
@@ -175,34 +160,41 @@ async def run_master(cfg: dict) -> None:
                             session_id,
                         )
                     if msg_type == "SDP_OFFER" and client_id:
+                        for old_cid, old_pc in list(pc_by_client.items()):
+                            if old_cid != client_id:
+                                await _close_pc(old_pc)
+                                del pc_by_client[old_cid]
+                                LOG.info(
+                                    "closed stale peer session_id=%s viewer=%s",
+                                    session_id,
+                                    old_cid,
+                                )
                         old = pc_by_client.pop(client_id, None)
                         if old:
                             await _close_pc(old)
                         ice = _ice_servers(channel_arn, endpoint_https, region, credentials)
                         pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=ice))
                         pc_by_client[client_id] = pc
-                        data_channel_ref: list = []
+                        gathering_done = asyncio.Event()
 
                         @pc.on("datachannel")
-                        def on_datachannel(ch) -> None:
+                        def on_datachannel(ch, cid=client_id) -> None:
                             if ch.label != "mavlink":
                                 return
-                            data_channel_ref.clear()
-                            data_channel_ref.append(ch)
 
                             @ch.on("open")
                             def on_open() -> None:
-                                LOG.info("data channel open session_id=%s viewer=%s", session_id, client_id)
+                                LOG.info("data channel open session_id=%s viewer=%s", session_id, cid)
 
                             @ch.on("message")
-                            def on_message(message) -> None:
+                            def on_message(message, channel=ch) -> None:
                                 if isinstance(message, bytes):
                                     if message == PING_BYTES:
-                                        ch.send(PONG_BYTES)
+                                        channel.send(PONG_BYTES)
                                         LOG.info(
                                             "ping pong session_id=%s viewer=%s",
                                             session_id,
-                                            client_id,
+                                            cid,
                                         )
                                         return
                                     LOG.debug("datachannel rx %d bytes", len(message))
@@ -212,6 +204,7 @@ async def run_master(cfg: dict) -> None:
                         @pc.on("icecandidate")
                         async def on_ice(candidate, cid=client_id, sock=ws) -> None:
                             if candidate is None:
+                                gathering_done.set()
                                 return
                             ice_payload = {
                                 "candidate": candidate.candidate,
@@ -219,7 +212,7 @@ async def run_master(cfg: dict) -> None:
                                 "sdpMLineIndex": candidate.sdpMLineIndex,
                             }
                             await sock.send(_encode_msg("ICE_CANDIDATE", ice_payload, cid))
-                            LOG.debug("sent ICE_CANDIDATE to viewer=%s", cid)
+                            LOG.info("sent ICE_CANDIDATE to viewer=%s", cid)
 
                         @pc.on("connectionstatechange")
                         async def on_state_change(c=pc, cid=client_id) -> None:
@@ -236,7 +229,15 @@ async def run_master(cfg: dict) -> None:
                         )
                         answer = await pc.createAnswer()
                         await pc.setLocalDescription(answer)
-                        await _wait_ice_gathering(pc)
+                        try:
+                            await asyncio.wait_for(gathering_done.wait(), timeout=10.0)
+                        except asyncio.TimeoutError:
+                            LOG.warning(
+                                "ice gathering timeout session_id=%s viewer=%s state=%s",
+                                session_id,
+                                client_id,
+                                pc.iceGatheringState,
+                            )
                         await ws.send(_encode_msg("SDP_ANSWER", pc.localDescription, client_id))
                         LOG.info("sent SDP_ANSWER session_id=%s viewer=%s", session_id, client_id)
                         for ice_payload in pending_ice.pop(client_id, []):

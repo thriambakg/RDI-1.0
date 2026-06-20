@@ -56,7 +56,8 @@ export function SessionWebRtcProvider({ children }: { children: ReactNode }) {
   const openSession = useCallback(
     (sessionId: string, bundle: WebRtcViewerBundle) => {
       const existing = stateRef.current.get(sessionId)
-      if (existing === 'connecting' || existing === 'connected') return
+      if (existing === 'connecting') return
+      if (existing === 'connected') return
 
       closeSession(sessionId)
       const controller = new AbortController()
