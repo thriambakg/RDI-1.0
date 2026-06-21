@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import sys
+import time
 from base64 import b64decode, b64encode
 
 import boto3
@@ -145,6 +146,19 @@ async def run_master(cfg: dict) -> None:
         except Exception:
             pass
 
+    async def _wait_for_local_ice(pc: RTCPeerConnection, timeout: float = 5.0) -> None:
+        """Poll until aioice finishes gathering local candidates for the answer SDP."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if pc.iceGatheringState == "complete":
+                return
+            await asyncio.sleep(0.1)
+        LOG.warning(
+            "local ice gathering timeout session_id=%s state=%s",
+            session_id,
+            pc.iceGatheringState,
+        )
+
     while True:
         wss_url = _signed_wss_url(endpoint_wss, channel_arn, region, credentials, "MASTER")
         try:
@@ -175,7 +189,6 @@ async def run_master(cfg: dict) -> None:
                         ice = _ice_servers(channel_arn, endpoint_https, region, credentials)
                         pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=ice))
                         pc_by_client[client_id] = pc
-                        gathering_done = asyncio.Event()
 
                         @pc.on("datachannel")
                         def on_datachannel(ch, cid=client_id) -> None:
@@ -204,15 +217,17 @@ async def run_master(cfg: dict) -> None:
                         @pc.on("icecandidate")
                         async def on_ice(candidate, cid=client_id, sock=ws) -> None:
                             if candidate is None:
-                                gathering_done.set()
                                 return
                             ice_payload = {
                                 "candidate": candidate.candidate,
                                 "sdpMid": candidate.sdpMid,
                                 "sdpMLineIndex": candidate.sdpMLineIndex,
                             }
-                            await sock.send(_encode_msg("ICE_CANDIDATE", ice_payload, cid))
-                            LOG.info("sent ICE_CANDIDATE to viewer=%s", cid)
+                            try:
+                                await sock.send(_encode_msg("ICE_CANDIDATE", ice_payload, cid))
+                                LOG.info("sent ICE_CANDIDATE to viewer=%s", cid)
+                            except Exception as e:
+                                LOG.error("failed to send ICE to viewer=%s: %s", cid, e)
 
                         @pc.on("connectionstatechange")
                         async def on_state_change(c=pc, cid=client_id) -> None:
@@ -227,21 +242,26 @@ async def run_master(cfg: dict) -> None:
                         await pc.setRemoteDescription(
                             RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
                         )
-                        answer = await pc.createAnswer()
-                        await pc.setLocalDescription(answer)
-                        try:
-                            await asyncio.wait_for(gathering_done.wait(), timeout=10.0)
-                        except asyncio.TimeoutError:
-                            LOG.warning(
-                                "ice gathering timeout session_id=%s viewer=%s state=%s",
+                        buffered = pending_ice.pop(client_id, [])
+                        for ice_payload in buffered:
+                            await _apply_ice(pc, ice_payload)
+                        if buffered:
+                            LOG.info(
+                                "applied %d buffered viewer ICE session_id=%s viewer=%s",
+                                len(buffered),
                                 session_id,
                                 client_id,
-                                pc.iceGatheringState,
                             )
+                        answer = await pc.createAnswer()
+                        await pc.setLocalDescription(answer)
+                        await _wait_for_local_ice(pc)
                         await ws.send(_encode_msg("SDP_ANSWER", pc.localDescription, client_id))
-                        LOG.info("sent SDP_ANSWER session_id=%s viewer=%s", session_id, client_id)
-                        for ice_payload in pending_ice.pop(client_id, []):
-                            await _apply_ice(pc, ice_payload)
+                        LOG.info(
+                            "sent SDP_ANSWER session_id=%s viewer=%s ice_state=%s",
+                            session_id,
+                            client_id,
+                            pc.iceGatheringState,
+                        )
                     elif msg_type == "SDP_OFFER" and not client_id:
                         LOG.warning("SDP_OFFER without senderClientId session_id=%s", session_id)
                     elif msg_type == "ICE_CANDIDATE" and client_id:

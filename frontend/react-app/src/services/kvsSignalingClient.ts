@@ -11,6 +11,11 @@ export interface KvsCredentials {
 
 const MASTER_CLIENT_ID = 'MASTER'
 
+/** KVS often omits senderClientId on relayed MASTER messages; treat empty as MASTER. */
+function isFromMaster(senderClientId: string): boolean {
+  return senderClientId === '' || senderClientId === MASTER_CLIENT_ID
+}
+
 function toHex(buffer: ArrayBuffer): string {
   return Array.from(new Uint8Array(buffer))
     .map((b) => b.toString(16).padStart(2, '0'))
@@ -215,11 +220,11 @@ export class KvsSignalingViewer {
 
   private handleMessage(raw: string): void {
     const { messageType, payload, senderClientId } = decodeInbound(raw)
-    if (messageType === 'SDP_ANSWER' && senderClientId === MASTER_CLIENT_ID) {
+    if (messageType === 'SDP_ANSWER' && isFromMaster(senderClientId)) {
       this.remoteSdpReceived = true
       this.onSdpAnswer?.({
         type: payload.type as RTCSdpType,
-        sdp: String(payload.sdp),
+        sdp: String(payload.sdp ?? '').trim(),
       })
       for (const c of this.pendingRemoteIce) {
         this.onIceCandidate?.(c)
@@ -227,7 +232,7 @@ export class KvsSignalingViewer {
       this.pendingRemoteIce = []
       return
     }
-    if (messageType === 'ICE_CANDIDATE' && senderClientId === MASTER_CLIENT_ID) {
+    if (messageType === 'ICE_CANDIDATE' && isFromMaster(senderClientId)) {
       const candidate: RTCIceCandidateInit = {
         candidate: String(payload.candidate),
         sdpMid: payload.sdpMid as string | undefined,
@@ -238,6 +243,18 @@ export class KvsSignalingViewer {
       } else {
         this.onIceCandidate?.(candidate)
       }
+      return
+    }
+    if (
+      (messageType === 'SDP_ANSWER' || messageType === 'ICE_CANDIDATE') &&
+      !isFromMaster(senderClientId)
+    ) {
+      console.warn(
+        '[RDI KVS] ignored signaling message',
+        messageType,
+        'from',
+        senderClientId,
+      )
     }
   }
 }

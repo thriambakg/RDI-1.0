@@ -67,22 +67,6 @@ async function fetchIceServers(
   return servers
 }
 
-function waitForIceGathering(pc: RTCPeerConnection, timeoutMs = 8000): Promise<void> {
-  if (pc.iceGatheringState === 'complete') return Promise.resolve()
-  return new Promise((resolve) => {
-    const done = () => {
-      pc.removeEventListener('icegatheringstatechange', onChange)
-      clearTimeout(timer)
-      resolve()
-    }
-    const onChange = () => {
-      if (pc.iceGatheringState === 'complete') done()
-    }
-    pc.addEventListener('icegatheringstatechange', onChange)
-    const timer = window.setTimeout(done, timeoutMs)
-  })
-}
-
 export async function connectKvsViewer(
   bundle: WebRtcViewerBundle,
   options?: { viewerClientId?: string; signal?: AbortSignal },
@@ -170,7 +154,7 @@ export async function connectKvsViewer(
       try {
         const offer = await pc.createOffer()
         await pc.setLocalDescription(offer)
-        await waitForIceGathering(pc)
+        // Send offer first; trickle viewer ICE via onicecandidate (Pi buffers until offer arrives).
         if (pc.localDescription) {
           signaling?.sendSdpOffer(pc.localDescription)
         }
@@ -181,6 +165,7 @@ export async function connectKvsViewer(
 
     signaling.onSdpAnswer = async (answer) => {
       try {
+        console.log('[RDI WebRTC] received SDP answer from Pi')
         await pc.setRemoteDescription(answer)
         remoteDescriptionSet = true
         for (const candidate of pendingRemoteIce) {
