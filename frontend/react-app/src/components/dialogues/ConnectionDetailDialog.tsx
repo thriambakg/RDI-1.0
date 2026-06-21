@@ -11,7 +11,10 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  IconButton,
+  Popover,
 } from '@mui/material'
+import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import { useCallback, useEffect, useState } from 'react'
 import { getSession, updateSession } from '../../services/sessionApi'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
@@ -93,6 +96,8 @@ export function ConnectionDetailDialog({
   const [editTtl, setEditTtl] = useState(14400)
   const [savingSettings, setSavingSettings] = useState(false)
   const [settingsError, setSettingsError] = useState<string | null>(null)
+  const [settingsAnchor, setSettingsAnchor] = useState<HTMLElement | null>(null)
+  const settingsOpen = Boolean(settingsAnchor)
   const [logLines, setLogLines] = useState<string[]>([])
   const [pingRunning, setPingRunning] = useState(false)
   const [pingError, setPingError] = useState<string | null>(null)
@@ -145,6 +150,7 @@ export function ConnectionDetailDialog({
       setLogLines([])
       setPingError(null)
       setCtrlError(null)
+      setSettingsAnchor(null)
       return
     }
     setLoading(true)
@@ -211,6 +217,7 @@ export function ConnectionDetailDialog({
       setData(refreshed)
       setEditTtl(refreshed.ttl_seconds ?? editTtl)
       onSessionUpdated?.(sessionId, { name: editName.trim() || 'drone', ttl_seconds: patch.ttl_seconds })
+      setSettingsAnchor(null)
     } catch (e) {
       setSettingsError(e instanceof Error ? e.message : 'Failed to save settings')
     } finally {
@@ -562,63 +569,8 @@ export function ConnectionDetailDialog({
                 mb: 2,
               }}
             >
-              <Typography sx={{ fontSize: '0.875rem', mb: 1.5, fontWeight: 600 }}>Settings</Typography>
-              <TextField
-                label="Connection name"
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                size="small"
-                fullWidth
-                sx={{
-                  mb: 1.5,
-                  '& .MuiOutlinedInput-root': { color: '#f8fafc', backgroundColor: '#1e293b' },
-                  '& .MuiInputLabel-root': { color: '#94a3b8' },
-                }}
-              />
-              <FormControl fullWidth size="small" sx={{ mb: 1.5 }}>
-                <InputLabel sx={{ color: '#94a3b8' }}>Session TTL</InputLabel>
-                <Select
-                  label="Session TTL"
-                  value={editTtl}
-                  onChange={(e) => setEditTtl(Number(e.target.value))}
-                  sx={{ color: '#f8fafc', backgroundColor: '#1e293b' }}
-                >
-                  {TTL_OPTIONS.map((o) => (
-                    <MenuItem key={o.value} value={o.value}>
-                      {o.label}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              {settingsError && (
-                <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mb: 1 }}>{settingsError}</Typography>
-              )}
-              <Button
-                variant="outlined"
-                size="small"
-                disabled={savingSettings}
-                onClick={() => void handleSaveSettings()}
-                sx={{ color: '#3b82f6', borderColor: '#475569', textTransform: 'none' }}
-              >
-                {savingSettings ? 'Saving…' : 'Save settings'}
-              </Button>
-              {data.status === 'active' && (
-                <Typography sx={{ fontSize: '0.75rem', mt: 1.5, color: '#94a3b8' }}>
-                  Auto-idle at: {formatExpiresAt(data.expires_at)}
-                </Typography>
-              )}
-            </Box>
-            <Box
-              sx={{
-                p: 2,
-                backgroundColor: '#0f172a',
-                border: '1px solid #334155',
-                borderRadius: '0.375rem',
-                mb: 2,
-              }}
-            >
               <Typography sx={{ fontSize: '0.875rem', mb: 1 }}>
-                <strong>Name:</strong> {name || data.drone_id}
+                <strong>Name:</strong> {editName || name || data.drone_id}
               </Typography>
               <Typography sx={{ fontSize: '0.875rem', mb: 1 }}>
                 <strong>Session ID:</strong> {data.session_id}
@@ -752,11 +704,109 @@ export function ConnectionDetailDialog({
           </>
         )}
       </DialogContent>
-      <DialogActions sx={{ borderTop: '1px solid #334155', p: 2 }}>
+      <DialogActions
+        sx={{
+          borderTop: '1px solid #334155',
+          p: 2,
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <IconButton
+          size="small"
+          aria-label="Connection settings"
+          disabled={!data}
+          onClick={(e) => {
+            setSettingsError(null)
+            setSettingsAnchor(e.currentTarget)
+          }}
+          sx={{
+            color: '#64748b',
+            '&:hover': { color: '#94a3b8', backgroundColor: 'rgba(148, 163, 184, 0.08)' },
+          }}
+        >
+          <SettingsOutlinedIcon sx={{ fontSize: 20 }} />
+        </IconButton>
         <Button onClick={onClose} sx={{ color: '#3b82f6' }} disableRipple>
           Close
         </Button>
       </DialogActions>
+      <Popover
+        open={settingsOpen}
+        anchorEl={settingsAnchor}
+        onClose={() => setSettingsAnchor(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
+        transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        slotProps={{
+          paper: {
+            sx: {
+              backgroundColor: '#1e293b',
+              border: '1px solid #334155',
+              borderRadius: '0.5rem',
+              p: 2,
+              width: 280,
+              maxWidth: '90vw',
+            },
+          },
+        }}
+      >
+        <Typography sx={{ fontSize: '0.8125rem', fontWeight: 600, color: '#e2e8f0', mb: 1.5 }}>
+          Connection settings
+        </Typography>
+        <TextField
+          label="Name"
+          value={editName}
+          onChange={(e) => setEditName(e.target.value)}
+          size="small"
+          fullWidth
+          sx={{
+            mb: 1.5,
+            '& .MuiOutlinedInput-root': { color: '#f8fafc', backgroundColor: '#0f172a' },
+            '& .MuiInputLabel-root': { color: '#94a3b8' },
+          }}
+        />
+        <FormControl fullWidth size="small" sx={{ mb: 1.5 }}>
+          <InputLabel sx={{ color: '#94a3b8' }}>Session TTL</InputLabel>
+          <Select
+            label="Session TTL"
+            value={editTtl}
+            onChange={(e) => setEditTtl(Number(e.target.value))}
+            sx={{ color: '#f8fafc', backgroundColor: '#0f172a' }}
+          >
+            {TTL_OPTIONS.map((o) => (
+              <MenuItem key={o.value} value={o.value}>
+                {o.label}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        {data?.status === 'active' && (
+          <Typography sx={{ fontSize: '0.75rem', mb: 1.5, color: '#64748b' }}>
+            Auto-idle: {formatExpiresAt(data.expires_at)}
+          </Typography>
+        )}
+        {settingsError && (
+          <Typography sx={{ color: '#f87171', fontSize: '0.8125rem', mb: 1 }}>{settingsError}</Typography>
+        )}
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
+          <Button
+            size="small"
+            onClick={() => setSettingsAnchor(null)}
+            sx={{ color: '#94a3b8', textTransform: 'none' }}
+          >
+            Cancel
+          </Button>
+          <Button
+            size="small"
+            variant="contained"
+            disabled={savingSettings}
+            onClick={() => void handleSaveSettings()}
+            sx={{ textTransform: 'none', backgroundColor: '#3b82f6' }}
+          >
+            {savingSettings ? 'Saving…' : 'Save'}
+          </Button>
+        </Box>
+      </Popover>
     </Dialog>
   )
 }
