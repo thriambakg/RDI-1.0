@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Alert,
@@ -266,6 +266,9 @@ export default function Console() {
     connectionState: webRtcState,
   } = useSessionWebRtc()
 
+  /** Suppress auto-connect while pause/activate handlers own the WebRTC lifecycle. */
+  const suppressAutoConnectRef = useRef<Set<string>>(new Set())
+
   const handleRelayClick = (relayId: string) => {
     setSelectedRelayId((prev) => (prev === relayId ? null : relayId))
   }
@@ -276,21 +279,23 @@ export default function Console() {
     setRelayDetailDialogOpen(true)
   }
 
-  // Keep data-plane connections open for all active sessions (WebSocket or WebRTC).
-  // Skip sessions that were just reactivated — handleActivateConnection connects after Pi is ready.
+  // Auto-connect on page load / hierarchy refresh only — not on every WebRTC state change.
+  // handleActivateConnection and handleConnectionCreated connect explicitly after Pi is ready.
   useEffect(() => {
     if (profileLoading || !hierarchy) return
     const allSessions = collectSessions(hierarchy, [])
     const active = allSessions.filter((s) => s.status === 'active')
     if (active.length === 0) return
     active.forEach((s) => {
-      const wsState = connectionState(s.session_id)
+      if (suppressAutoConnectRef.current.has(s.session_id)) return
       const rtcState = webRtcState(s.session_id)
       if (rtcState === 'connected' || rtcState === 'connecting') return
       getSession(s.session_id)
         .then((data) => {
+          if (suppressAutoConnectRef.current.has(s.session_id)) return
           if (data.status !== 'active') return
           if (usesWebSocketTransport(data)) {
+            const wsState = connectionState(s.session_id)
             if (wsState === 'open' || wsState === 'connecting') return
             if (data.endpoint) openSessionWs(s.session_id, data.endpoint)
           } else if (data.webrtc) {
@@ -303,6 +308,7 @@ export default function Console() {
 
   const handleConnectionCreated = useCallback(
     (res: CreateSessionResponse, displayName: string) => {
+      suppressAutoConnectRef.current.add(res.session_id)
       updateHierarchy((h) =>
         addSessionAtPath(h, effectiveParentForNewConnection, {
           session_id: res.session_id,
@@ -321,6 +327,7 @@ export default function Console() {
           updateRelayStatusInRelays(r, res.relay_id!, selectedZone.id, 'online')
         )
       }
+      window.setTimeout(() => suppressAutoConnectRef.current.delete(res.session_id), 15000)
     },
     [effectiveParentForNewConnection, selectedZone.id, updateHierarchy, openSessionWs, openWebRtcSession, updateRelays]
   )
@@ -360,9 +367,10 @@ export default function Console() {
   const handlePauseConnection = async (sessionId: string) => {
     setConnectionMenuAnchor(null)
     setDeleteLoading(sessionId)
+    suppressAutoConnectRef.current.add(sessionId)
+    updateHierarchy((h) => updateSessionStatusInHierarchy(h, sessionId, 'idle'))
     closeSessionWs(sessionId)
     closeWebRtcSession(sessionId)
-    updateHierarchy((h) => updateSessionStatusInHierarchy(h, sessionId, 'idle'))
     try {
       await releaseSession(sessionId)
     } catch (err) {
@@ -376,6 +384,7 @@ export default function Console() {
       showSessionError(getSessionErrorMessage(err, 'pause'))
     } finally {
       setDeleteLoading(null)
+      window.setTimeout(() => suppressAutoConnectRef.current.delete(sessionId), 2000)
     }
   }
 
@@ -383,6 +392,7 @@ export default function Console() {
     setConnectionMenuAnchor(null)
     setDeleteLoading(sessionId)
     const session = allConnections.find((c) => c.session_id === sessionId)
+    suppressAutoConnectRef.current.add(sessionId)
     closeSessionWs(sessionId)
     closeWebRtcSession(sessionId)
     try {
@@ -392,14 +402,16 @@ export default function Console() {
         const relay = relays.find((r) => r.relay_id === session.relay_id)
         if (relay) updateRelays((r) => updateRelayStatusInRelays(r, relay.relay_id, relay.wavelength_zone_id, 'online'))
       }
-      if (patch.webrtc) {
-        openWebRtcSession(sessionId, patch.webrtc, { force: true, waitForPiMs: 6000 })
-      } else {
+      const webrtcBundle = patch.webrtc
+        ?? (await getSession(sessionId).then((data) =>
+          data.status === 'active' ? data.webrtc : undefined
+        ))
+      if (webrtcBundle) {
+        openWebRtcSession(sessionId, webrtcBundle, { force: true, waitForPiMs: 6000 })
+      } else if (patch.status === 'active') {
         const data = await getSession(sessionId)
         if (data.status === 'active' && data.endpoint && usesWebSocketTransport(data)) {
           openSessionWs(sessionId, data.endpoint)
-        } else if (data.status === 'active' && data.webrtc) {
-          openWebRtcSession(sessionId, data.webrtc, { force: true, waitForPiMs: 6000 })
         }
       }
     } catch (err) {
@@ -417,6 +429,7 @@ export default function Console() {
       showSessionError(getSessionErrorMessage(err, 'activate'))
     } finally {
       setDeleteLoading(null)
+      window.setTimeout(() => suppressAutoConnectRef.current.delete(sessionId), 15000)
     }
   }
 

@@ -294,6 +294,9 @@ async def run_master(cfg: dict) -> None:
                                     c.connectionState,
                                     c.iceConnectionState,
                                 )
+                                if c.connectionState in ("closed", "failed"):
+                                    if pc_by_client.get(cid) is c:
+                                        del pc_by_client[cid]
 
                             await pc.setRemoteDescription(
                                 RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])

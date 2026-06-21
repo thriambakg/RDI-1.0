@@ -15,7 +15,7 @@ import {
   Popover,
 } from '@mui/material'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { getSession, updateSession } from '../../services/sessionApi'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import { useSessionWebRtc } from '../../contexts/SessionWebRtcContext'
@@ -115,6 +115,8 @@ export function ConnectionDetailDialog({
     setLogLines((prev) => [...prev.slice(-98), line])
   }, [])
 
+  const prevSessionStatusRef = useRef<string | undefined>(undefined)
+
   const sendCommand = useCallback(
     (cmd: 'takeoff' | 'land', alt?: number) => {
       if (!data?.session_id) return
@@ -169,13 +171,24 @@ export function ConnectionDetailDialog({
 
   useEffect(() => {
     if (!open || !sessionId || !sessionStatus) return
+    const prevStatus = prevSessionStatusRef.current
+    prevSessionStatusRef.current = sessionStatus
     getSession(sessionId)
       .then((session) => {
         setData(session)
         setEditTtl(session.ttl_seconds ?? 14400)
+        const reactivated =
+          prevStatus === 'idle' && session.status === 'active' && sessionStatus === 'active'
+        if (
+          reactivated &&
+          session.webrtc &&
+          !usesWebSocketTransport(session)
+        ) {
+          openWebRtcSession(sessionId, session.webrtc, { force: true, waitForPiMs: 6000 })
+        }
       })
       .catch(() => { /* ignore */ })
-  }, [open, sessionId, sessionStatus])
+  }, [open, sessionId, sessionStatus, openWebRtcSession])
 
   // Keep WebSocket open for legacy WebSocket sessions when dialog is open
   useEffect(() => {

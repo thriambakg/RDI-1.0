@@ -215,8 +215,10 @@ def reconcile(workers: dict[str, WorkerProcess], desired: list[dict]) -> dict[st
                 continue
             if channel_changed:
                 LOG.info(
-                    "refreshing worker session_id=%s (KVS channel changed)",
+                    "refreshing worker session_id=%s (KVS channel changed %s -> %s)",
                     sid,
+                    (existing.channel_arn or "?")[-36:],
+                    (desired_arn or "?")[-36:],
                 )
             else:
                 LOG.info(
