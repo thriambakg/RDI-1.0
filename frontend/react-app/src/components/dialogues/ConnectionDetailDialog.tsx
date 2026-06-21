@@ -6,9 +6,14 @@ import {
   Button,
   Box,
   Typography,
+  TextField,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
 } from '@mui/material'
 import { useCallback, useEffect, useState } from 'react'
-import { getSession } from '../../services/sessionApi'
+import { getSession, updateSession } from '../../services/sessionApi'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import { useSessionWebRtc } from '../../contexts/SessionWebRtcContext'
 import { usesWebSocketTransport } from '../../utils/sessionTransport'
@@ -18,6 +23,19 @@ import type { RelayRef } from '../../services/profileApi'
 
 const RLOG_PREFIX = new Uint8Array([0x52, 0x4c, 0x4f, 0x47]) // "RLOG"
 const CTRL_PREFIX = new TextEncoder().encode('CTRL')
+
+const TTL_OPTIONS = [
+  { value: 0, label: 'No TTL (indefinite)' },
+  { value: 3600, label: '1 hour' },
+  { value: 14400, label: '4 hours' },
+  { value: 86400, label: '24 hours' },
+  { value: 604800, label: '7 days' },
+]
+
+function formatExpiresAt(ts?: number): string {
+  if (!ts || ts >= 4102444800) return 'Indefinite (until paused or deleted)'
+  return new Date(ts * 1000).toLocaleString()
+}
 
 function isRlogMessage(arr: Uint8Array): boolean {
   return arr.length >= 4 && arr[0] === RLOG_PREFIX[0] && arr[1] === RLOG_PREFIX[1] && arr[2] === RLOG_PREFIX[2] && arr[3] === RLOG_PREFIX[3]
@@ -36,6 +54,9 @@ interface ConnectionDetailDialogProps {
   sessionId: string | null
   open: boolean
   onClose: () => void
+  /** Live status from console hierarchy (updates when user reactivates without closing dialog). */
+  sessionStatus?: string
+  onSessionUpdated?: (sessionId: string, updates: { name?: string; ttl_seconds?: number }) => void
   relays?: RelayRef[]
 }
 
@@ -44,7 +65,14 @@ interface HopLog {
   message: string
 }
 
-export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }: ConnectionDetailDialogProps) {
+export function ConnectionDetailDialog({
+  sessionId,
+  open,
+  onClose,
+  sessionStatus,
+  onSessionUpdated,
+  relays = [],
+}: ConnectionDetailDialogProps) {
   const [data, setData] = useState<{
     session_id: string
     drone_id: string
@@ -56,9 +84,15 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
     mavlink_host?: string
     mavlink_port?: string | number
     webrtc?: WebRtcViewerBundle
+    ttl_seconds?: number
+    expires_at?: number
   } | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editTtl, setEditTtl] = useState(14400)
+  const [savingSettings, setSavingSettings] = useState(false)
+  const [settingsError, setSettingsError] = useState<string | null>(null)
   const [logLines, setLogLines] = useState<string[]>([])
   const [pingRunning, setPingRunning] = useState(false)
   const [pingError, setPingError] = useState<string | null>(null)
@@ -116,10 +150,32 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
     setLoading(true)
     setError(null)
     getSession(sessionId)
-      .then(setData)
+      .then((session) => {
+        setData(session)
+        const parsedName = session.drone_id
+          ? session.drone_id.split('-').slice(0, -1).join('-') || session.drone_id
+          : ''
+        setEditName(parsedName)
+        setEditTtl(session.ttl_seconds ?? 14400)
+      })
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'))
       .finally(() => setLoading(false))
   }, [open, sessionId])
+
+  // Refetch and reconnect when reactivated from console while dialog stays open.
+  useEffect(() => {
+    if (!open || !sessionId || sessionStatus !== 'active') return
+    getSession(sessionId)
+      .then((session) => {
+        setData(session)
+        if (session.webrtc && !usesWebSocketTransport(session)) {
+          openWebRtcSession(sessionId, session.webrtc)
+        } else if (session.endpoint && usesWebSocketTransport(session)) {
+          openSession(sessionId, session.endpoint)
+        }
+      })
+      .catch(() => { /* ignore */ })
+  }, [open, sessionId, sessionStatus, openWebRtcSession, openSession])
 
   // Keep WebSocket open for legacy WebSocket sessions when dialog is open
   useEffect(() => {
@@ -140,6 +196,27 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
       closeWebRtcSession(sessionId)
     }
   }, [open, sessionId, closeWebRtcSession])
+
+  const handleSaveSettings = useCallback(async () => {
+    if (!sessionId || !data) return
+    setSavingSettings(true)
+    setSettingsError(null)
+    try {
+      const patch = await updateSession({
+        session_id: sessionId,
+        name: editName.trim() || 'drone',
+        ttl_seconds: editTtl,
+      })
+      const refreshed = await getSession(sessionId)
+      setData(refreshed)
+      setEditTtl(refreshed.ttl_seconds ?? editTtl)
+      onSessionUpdated?.(sessionId, { name: editName.trim() || 'drone', ttl_seconds: patch.ttl_seconds })
+    } catch (e) {
+      setSettingsError(e instanceof Error ? e.message : 'Failed to save settings')
+    } finally {
+      setSavingSettings(false)
+    }
+  }, [sessionId, data, editName, editTtl, onSessionUpdated])
 
   // Listen for agent log messages (RLOG) when WebSocket is connected
   useEffect(() => {
@@ -410,6 +487,23 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
       <DialogContent sx={{ color: '#f8fafc' }}>
         {loading && <Typography sx={{ color: '#94a3b8' }}>Loading…</Typography>}
         {error && <Typography sx={{ color: '#f87171' }}>{error}</Typography>}
+        {isWebRtc && data?.status === 'active' && !isConnected && !isFailed && !isConnecting && data?.webrtc && (
+          <Box sx={{ mb: 2 }}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => openWebRtcSession(sessionId!, data.webrtc!)}
+              sx={{
+                color: '#3b82f6',
+                borderColor: '#475569',
+                textTransform: 'none',
+                '&:hover': { borderColor: '#3b82f6' },
+              }}
+            >
+              Connect WebRTC
+            </Button>
+          </Box>
+        )}
         {isWebRtc && data?.status === 'active' && !isConnected && !isFailed && (
           <Typography sx={{ color: '#94a3b8', fontSize: '0.875rem', mb: 2 }}>
             Connecting WebRTC viewer to Pi via KVS signaling. Ensure <code style={{ color: '#cbd5e1' }}>rdi-relay-daemon</code> is running on the relay.
@@ -459,6 +553,61 @@ export function ConnectionDetailDialog({ sessionId, open, onClose, relays = [] }
         )}
         {data && (
           <>
+            <Box
+              sx={{
+                p: 2,
+                backgroundColor: '#0f172a',
+                border: '1px solid #334155',
+                borderRadius: '0.375rem',
+                mb: 2,
+              }}
+            >
+              <Typography sx={{ fontSize: '0.875rem', mb: 1.5, fontWeight: 600 }}>Settings</Typography>
+              <TextField
+                label="Connection name"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                size="small"
+                fullWidth
+                sx={{
+                  mb: 1.5,
+                  '& .MuiOutlinedInput-root': { color: '#f8fafc', backgroundColor: '#1e293b' },
+                  '& .MuiInputLabel-root': { color: '#94a3b8' },
+                }}
+              />
+              <FormControl fullWidth size="small" sx={{ mb: 1.5 }}>
+                <InputLabel sx={{ color: '#94a3b8' }}>Session TTL</InputLabel>
+                <Select
+                  label="Session TTL"
+                  value={editTtl}
+                  onChange={(e) => setEditTtl(Number(e.target.value))}
+                  sx={{ color: '#f8fafc', backgroundColor: '#1e293b' }}
+                >
+                  {TTL_OPTIONS.map((o) => (
+                    <MenuItem key={o.value} value={o.value}>
+                      {o.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              {settingsError && (
+                <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mb: 1 }}>{settingsError}</Typography>
+              )}
+              <Button
+                variant="outlined"
+                size="small"
+                disabled={savingSettings}
+                onClick={() => void handleSaveSettings()}
+                sx={{ color: '#3b82f6', borderColor: '#475569', textTransform: 'none' }}
+              >
+                {savingSettings ? 'Saving…' : 'Save settings'}
+              </Button>
+              {data.status === 'active' && (
+                <Typography sx={{ fontSize: '0.75rem', mt: 1.5, color: '#94a3b8' }}>
+                  Auto-idle at: {formatExpiresAt(data.expires_at)}
+                </Typography>
+              )}
+            </Box>
             <Box
               sx={{
                 p: 2,

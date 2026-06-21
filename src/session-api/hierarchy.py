@@ -84,6 +84,25 @@ def update_session_status(hierarchy: dict, session_id: str, status: str) -> dict
     return h
 
 
+def update_session_name(hierarchy: dict, session_id: str, name: str) -> dict:
+    """Update display name of session_id anywhere in hierarchy."""
+    h = _ensure_hierarchy(hierarchy)
+
+    def _update(folder: Any) -> None:
+        if not _is_folder_node(folder):
+            return
+        for s in _sessions_list(folder):
+            if isinstance(s, dict) and s.get("session_id") == session_id:
+                s["name"] = name
+                return
+        for sub in _subfolders_map(folder).values():
+            _update(sub)
+
+    for folder in h.values():
+        _update(folder)
+    return h
+
+
 def remove_session(hierarchy: dict, session_id: str) -> dict:
     """Remove session_id from hierarchy. Top-level keys are folder names (e.g. My Drones, Shared)."""
     h = _ensure_hierarchy(hierarchy)

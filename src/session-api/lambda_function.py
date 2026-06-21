@@ -18,7 +18,7 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
-from hierarchy import add_session_to_folder, update_session_status, remove_session
+from hierarchy import add_session_to_folder, update_session_name, update_session_status, remove_session
 from kvs_signaling import (
     build_webrtc_viewer_bundle,
     create_signaling_channel,
@@ -536,6 +536,7 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     }
     if idle_after_ts is not None:
         item["idle_after"] = {"N": str(idle_after_ts)}
+    item["ttl_seconds"] = {"N": str(ttl_seconds if ttl_val > 0 else 0)}
     if relay_id:
         item["relay_id"] = {"S": relay_id}
     if body.get("metadata") and isinstance(body["metadata"], dict):
@@ -702,6 +703,103 @@ def _teardown_webrtc_session(dynamodb, user_id: str, session_id: str) -> None:
         pass
 
 
+def _session_ttl_seconds(item: dict) -> int:
+    """Read stored ttl_seconds from session item; default 4h."""
+    raw = (item.get("ttl_seconds") or {}).get("N")
+    if raw is not None:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    idle_after = (item.get("idle_after") or {}).get("N")
+    created = (item.get("created_at") or {}).get("N")
+    if idle_after and created:
+        try:
+            return max(60, int(idle_after) - int(created))
+        except (TypeError, ValueError):
+            pass
+    return DEFAULT_TTL_SECONDS
+
+
+def _session_mavlink_target(
+    dynamodb, user_id: str, item: dict
+) -> tuple[int, str, str | None]:
+    """Effective mavlink port/host and relay_id for a session."""
+    relay_id = (item.get("relay_id") or {}).get("S", "") or None
+    wl_zone = (item.get("wavelength_zone_id") or {}).get("S", REGION)
+    relay_config = (
+        _fetch_relay_config(dynamodb, user_id, relay_id, wl_zone or "")
+        if relay_id and RELAY_REGISTRY_TABLE
+        else None
+    )
+    metadata_raw = item.get("metadata", {}).get("S")
+    metadata = {}
+    if metadata_raw:
+        try:
+            metadata = json.loads(metadata_raw)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    eff_port = None
+    if isinstance(metadata, dict) and metadata.get("mavlink_port") is not None:
+        try:
+            eff_port = int(metadata["mavlink_port"])
+        except (TypeError, ValueError):
+            pass
+    if eff_port is None:
+        eff_port = int(MAVLINK_PORT) if MAVLINK_PORT else 18570
+    eff_host = (relay_config or {}).get("mavlink_host") or "127.0.0.1"
+    return eff_port, eff_host, relay_id
+
+
+def _reactivate_webrtc_session(
+    dynamodb, user_id: str, session_id: str, item: dict
+) -> str:
+    """Recreate KVS channel (idle teardown deletes it) and re-register on relay."""
+    if not webrtc_enabled():
+        return (item.get("signaling_channel_arn") or {}).get("S", "")
+    ch = create_signaling_channel(session_id)
+    channel_arn = ch["channel_arn"]
+    eff_port, eff_host, relay_id = _session_mavlink_target(dynamodb, user_id, item)
+    wl_zone = (item.get("wavelength_zone_id") or {}).get("S", REGION)
+    drone_id = (item.get("drone_id") or {}).get("S", "")
+    if relay_id:
+        _add_relay_active_session(
+            dynamodb,
+            user_id,
+            relay_id,
+            wl_zone,
+            session_id,
+            channel_arn,
+            drone_id=drone_id,
+            mavlink_port=eff_port,
+            mavlink_host=eff_host,
+        )
+    _log("kvs channel reactivated", session_id=session_id, channel_arn=channel_arn)
+    return channel_arn
+
+
+def _upsert_profile_update_name(dynamodb, user_id: str, session_id: str, name: str) -> None:
+    """Update session display name in hierarchy."""
+    try:
+        resp = dynamodb.get_item(
+            TableName=USER_PROFILES_TABLE,
+            Key={"user_id": {"S": user_id}},
+        )
+    except ClientError:
+        return
+    item = resp.get("Item")
+    if not item or "connection_hierarchy" not in item:
+        return
+    hierarchy = _from_dynamo(item["connection_hierarchy"]) or {}
+    hierarchy = update_session_name(hierarchy, session_id, name)
+    dynamodb.update_item(
+        TableName=USER_PROFILES_TABLE,
+        Key={"user_id": {"S": user_id}},
+        UpdateExpression="SET connection_hierarchy = :h",
+        ExpressionAttributeValues={":h": _to_dynamo(hierarchy)},
+    )
+
+
 def _release_session(user_id: str, session_id: str | None, headers: dict, *, permanent: bool = False) -> dict:
     """Release session (mark idle) or permanently delete."""
     if not session_id:
@@ -822,56 +920,102 @@ def _idle_expired_sessions() -> None:
 
 
 def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
-    """Set session status (e.g. active). Body: session_id, status."""
+    """Update session: status (active/idle), display name, and/or TTL."""
     session_id = body.get("session_id")
-    status = (body.get("status") or "").strip().lower()
+    status = (body.get("status") or "").strip().lower() or None
+    name = (body.get("name") or body.get("drone_name") or "").strip() or None
+    ttl_raw = body.get("ttl_seconds")
+
     if not session_id:
         _log("patch_session rejected", reason="no session_id")
         return _response(400, {"error": "session_id required"}, headers)
-    if status not in ("active", "idle"):
+    if status and status not in ("active", "idle"):
         _log("patch_session rejected", session_id=session_id, reason="invalid status", status=status)
         return _response(400, {"error": "status must be 'active' or 'idle'"}, headers)
+    if not status and name is None and ttl_raw is None:
+        return _response(400, {"error": "Provide status, name, and/or ttl_seconds"}, headers)
 
-    _log("patch_session start", session_id=session_id, status=status)
+    _log("patch_session start", session_id=session_id, status=status or "(unchanged)")
     dynamodb = boto3.client("dynamodb")
     now = int(time.time())
 
-    # When reactivating, we need wavelength_zone_id (deployment region key) for relay lookup, relay_id to update relay status,
-    # and relay_type to skip cloud SSM agent for local relays.
-    wavelength_zone_id = None
-    session_relay_id = None
+    try:
+        resp = dynamodb.get_item(
+            TableName=TABLE_NAME,
+            Key={"user_id": {"S": user_id}, "session_id": {"S": session_id}},
+        )
+    except ClientError:
+        raise
+    item = resp.get("Item")
+    if not item:
+        _log("patch_session not found", session_id=session_id)
+        return _response(404, {"error": "Session not found"}, headers)
+
+    wavelength_zone_id = item.get("wavelength_zone_id", {}).get("S")
+    session_relay_id = item.get("relay_id", {}).get("S")
     session_relay_config = None
+    if session_relay_id and wavelength_zone_id and RELAY_REGISTRY_TABLE:
+        session_relay_config = _fetch_relay_config(
+            dynamodb, user_id, session_relay_id, wavelength_zone_id
+        )
+
+    effective_status = status or (item.get("status", {}).get("S") or "idle")
+    ttl_seconds = _session_ttl_seconds(item)
+    if ttl_raw is not None:
+        ttl_val = int(ttl_raw)
+        ttl_seconds = 0 if ttl_val <= 0 else max(60, min(ttl_val, MAX_TTL_SECONDS))
+
+    set_parts = ["updated_at = :now"]
+    remove_parts: list[str] = []
+    expr_names = {"#status": "status"}
+    expr_values: dict[str, dict] = {":now": {"N": str(now)}}
+
+    if status:
+        set_parts.append("#status = :status")
+        expr_values[":status"] = {"S": status}
+        effective_status = status
+
+    set_parts.append("ttl_seconds = :ttl")
+    expr_values[":ttl"] = {"N": str(ttl_seconds)}
+
+    if effective_status == "active" and (status == "active" or ttl_raw is not None):
+        if ttl_seconds <= 0:
+            remove_parts.append("idle_after")
+            expr_values[":expires"] = {"N": str(INDEFINITE_EXPIRES_AT)}
+            set_parts.append("expires_at = :expires")
+        else:
+            idle_after_ts = now + ttl_seconds
+            expr_values[":idle_after"] = {"N": str(idle_after_ts)}
+            expr_values[":expires"] = {"N": str(idle_after_ts)}
+            set_parts.extend(["idle_after = :idle_after", "expires_at = :expires"])
+        if status == "active":
+            remove_parts.append("released_at")
+    elif ttl_raw is not None and ttl_seconds > 0:
+        # Store TTL for next activation; do not start timer while idle.
+        remove_parts.append("idle_after")
+
+    new_channel_arn = None
     if status == "active":
         try:
-            resp = dynamodb.get_item(
-                TableName=TABLE_NAME,
-                Key={"user_id": {"S": user_id}, "session_id": {"S": session_id}},
-                ProjectionExpression="wavelength_zone_id, relay_id",
-            )
-            item = resp.get("Item") or {}
-            wavelength_zone_id = item.get("wavelength_zone_id", {}).get("S")
-            session_relay_id = item.get("relay_id", {}).get("S")
-            if session_relay_id and wavelength_zone_id and RELAY_REGISTRY_TABLE:
-                session_relay_config = _fetch_relay_config(
-                    dynamodb, user_id, session_relay_id, wavelength_zone_id
-                )
-        except ClientError:
-            pass
+            new_channel_arn = _reactivate_webrtc_session(dynamodb, user_id, session_id, item)
+        except Exception as e:
+            _log("patch_session reactivate webrtc failed", session_id=session_id, error=str(e))
+            return _response(500, {"error": f"WebRTC reactivation failed: {e}"}, headers)
+        if new_channel_arn:
+            set_parts.append("signaling_channel_arn = :channel_arn")
+            expr_values[":channel_arn"] = {"S": new_channel_arn}
+
+    update_expr = "SET " + ", ".join(set_parts)
+    if remove_parts:
+        update_expr += " REMOVE " + ", ".join(remove_parts)
 
     try:
         dynamodb.update_item(
             TableName=TABLE_NAME,
-            Key={
-                "user_id": {"S": user_id},
-                "session_id": {"S": session_id},
-            },
-            UpdateExpression="SET #status = :status, updated_at = :now",
-            ConditionExpression="attribute_exists(session_id)",
-            ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={
-                ":status": {"S": status},
-                ":now": {"N": str(now)},
-            },
+            Key={"user_id": {"S": user_id}, "session_id": {"S": session_id}},
+            UpdateExpression=update_expr,
+            ExpressionAttributeNames=expr_names,
+            ExpressionAttributeValues=expr_values,
         )
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
@@ -879,18 +1023,19 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
             return _response(404, {"error": "Session not found"}, headers)
         raise
 
-    if USER_PROFILES_TABLE:
+    if name and USER_PROFILES_TABLE:
+        _upsert_profile_update_name(dynamodb, user_id, session_id, name)
+    if status and USER_PROFILES_TABLE:
         _upsert_profile_update_status(dynamodb, user_id, session_id, status)
     if status == "idle":
         _teardown_webrtc_session(dynamodb, user_id, session_id)
-    if not webrtc_enabled():
+    if status and not webrtc_enabled():
         _notify_proxy_session_status(session_id, status)
     if status == "idle" and WAVELENGTH_INSTANCE_ID:
         _remove_session_from_agent(WAVELENGTH_INSTANCE_ID, session_id)
     elif status == "active" and WAVELENGTH_INSTANCE_ID and (
         not WAVELENGTH_ZONE_ID or wavelength_zone_id == WAVELENGTH_ZONE_ID
     ):
-        # Skip Wavelength for local relays; add for sim_relay or legacy (no relay_id)
         relay_type = (session_relay_config or {}).get("relay_type")
         if session_relay_id and relay_type == "local":
             _log("add_session skipped", reason="local_relay", session_id=session_id)
@@ -899,8 +1044,27 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
     if status == "active" and session_relay_id and wavelength_zone_id:
         _update_relay_status(dynamodb, user_id, session_relay_id, wavelength_zone_id, "online")
 
-    _log("patch_session done", session_id=session_id, status=status)
-    return _response(200, {"message": f"Session set to {status}"}, headers)
+    out: dict[str, Any] = {
+        "message": "Session updated",
+        "session_id": session_id,
+        "status": effective_status,
+        "ttl_seconds": ttl_seconds,
+    }
+    if effective_status == "active" and ttl_seconds > 0:
+        out["expires_at"] = now + ttl_seconds
+    elif ttl_seconds <= 0:
+        out["expires_at"] = INDEFINITE_EXPIRES_AT
+    if name:
+        out["name"] = name
+    channel_arn = new_channel_arn or (item.get("signaling_channel_arn") or {}).get("S", "")
+    if webrtc_enabled() and effective_status == "active" and channel_arn:
+        try:
+            out["webrtc"] = build_webrtc_viewer_bundle(session_id, channel_arn)
+        except Exception as e:
+            _log("patch_session webrtc creds failed", session_id=session_id, error=str(e))
+
+    _log("patch_session done", session_id=session_id, status=effective_status)
+    return _response(200, out, headers)
 
 
 def _get_session(
@@ -974,6 +1138,10 @@ def _get_session(
         out["mavlink_port"] = eff_port
         if WAVELENGTH_CARRIER_IP and wl_zone and (not WAVELENGTH_ZONE_ID or wl_zone == WAVELENGTH_ZONE_ID):
             out["carrier_ip"] = WAVELENGTH_CARRIER_IP
+        ttl = _session_ttl_seconds(item)
+        out["ttl_seconds"] = ttl
+        exp_n = (item.get("idle_after") or item.get("expires_at")) or {}
+        out["expires_at"] = int(exp_n.get("N", "0") or "0")
         if webrtc_enabled():
             channel_arn = (item.get("signaling_channel_arn") or {}).get("S", "")
             if channel_arn and out.get("status") == "active":
@@ -1025,6 +1193,7 @@ def _get_session(
             "wavelength_zone_id": item.get("wavelength_zone_id", {}).get("S"),
             "endpoint": item.get("endpoint", {}).get("S"),
             "expires_at": expires_at_val,
+            "ttl_seconds": _session_ttl_seconds(item),
         }
         transport = (item.get("transport") or {}).get("S")
         if transport:

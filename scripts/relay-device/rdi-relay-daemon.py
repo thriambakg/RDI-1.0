@@ -167,7 +167,14 @@ def _drain_worker_logs(workers: dict[str, WorkerProcess]) -> None:
                 break
             LOG.info("[worker %s] %s", sid[:8], line.rstrip())
         if proc.poll() is not None:
-            LOG.warning("worker exited code=%s session_id=%s", proc.returncode, sid)
+            code = proc.returncode
+            if code == 2:
+                LOG.warning(
+                    "worker exited for credential refresh session_id=%s",
+                    sid,
+                )
+            else:
+                LOG.warning("worker exited code=%s session_id=%s", code, sid)
 
 
 def reconcile(workers: dict[str, WorkerProcess], desired: list[dict]) -> dict[str, WorkerProcess]:
@@ -195,6 +202,14 @@ def reconcile(workers: dict[str, WorkerProcess], desired: list[dict]) -> dict[st
         started = start_worker(session)
         if started:
             workers[sid] = started
+
+    active = [
+        f"{sid[:8]}(pid={w.proc.pid})"
+        for sid, w in workers.items()
+        if w.proc and w.proc.poll() is None
+    ]
+    if len(active) > 1:
+        LOG.info("workers active: %s", ", ".join(active))
     return workers
 
 

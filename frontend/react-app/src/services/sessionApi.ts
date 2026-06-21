@@ -61,6 +61,7 @@ export interface SessionInfo {
   endpoint?: string
   transport?: SessionTransport
   expires_at?: number
+  ttl_seconds?: number
 }
 
 export interface ListSessionsResponse {
@@ -127,9 +128,31 @@ export async function releaseSession(session_id: string): Promise<void> {
   console.log('✅ [RDI Session API] Session released:', { session_id })
 }
 
-export async function activateSession(session_id: string): Promise<void> {
+export async function activateSession(session_id: string): Promise<PatchSessionResponse> {
+  return updateSession({ session_id, status: 'active' })
+}
+
+export interface PatchSessionResponse {
+  message: string
+  session_id: string
+  status: string
+  ttl_seconds?: number
+  expires_at?: number
+  name?: string
+  webrtc?: WebRtcViewerBundle
+}
+
+export async function updateSession(params: {
+  session_id: string
+  status?: 'active' | 'idle'
+  name?: string
+  ttl_seconds?: number
+}): Promise<PatchSessionResponse> {
   const url = `${getApiBaseUrl()}/sessions`
-  const body = { session_id, status: 'active' }
+  const body: Record<string, unknown> = { session_id: params.session_id }
+  if (params.status) body.status = params.status
+  if (params.name != null) body.name = params.name
+  if (params.ttl_seconds != null) body.ttl_seconds = params.ttl_seconds
   const headers = await getAuthHeaders()
   const res = await fetch(url, {
     method: 'PATCH',
@@ -138,8 +161,9 @@ export async function activateSession(session_id: string): Promise<void> {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error((err as { error?: string }).error || `Activate session failed: ${res.status}`)
+    throw new Error((err as { error?: string }).error || `Update session failed: ${res.status}`)
   }
+  return res.json()
 }
 
 export async function listSessions(wavelengthZoneId?: string): Promise<ListSessionsResponse> {
@@ -181,6 +205,8 @@ export async function getSession(session_id: string): Promise<{
   mavlink_port?: number
   carrier_ip?: string
   webrtc?: WebRtcViewerBundle
+  ttl_seconds?: number
+  expires_at?: number
 }> {
   const url = `${getApiBaseUrl()}/sessions?session_id=${encodeURIComponent(session_id)}`
   const headers = await getAuthHeaders()

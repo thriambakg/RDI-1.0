@@ -10,6 +10,7 @@ mavlink data channel (Step 3 will forward bytes to UDP serial).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -28,6 +29,9 @@ from botocore.credentials import Credentials
 LOG = logging.getLogger("rdi.kvs_master")
 
 PING_BYTES = b"PING"
+# Exit so rdi-relay-daemon can respawn with fresh STS creds from active-sessions.
+SIGNALING_AUTH_EXIT_CODE = 2
+SIGNALING_AUTH_MAX_RETRIES = int(os.environ.get("RDI_SIGNALING_AUTH_MAX_RETRIES", "3"))
 PONG_BYTES = b"PONG"
 
 
@@ -206,127 +210,165 @@ async def run_master(cfg: dict) -> None:
             pc.iceGatheringState,
         )
 
+    signaling_auth_failures = 0
+
     while True:
         wss_url = _signed_wss_url(endpoint_wss, channel_arn, region, credentials, "MASTER")
         try:
             async with websockets.connect(wss_url, ping_interval=20, ping_timeout=20) as ws:
+                signaling_auth_failures = 0
                 LOG.info("KVS signaling connected session_id=%s", session_id)
-                async for message in ws:
-                    msg_type, payload, client_id = _decode_msg(message)
-                    if msg_type:
-                        LOG.info(
-                            "signaling rx type=%s from=%s session_id=%s",
-                            msg_type,
-                            client_id or "?",
-                            session_id,
-                        )
-                    if msg_type == "SDP_OFFER" and client_id:
-                        for old_cid, old_pc in list(pc_by_client.items()):
-                            if old_cid != client_id:
-                                await _close_pc(old_pc)
-                                del pc_by_client[old_cid]
-                                LOG.info(
-                                    "closed stale peer session_id=%s viewer=%s",
-                                    session_id,
-                                    old_cid,
-                                )
-                        old = pc_by_client.pop(client_id, None)
-                        if old:
-                            await _close_pc(old)
-                        ice = _ice_servers(channel_arn, endpoint_https, region, credentials)
-                        pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=ice))
-                        pc_by_client[client_id] = pc
-
-                        @pc.on("datachannel")
-                        def on_datachannel(ch, cid=client_id) -> None:
-                            if ch.label != "mavlink":
-                                return
-
-                            @ch.on("open")
-                            def on_open() -> None:
-                                LOG.info("data channel open session_id=%s viewer=%s", session_id, cid)
-
-                            @ch.on("message")
-                            def on_message(message, channel=ch) -> None:
-                                if isinstance(message, bytes):
-                                    if message == PING_BYTES:
-                                        channel.send(PONG_BYTES)
-                                        LOG.info(
-                                            "ping pong session_id=%s viewer=%s",
-                                            session_id,
-                                            cid,
-                                        )
-                                        return
-                                    LOG.debug("datachannel rx %d bytes", len(message))
-                                else:
-                                    LOG.debug("datachannel rx %s", message)
-
-                        @pc.on("icecandidate")
-                        async def on_ice(candidate, cid=client_id, sock=ws) -> None:
-                            if candidate is None:
-                                return
-                            ice_payload = {
-                                "candidate": candidate.candidate,
-                                "sdpMid": candidate.sdpMid,
-                                "sdpMLineIndex": candidate.sdpMLineIndex,
-                            }
-                            try:
-                                await sock.send(_encode_msg("ICE_CANDIDATE", ice_payload, cid))
-                                LOG.info("sent ICE_CANDIDATE to viewer=%s", cid)
-                            except Exception as e:
-                                LOG.error("failed to send ICE to viewer=%s: %s", cid, e)
-
-                        @pc.on("connectionstatechange")
-                        async def on_state_change(c=pc, cid=client_id) -> None:
+                heartbeat = asyncio.create_task(_signaling_heartbeat(session_id, pc_by_client))
+                try:
+                    async for message in ws:
+                        msg_type, payload, client_id = _decode_msg(message)
+                        if msg_type:
                             LOG.info(
-                                "peer connection state session_id=%s viewer=%s state=%s ice=%s",
+                                "signaling rx type=%s from=%s session_id=%s",
+                                msg_type,
+                                client_id or "?",
                                 session_id,
-                                cid,
-                                c.connectionState,
-                                c.iceConnectionState,
                             )
+                        if msg_type == "SDP_OFFER" and client_id:
+                            for old_cid, old_pc in list(pc_by_client.items()):
+                                if old_cid != client_id:
+                                    await _close_pc(old_pc)
+                                    del pc_by_client[old_cid]
+                                    LOG.info(
+                                        "closed stale peer session_id=%s viewer=%s",
+                                        session_id,
+                                        old_cid,
+                                    )
+                            old = pc_by_client.pop(client_id, None)
+                            if old:
+                                await _close_pc(old)
+                            ice = _ice_servers(channel_arn, endpoint_https, region, credentials)
+                            pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=ice))
+                            pc_by_client[client_id] = pc
 
-                        await pc.setRemoteDescription(
-                            RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
-                        )
-                        buffered = pending_ice.pop(client_id, [])
-                        for ice_payload in buffered:
-                            await _apply_ice(pc, ice_payload)
-                        if buffered:
+                            @pc.on("datachannel")
+                            def on_datachannel(ch, cid=client_id) -> None:
+                                if ch.label != "mavlink":
+                                    return
+
+                                @ch.on("open")
+                                def on_open() -> None:
+                                    LOG.info("data channel open session_id=%s viewer=%s", session_id, cid)
+
+                                @ch.on("message")
+                                def on_message(message, channel=ch) -> None:
+                                    if isinstance(message, bytes):
+                                        if message == PING_BYTES:
+                                            channel.send(PONG_BYTES)
+                                            LOG.info(
+                                                "ping pong session_id=%s viewer=%s",
+                                                session_id,
+                                                cid,
+                                            )
+                                            return
+                                        LOG.debug("datachannel rx %d bytes", len(message))
+                                    else:
+                                        LOG.debug("datachannel rx %s", message)
+
+                            @pc.on("icecandidate")
+                            async def on_ice(candidate, cid=client_id, sock=ws) -> None:
+                                if candidate is None:
+                                    return
+                                ice_payload = {
+                                    "candidate": candidate.candidate,
+                                    "sdpMid": candidate.sdpMid,
+                                    "sdpMLineIndex": candidate.sdpMLineIndex,
+                                }
+                                try:
+                                    await sock.send(_encode_msg("ICE_CANDIDATE", ice_payload, cid))
+                                    LOG.info("sent ICE_CANDIDATE to viewer=%s", cid)
+                                except Exception as e:
+                                    LOG.error("failed to send ICE to viewer=%s: %s", cid, e)
+
+                            @pc.on("connectionstatechange")
+                            async def on_state_change(c=pc, cid=client_id) -> None:
+                                LOG.info(
+                                    "peer connection state session_id=%s viewer=%s state=%s ice=%s",
+                                    session_id,
+                                    cid,
+                                    c.connectionState,
+                                    c.iceConnectionState,
+                                )
+
+                            await pc.setRemoteDescription(
+                                RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
+                            )
+                            buffered = pending_ice.pop(client_id, [])
+                            for ice_payload in buffered:
+                                await _apply_ice(pc, ice_payload)
+                            if buffered:
+                                LOG.info(
+                                    "applied %d buffered viewer ICE session_id=%s viewer=%s",
+                                    len(buffered),
+                                    session_id,
+                                    client_id,
+                                )
+                            answer = await pc.createAnswer()
+                            await pc.setLocalDescription(answer)
+                            await _wait_for_local_ice(pc)
+                            offer_sdp = payload["sdp"]
+                            answer_body = {
+                                "sdp": _normalize_answer_sdp(pc.localDescription.sdp, offer_sdp),
+                                "type": "answer",
+                            }
+                            await ws.send(_encode_msg("SDP_ANSWER", answer_body, client_id))
                             LOG.info(
-                                "applied %d buffered viewer ICE session_id=%s viewer=%s",
-                                len(buffered),
+                                "sent SDP_ANSWER session_id=%s viewer=%s ice_state=%s",
                                 session_id,
                                 client_id,
+                                pc.iceGatheringState,
                             )
-                        answer = await pc.createAnswer()
-                        await pc.setLocalDescription(answer)
-                        await _wait_for_local_ice(pc)
-                        offer_sdp = payload["sdp"]
-                        answer_body = {
-                            "sdp": _normalize_answer_sdp(pc.localDescription.sdp, offer_sdp),
-                            "type": "answer",
-                        }
-                        await ws.send(_encode_msg("SDP_ANSWER", answer_body, client_id))
-                        LOG.info(
-                            "sent SDP_ANSWER session_id=%s viewer=%s ice_state=%s",
-                            session_id,
-                            client_id,
-                            pc.iceGatheringState,
-                        )
-                    elif msg_type == "SDP_OFFER" and not client_id:
-                        LOG.warning("SDP_OFFER without senderClientId session_id=%s", session_id)
-                    elif msg_type == "ICE_CANDIDATE" and client_id:
-                        if client_id in pc_by_client:
-                            await _apply_ice(pc_by_client[client_id], payload)
-                        else:
-                            pending_ice.setdefault(client_id, []).append(payload)
+                        elif msg_type == "SDP_OFFER" and not client_id:
+                            LOG.warning("SDP_OFFER without senderClientId session_id=%s", session_id)
+                        elif msg_type == "ICE_CANDIDATE" and client_id:
+                            if client_id in pc_by_client:
+                                await _apply_ice(pc_by_client[client_id], payload)
+                            else:
+                                pending_ice.setdefault(client_id, []).append(payload)
+                finally:
+                    heartbeat.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await heartbeat
         except websockets.ConnectionClosed:
             LOG.warning("KVS signaling closed; reconnecting session_id=%s", session_id)
             await asyncio.sleep(2)
         except Exception as e:
-            LOG.error("signaling error session_id=%s: %s", session_id, e)
+            err = str(e)
+            if "403" in err:
+                signaling_auth_failures += 1
+                LOG.error(
+                    "signaling auth error session_id=%s (%d/%d): %s",
+                    session_id,
+                    signaling_auth_failures,
+                    SIGNALING_AUTH_MAX_RETRIES,
+                    e,
+                )
+                if signaling_auth_failures >= SIGNALING_AUTH_MAX_RETRIES:
+                    LOG.error(
+                        "exiting for credential refresh session_id=%s (STS creds expired)",
+                        session_id,
+                    )
+                    sys.exit(SIGNALING_AUTH_EXIT_CODE)
+            else:
+                signaling_auth_failures = 0
+                LOG.error("signaling error session_id=%s: %s", session_id, e)
             await asyncio.sleep(5)
+
+
+async def _signaling_heartbeat(session_id: str, pc_by_client: dict) -> None:
+    """Periodic log so multi-session workers are visible when idle."""
+    while True:
+        await asyncio.sleep(60)
+        LOG.info(
+            "heartbeat session_id=%s viewers=%d",
+            session_id,
+            len(pc_by_client),
+        )
 
 
 def main() -> None:

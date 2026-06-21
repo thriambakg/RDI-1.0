@@ -166,6 +166,18 @@ export function updateSessionStatusInHierarchy(h: ConnectionHierarchy, sessionId
   return out
 }
 
+export function updateSessionNameInHierarchy(h: ConnectionHierarchy, sessionId: string, name: string): ConnectionHierarchy {
+  const out: ConnectionHierarchy = {}
+  for (const [folderName, node] of Object.entries(h)) {
+    const sessions = (node.sessions ?? []).map((s) =>
+      s.session_id === sessionId ? { ...s, name } : s
+    )
+    const subfolders = updateSessionNameInHierarchy(node.subfolders ?? {}, sessionId, name)
+    out[folderName] = { ...node, sessions, subfolders }
+  }
+  return out
+}
+
 /** Immutable: add a folder at parentPath with given name. */
 export function addFolderAtPath(h: ConnectionHierarchy, parentPath: string[], folderName: string): ConnectionHierarchy {
   const newFolder: FolderNode = { sessions: [], subfolders: {} }

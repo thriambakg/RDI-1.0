@@ -46,6 +46,7 @@ export function SessionWebRtcProvider({ children }: { children: ReactNode }) {
         conn.close()
         connectionsRef.current.delete(sessionId)
       }
+      viewerClientIdRef.current.delete(sessionId)
       setState(sessionId, 'closed', null)
     },
     [setState],

@@ -165,7 +165,7 @@ sudo cp /tmp/rdi-install/rdi-relay-daemon.py /opt/rdi/
 sudo systemctl restart rdi-relay-daemon
 ```
 
-The daemon restarts workers automatically when KVS STS credentials are within 5 minutes of expiry (default `RDI_CREDS_REFRESH_MARGIN_SEC=300`). Without this, workers keep expired creds and KVS returns **HTTP 403** on signaling reconnect.
+The daemon restarts workers automatically when KVS STS credentials are within 5 minutes of expiry (default `RDI_CREDS_REFRESH_MARGIN_SEC=300`). Workers also exit after repeated signaling **HTTP 403** errors so the daemon respawns them with fresh creds from `active-sessions`. Without this, workers keep expired creds and KVS returns **HTTP 403** on signaling reconnect until manual restart.
 
 Deploy the Session API Lambda so `GET /sessions?session_id=...` returns a fresh `webrtc` viewer bundle with `signaling_endpoint_https`.
 

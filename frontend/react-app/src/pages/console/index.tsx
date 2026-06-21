@@ -25,6 +25,7 @@ import type { SelectChangeEvent } from '@mui/material'
 import { Delete as DeleteIcon, ExpandLess, ExpandMore, Folder, FolderOpen, MoreVert, PauseCircleOutline, PlayArrow } from '@mui/icons-material'
 import { useAuth } from '../../contexts/AuthContext'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
+import { useSessionWebRtc } from '../../contexts/SessionWebRtcContext'
 import { getEnvironmentRegions } from '../../config'
 import { CreateConnectionDialog, CreateFolderDialog, ConnectionDetailDialog, RegisterRelayDialog, RelayDetailDialog } from '../../components/dialogues'
 import { useProfile } from '../../contexts/ProfileContext'
@@ -36,6 +37,7 @@ import {
   addFolderAtPath,
   addSessionAtPath,
   updateSessionStatusInHierarchy,
+  updateSessionNameInHierarchy,
   updateRelayStatusInRelays,
   type FolderNode,
   type SessionRef,
@@ -44,7 +46,7 @@ import {
 } from '../../services/profileApi'
 import { deleteSession, releaseSession, activateSession, getSession } from '../../services/sessionApi'
 import { deleteRelay, updateRelayStatus } from '../../services/relayApi'
-import type { CreateSessionResponse } from '../../services/sessionApi'
+import type { CreateSessionResponse, WebRtcViewerBundle } from '../../services/sessionApi'
 import { usesWebSocketTransport } from '../../utils/sessionTransport'
 import './Console.css'
 
@@ -258,6 +260,11 @@ export default function Console() {
   const canCreateConnectionUnderSelection = effectiveParentForNewConnection[0] !== 'Shared'
 
   const { openSession: openSessionWs, closeSession: closeSessionWs, connectionState } = useSessionWebSocket()
+  const {
+    openSession: openWebRtcSession,
+    closeSession: closeWebRtcSession,
+    connectionState: webRtcState,
+  } = useSessionWebRtc()
 
   const handleRelayClick = (relayId: string) => {
     setSelectedRelayId((prev) => (prev === relayId ? null : relayId))
@@ -269,25 +276,29 @@ export default function Console() {
     setRelayDetailDialogOpen(true)
   }
 
-  // Keep WebSockets open for all active sessions. Connect as soon as hierarchy loads and on any hierarchy change.
+  // Keep data-plane connections open for all active sessions (WebSocket or WebRTC).
   useEffect(() => {
     if (profileLoading || !hierarchy) return
     const allSessions = collectSessions(hierarchy, [])
     const active = allSessions.filter((s) => s.status === 'active')
     if (active.length === 0) return
-    // Fetch endpoint for each active WebSocket session (skip WebRTC and failed retries)
     active.forEach((s) => {
-      const state = connectionState(s.session_id)
-      if (state === 'open' || state === 'connecting' || state === 'failed') return
+      const wsState = connectionState(s.session_id)
+      const rtcState = webRtcState(s.session_id)
       getSession(s.session_id)
         .then((data) => {
-          if (data.status === 'active' && data.endpoint && usesWebSocketTransport(data)) {
-            openSessionWs(s.session_id, data.endpoint)
+          if (data.status !== 'active') return
+          if (usesWebSocketTransport(data)) {
+            if (wsState === 'open' || wsState === 'connecting') return
+            if (data.endpoint) openSessionWs(s.session_id, data.endpoint)
+          } else if (data.webrtc) {
+            if (rtcState === 'connected' || rtcState === 'connecting') return
+            openWebRtcSession(s.session_id, data.webrtc)
           }
         })
         .catch(() => { /* ignore; session may be stale */ })
     })
-  }, [hierarchy, profileLoading, openSessionWs, connectionState])
+  }, [hierarchy, profileLoading, openSessionWs, openWebRtcSession, connectionState, webRtcState])
 
   const handleConnectionCreated = useCallback(
     (res: CreateSessionResponse, displayName: string) => {
@@ -301,6 +312,8 @@ export default function Console() {
       )
       if (usesWebSocketTransport(res)) {
         openSessionWs(res.session_id, res.endpoint)
+      } else if (res.webrtc) {
+        openWebRtcSession(res.session_id, res.webrtc as WebRtcViewerBundle)
       }
       if (res.relay_id) {
         updateRelays((r) =>
@@ -308,7 +321,7 @@ export default function Console() {
         )
       }
     },
-    [effectiveParentForNewConnection, selectedZone.id, updateHierarchy, openSessionWs, updateRelays]
+    [effectiveParentForNewConnection, selectedZone.id, updateHierarchy, openSessionWs, openWebRtcSession, updateRelays]
   )
 
   const handleFolderCreated = useCallback(
@@ -326,6 +339,7 @@ export default function Console() {
     setConnectionMenuAnchor(null)
     setDeleteLoading(sessionId)
     closeSessionWs(sessionId)
+    closeWebRtcSession(sessionId)
     if (detailSessionId === sessionId) {
       setDetailSessionId(null)
       setDetailDialogOpen(false)
@@ -346,6 +360,7 @@ export default function Console() {
     setConnectionMenuAnchor(null)
     setDeleteLoading(sessionId)
     closeSessionWs(sessionId)
+    closeWebRtcSession(sessionId)
     updateHierarchy((h) => updateSessionStatusInHierarchy(h, sessionId, 'idle'))
     try {
       await releaseSession(sessionId)
@@ -373,10 +388,16 @@ export default function Console() {
       if (relay) updateRelays((r) => updateRelayStatusInRelays(r, relay.relay_id, relay.wavelength_zone_id, 'online'))
     }
     try {
-      await activateSession(sessionId)
-      const data = await getSession(sessionId)
-      if (data.status === 'active' && data.endpoint && usesWebSocketTransport(data)) {
-        openSessionWs(sessionId, data.endpoint)
+      const patch = await activateSession(sessionId)
+      if (patch.webrtc) {
+        openWebRtcSession(sessionId, patch.webrtc)
+      } else {
+        const data = await getSession(sessionId)
+        if (data.status === 'active' && data.endpoint && usesWebSocketTransport(data)) {
+          openSessionWs(sessionId, data.endpoint)
+        } else if (data.status === 'active' && data.webrtc) {
+          openWebRtcSession(sessionId, data.webrtc)
+        }
       }
     } catch (err) {
       console.error('[RDI Console] Activate failed', err)
@@ -417,7 +438,10 @@ export default function Console() {
     setRelayMenuAnchor(null)
     const childSessions = allConnections.filter((c) => c.relay_id === relay.relay_id && c.status === 'active')
     setDeleteLoading(relay.relay_id)
-    childSessions.forEach((s) => closeSessionWs(s.session_id))
+    childSessions.forEach((s) => {
+      closeSessionWs(s.session_id)
+      closeWebRtcSession(s.session_id)
+    })
     childSessions.forEach((s) => updateHierarchy((h) => updateSessionStatusInHierarchy(h, s.session_id, 'idle')))
     updateRelays((r) => updateRelayStatusInRelays(r, relay.relay_id, relay.wavelength_zone_id, 'idle'))
     try {
@@ -449,7 +473,10 @@ export default function Console() {
     }
     // Immediate UI update (mirrors handleDeleteConnection, handleSetRelayIdle)
     const childSessions = allConnections.filter((c) => c.relay_id === relay_id && c.status === 'active')
-    childSessions.forEach((s) => closeSessionWs(s.session_id))
+    childSessions.forEach((s) => {
+      closeSessionWs(s.session_id)
+      closeWebRtcSession(s.session_id)
+    })
     childSessions.forEach((s) => updateHierarchy((h) => updateSessionStatusInHierarchy(h, s.session_id, 'idle')))
     updateRelays((r) => removeRelayFromRelays(r, relay_id, wavelength_zone_id))
     setDeleteLoading(relay_id)
@@ -658,8 +685,14 @@ export default function Console() {
           />
           <ConnectionDetailDialog
             sessionId={detailSessionId}
+            sessionStatus={detailSessionId ? allConnections.find((c) => c.session_id === detailSessionId)?.status : undefined}
             open={detailDialogOpen}
             onClose={() => { setDetailDialogOpen(false); setDetailSessionId(null) }}
+            onSessionUpdated={(sessionId, updates) => {
+              if (updates.name) {
+                updateHierarchy((h) => updateSessionNameInHierarchy(h, sessionId, updates.name!))
+              }
+            }}
             relays={relays}
           />
 
