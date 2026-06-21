@@ -38,13 +38,26 @@ export interface RelayConfig {
 
 export type SessionTransport = 'webrtc' | 'websocket'
 
+export interface WebRtcViewerBundle {
+  channel_arn: string
+  region: string
+  signaling_endpoint: string
+  signaling_endpoint_https?: string
+  credentials: {
+    accessKeyId: string
+    secretAccessKey: string
+    sessionToken?: string
+    expiration?: string
+  }
+}
+
 export interface CreateSessionResponse {
   session_id: string
   drone_id: string
   endpoint: string
   expires_at: number
   transport?: SessionTransport
-  webrtc?: Record<string, unknown>
+  webrtc?: WebRtcViewerBundle
   relay_id?: string
   relay_config?: RelayConfig
   carrier_ip?: string
@@ -179,19 +192,6 @@ export async function listSessions(wavelengthZoneId?: string): Promise<ListSessi
   }
   const data = await res.json()
   return data
-}
-
-export interface WebRtcViewerBundle {
-  channel_arn: string
-  region: string
-  signaling_endpoint: string
-  signaling_endpoint_https?: string
-  credentials: {
-    accessKeyId: string
-    secretAccessKey: string
-    sessionToken?: string
-    expiration?: string
-  }
 }
 
 export async function getSession(session_id: string): Promise<{

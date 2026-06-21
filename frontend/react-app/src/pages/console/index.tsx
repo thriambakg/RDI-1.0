@@ -46,7 +46,7 @@ import {
 } from '../../services/profileApi'
 import { deleteSession, releaseSession, activateSession, getSession } from '../../services/sessionApi'
 import { deleteRelay, updateRelayStatus } from '../../services/relayApi'
-import type { CreateSessionResponse, WebRtcViewerBundle } from '../../services/sessionApi'
+import type { CreateSessionResponse } from '../../services/sessionApi'
 import { usesWebSocketTransport } from '../../utils/sessionTransport'
 import './Console.css'
 
@@ -313,7 +313,7 @@ export default function Console() {
       if (usesWebSocketTransport(res)) {
         openSessionWs(res.session_id, res.endpoint)
       } else if (res.webrtc) {
-        openWebRtcSession(res.session_id, res.webrtc as WebRtcViewerBundle)
+        openWebRtcSession(res.session_id, res.webrtc)
       }
       if (res.relay_id) {
         updateRelays((r) =>
