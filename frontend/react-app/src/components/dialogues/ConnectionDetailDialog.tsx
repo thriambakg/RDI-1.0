@@ -106,7 +106,6 @@ export function ConnectionDetailDialog({
   const { getWs, openSession, connectionState, connectionError } = useSessionWebSocket()
   const {
     openSession: openWebRtcSession,
-    closeSession: closeWebRtcSession,
     getDataChannel,
     connectionState: webRtcState,
     connectionError: webRtcError,
@@ -185,12 +184,6 @@ export function ConnectionDetailDialog({
     openSession(sessionId, data.endpoint)
   }, [open, sessionId, data?.endpoint, data?.status, data?.transport, openSession])
 
-  useEffect(() => {
-    if (!open && sessionId) {
-      closeWebRtcSession(sessionId)
-    }
-  }, [open, sessionId, closeWebRtcSession])
-
   const handleSaveSettings = useCallback(async () => {
     if (!sessionId || !data) return
     setSavingSettings(true)
@@ -210,7 +203,7 @@ export function ConnectionDetailDialog({
         patch.webrtc &&
         !usesWebSocketTransport(refreshed)
       ) {
-        openWebRtcSession(sessionId, patch.webrtc, { force: true })
+        openWebRtcSession(sessionId, patch.webrtc, { force: true, waitForPiMs: 6000 })
       }
       setSettingsAnchor(null)
     } catch (e) {

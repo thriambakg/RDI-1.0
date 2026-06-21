@@ -17,6 +17,8 @@ export type WebRtcConnectionState = 'closed' | 'connecting' | 'connected' | 'fai
 export interface OpenWebRtcOptions {
   /** Tear down any existing attempt and connect again (e.g. after reactivate + new KVS channel). */
   force?: boolean
+  /** Wait for Pi relay daemon poll + KVS worker before opening viewer (default 0). */
+  waitForPiMs?: number
 }
 
 export interface SessionWebRtcContextType {
@@ -64,6 +66,7 @@ export function SessionWebRtcProvider({ children }: { children: ReactNode }) {
   const openSession = useCallback(
     (sessionId: string, bundle: WebRtcViewerBundle, options?: OpenWebRtcOptions) => {
       const force = options?.force === true
+      const waitForPiMs = Math.max(0, options?.waitForPiMs ?? 0)
       const existing = stateRef.current.get(sessionId) ?? 'closed'
       const sameChannel = channelArnRef.current.get(sessionId) === bundle.channel_arn
 
@@ -81,20 +84,26 @@ export function SessionWebRtcProvider({ children }: { children: ReactNode }) {
       const viewerClientId = `viewer-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
       viewerClientIdRef.current.set(sessionId, viewerClientId)
 
-      connectKvsViewer(bundle, { signal: controller.signal, viewerClientId })
-        .then((conn) => {
+      void (async () => {
+        if (waitForPiMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, waitForPiMs))
+          if (controller.signal.aborted) return
+        }
+
+        try {
+          const conn = await connectKvsViewer(bundle, { signal: controller.signal, viewerClientId })
           if (controller.signal.aborted) {
             conn.close()
             return
           }
           connectionsRef.current.set(sessionId, conn)
           setState(sessionId, 'connected', null)
-        })
-        .catch((e) => {
+        } catch (e) {
           if (controller.signal.aborted) return
           const message = e instanceof Error ? e.message : 'WebRTC connection failed'
           setState(sessionId, 'failed', message)
-        })
+        }
+      })()
     },
     [closeSession, setState],
   )

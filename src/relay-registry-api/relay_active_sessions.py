@@ -8,14 +8,16 @@ from typing import Any
 
 def parse_active_sessions(relay_item: dict) -> list[dict[str, Any]]:
     """Read active_sessions list from relay item, with legacy single-session fallback."""
-    raw = (relay_item.get("active_sessions") or {}).get("S", "")
-    if raw:
-        try:
-            data = json.loads(raw)
-            if isinstance(data, list):
-                return [e for e in data if isinstance(e, dict) and e.get("session_id")]
-        except (json.JSONDecodeError, TypeError):
-            pass
+    if "active_sessions" in relay_item:
+        raw = relay_item["active_sessions"].get("S", "")
+        if raw:
+            try:
+                data = json.loads(raw)
+                if isinstance(data, list):
+                    return [e for e in data if isinstance(e, dict) and e.get("session_id")]
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return []
     sid = (relay_item.get("active_session_id") or {}).get("S", "")
     arn = (relay_item.get("signaling_channel_arn") or {}).get("S", "")
     if sid and arn:

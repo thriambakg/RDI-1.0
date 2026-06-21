@@ -286,7 +286,7 @@ export default function Console() {
     active.forEach((s) => {
       const wsState = connectionState(s.session_id)
       const rtcState = webRtcState(s.session_id)
-      if (rtcState === 'connected' || rtcState === 'connecting' || rtcState === 'failed') return
+      if (rtcState === 'connected' || rtcState === 'connecting') return
       getSession(s.session_id)
         .then((data) => {
           if (data.status !== 'active') return
@@ -294,7 +294,7 @@ export default function Console() {
             if (wsState === 'open' || wsState === 'connecting') return
             if (data.endpoint) openSessionWs(s.session_id, data.endpoint)
           } else if (data.webrtc) {
-            openWebRtcSession(s.session_id, data.webrtc)
+            openWebRtcSession(s.session_id, data.webrtc, { waitForPiMs: 6000 })
           }
         })
         .catch(() => { /* ignore; session may be stale */ })
@@ -314,7 +314,7 @@ export default function Console() {
       if (usesWebSocketTransport(res)) {
         openSessionWs(res.session_id, res.endpoint)
       } else if (res.webrtc) {
-        openWebRtcSession(res.session_id, res.webrtc)
+        openWebRtcSession(res.session_id, res.webrtc, { force: true, waitForPiMs: 6000 })
       }
       if (res.relay_id) {
         updateRelays((r) =>
@@ -393,16 +393,13 @@ export default function Console() {
         if (relay) updateRelays((r) => updateRelayStatusInRelays(r, relay.relay_id, relay.wavelength_zone_id, 'online'))
       }
       if (patch.webrtc) {
-        // Give Pi daemon one poll cycle + worker KVS connect before viewer offer.
-        await new Promise((r) => setTimeout(r, 6000))
-        openWebRtcSession(sessionId, patch.webrtc, { force: true })
+        openWebRtcSession(sessionId, patch.webrtc, { force: true, waitForPiMs: 6000 })
       } else {
         const data = await getSession(sessionId)
         if (data.status === 'active' && data.endpoint && usesWebSocketTransport(data)) {
           openSessionWs(sessionId, data.endpoint)
         } else if (data.status === 'active' && data.webrtc) {
-          await new Promise((r) => setTimeout(r, 6000))
-          openWebRtcSession(sessionId, data.webrtc, { force: true })
+          openWebRtcSession(sessionId, data.webrtc, { force: true, waitForPiMs: 6000 })
         }
       }
     } catch (err) {

@@ -96,7 +96,13 @@ def fetch_active_sessions(api_base: str, device_serial: str, device_secret: str)
     if not isinstance(sessions, list):
         return []
     api_status = body.get("status", "")
-    LOG.info("poll active-sessions: %d session(s) status=%s", len(sessions), api_status)
+    session_ids = [str(s.get("session_id", ""))[:8] for s in sessions if s.get("session_id")]
+    LOG.info(
+        "poll active-sessions: %d session(s) status=%s ids=%s",
+        len(sessions),
+        api_status,
+        ",".join(session_ids) or "(none)",
+    )
     return sessions
 
 
@@ -194,6 +200,7 @@ def reconcile(workers: dict[str, WorkerProcess], desired: list[dict]) -> dict[st
     desired_ids = {s["session_id"] for s in desired if s.get("session_id")}
     for sid in list(workers.keys()):
         if sid not in desired_ids:
+            LOG.info("worker no longer active, stopping session_id=%s", sid)
             stop_worker(workers[sid])
             del workers[sid]
 

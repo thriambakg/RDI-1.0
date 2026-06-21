@@ -198,6 +198,15 @@ def _add_relay_active_session(
             raise
 
 
+_LEGACY_SESSION_FIELDS = (
+    "active_session_id",
+    "signaling_channel_arn",
+    "active_drone_id",
+    "active_mavlink_port",
+    "active_mavlink_host",
+)
+
+
 def _remove_relay_active_session(
     dynamodb, user_id: str, relay_id: str, wavelength_zone_id: str, session_id: str
 ) -> None:
@@ -207,9 +216,11 @@ def _remove_relay_active_session(
     try:
         item = _get_relay_registry_item(dynamodb, user_id, relay_id, wavelength_zone_id)
         if not item:
+            _log("relay active_sessions remove skipped", relay_id=relay_id, session_id=session_id, reason="relay not found")
             return
         relay_zone = (item.get("wavelength_zone_id") or {}).get("S") or wavelength_zone_id
         sessions = remove_session_entry(parse_active_sessions(item), session_id)
+        legacy_remove = ", ".join(_LEGACY_SESSION_FIELDS)
         if sessions:
             dynamodb.update_item(
                 TableName=RELAY_REGISTRY_TABLE,
@@ -217,7 +228,9 @@ def _remove_relay_active_session(
                     "wavelength_zone_id": {"S": relay_zone},
                     "relay_id": {"S": relay_id},
                 },
-                UpdateExpression="SET active_sessions = :sessions, last_seen = :now",
+                UpdateExpression=(
+                    f"SET active_sessions = :sessions, last_seen = :now REMOVE {legacy_remove}"
+                ),
                 ConditionExpression="user_id = :uid",
                 ExpressionAttributeValues={
                     ":sessions": {"S": json.dumps(sessions)},
@@ -232,14 +245,31 @@ def _remove_relay_active_session(
                     "wavelength_zone_id": {"S": relay_zone},
                     "relay_id": {"S": relay_id},
                 },
-                UpdateExpression="REMOVE active_sessions, webrtc_status, active_session_id, signaling_channel_arn",
+                UpdateExpression=(
+                    "REMOVE active_sessions, webrtc_status, "
+                    + ", ".join(_LEGACY_SESSION_FIELDS)
+                ),
                 ConditionExpression="user_id = :uid",
                 ExpressionAttributeValues={":uid": {"S": user_id}},
             )
             _update_relay_status(dynamodb, user_id, relay_id, relay_zone, "offline")
-        _log("relay active_sessions removed", relay_id=relay_id, session_id=session_id)
-    except ClientError:
-        pass
+        _log("relay active_sessions removed", relay_id=relay_id, session_id=session_id, remaining=len(sessions))
+    except ClientError as e:
+        code = e.response["Error"]["Code"]
+        if code == "ConditionalCheckFailedException":
+            _log(
+                "relay active_sessions remove denied",
+                relay_id=relay_id,
+                session_id=session_id,
+                reason="user_id mismatch",
+            )
+        else:
+            _log(
+                "relay active_sessions remove failed",
+                relay_id=relay_id,
+                session_id=session_id,
+                error=str(e),
+            )
 
 
 def _update_relay_status(
@@ -995,8 +1025,9 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
         # Store TTL for next activation; do not start timer while idle.
         remove_parts.append("idle_after")
 
+    current_status = (item.get("status") or {}).get("S", "idle")
     new_channel_arn = None
-    if status == "active":
+    if status == "active" and current_status == "idle":
         try:
             new_channel_arn = _reactivate_webrtc_session(dynamodb, user_id, session_id, item)
         except Exception as e:
