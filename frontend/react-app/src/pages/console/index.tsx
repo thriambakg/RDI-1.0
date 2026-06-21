@@ -277,6 +277,7 @@ export default function Console() {
   }
 
   // Keep data-plane connections open for all active sessions (WebSocket or WebRTC).
+  // Skip sessions that were just reactivated — handleActivateConnection connects after Pi is ready.
   useEffect(() => {
     if (profileLoading || !hierarchy) return
     const allSessions = collectSessions(hierarchy, [])
@@ -285,6 +286,7 @@ export default function Console() {
     active.forEach((s) => {
       const wsState = connectionState(s.session_id)
       const rtcState = webRtcState(s.session_id)
+      if (rtcState === 'connected' || rtcState === 'connecting' || rtcState === 'failed') return
       getSession(s.session_id)
         .then((data) => {
           if (data.status !== 'active') return
@@ -292,7 +294,6 @@ export default function Console() {
             if (wsState === 'open' || wsState === 'connecting') return
             if (data.endpoint) openSessionWs(s.session_id, data.endpoint)
           } else if (data.webrtc) {
-            if (rtcState === 'connected' || rtcState === 'connecting') return
             openWebRtcSession(s.session_id, data.webrtc)
           }
         })
@@ -382,21 +383,26 @@ export default function Console() {
     setConnectionMenuAnchor(null)
     setDeleteLoading(sessionId)
     const session = allConnections.find((c) => c.session_id === sessionId)
-    updateHierarchy((h) => updateSessionStatusInHierarchy(h, sessionId, 'active'))
-    if (session?.relay_id) {
-      const relay = relays.find((r) => r.relay_id === session.relay_id)
-      if (relay) updateRelays((r) => updateRelayStatusInRelays(r, relay.relay_id, relay.wavelength_zone_id, 'online'))
-    }
+    closeSessionWs(sessionId)
+    closeWebRtcSession(sessionId)
     try {
       const patch = await activateSession(sessionId)
+      updateHierarchy((h) => updateSessionStatusInHierarchy(h, sessionId, 'active'))
+      if (session?.relay_id) {
+        const relay = relays.find((r) => r.relay_id === session.relay_id)
+        if (relay) updateRelays((r) => updateRelayStatusInRelays(r, relay.relay_id, relay.wavelength_zone_id, 'online'))
+      }
       if (patch.webrtc) {
-        openWebRtcSession(sessionId, patch.webrtc)
+        // Give Pi daemon one poll cycle + worker KVS connect before viewer offer.
+        await new Promise((r) => setTimeout(r, 6000))
+        openWebRtcSession(sessionId, patch.webrtc, { force: true })
       } else {
         const data = await getSession(sessionId)
         if (data.status === 'active' && data.endpoint && usesWebSocketTransport(data)) {
           openSessionWs(sessionId, data.endpoint)
         } else if (data.status === 'active' && data.webrtc) {
-          openWebRtcSession(sessionId, data.webrtc)
+          await new Promise((r) => setTimeout(r, 6000))
+          openWebRtcSession(sessionId, data.webrtc, { force: true })
         }
       }
     } catch (err) {

@@ -168,20 +168,15 @@ export function ConnectionDetailDialog({
       .finally(() => setLoading(false))
   }, [open, sessionId])
 
-  // Refetch and reconnect when reactivated from console while dialog stays open.
   useEffect(() => {
-    if (!open || !sessionId || sessionStatus !== 'active') return
+    if (!open || !sessionId || !sessionStatus) return
     getSession(sessionId)
       .then((session) => {
         setData(session)
-        if (session.webrtc && !usesWebSocketTransport(session)) {
-          openWebRtcSession(sessionId, session.webrtc)
-        } else if (session.endpoint && usesWebSocketTransport(session)) {
-          openSession(sessionId, session.endpoint)
-        }
+        setEditTtl(session.ttl_seconds ?? 14400)
       })
       .catch(() => { /* ignore */ })
-  }, [open, sessionId, sessionStatus, openWebRtcSession, openSession])
+  }, [open, sessionId, sessionStatus])
 
   // Keep WebSocket open for legacy WebSocket sessions when dialog is open
   useEffect(() => {
@@ -189,13 +184,6 @@ export function ConnectionDetailDialog({
     if (!usesWebSocketTransport(data)) return
     openSession(sessionId, data.endpoint)
   }, [open, sessionId, data?.endpoint, data?.status, data?.transport, openSession])
-
-  // Open WebRTC viewer when dialog is open for WebRTC sessions
-  useEffect(() => {
-    if (!open || !sessionId || !data?.webrtc || data?.status !== 'active') return
-    if (usesWebSocketTransport(data)) return
-    openWebRtcSession(sessionId, data.webrtc)
-  }, [open, sessionId, data?.webrtc, data?.status, data?.transport, openWebRtcSession])
 
   useEffect(() => {
     if (!open && sessionId) {
@@ -222,7 +210,7 @@ export function ConnectionDetailDialog({
         patch.webrtc &&
         !usesWebSocketTransport(refreshed)
       ) {
-        openWebRtcSession(sessionId, patch.webrtc)
+        openWebRtcSession(sessionId, patch.webrtc, { force: true })
       }
       setSettingsAnchor(null)
     } catch (e) {
@@ -506,7 +494,7 @@ export function ConnectionDetailDialog({
             <Button
               variant="outlined"
               size="small"
-              onClick={() => openWebRtcSession(sessionId!, data.webrtc!)}
+              onClick={() => openWebRtcSession(sessionId!, data.webrtc!, { force: true })}
               sx={{
                 color: '#3b82f6',
                 borderColor: '#475569',
@@ -530,7 +518,7 @@ export function ConnectionDetailDialog({
               <Button
                 variant="outlined"
                 size="small"
-                onClick={() => openWebRtcSession(sessionId!, data.webrtc!)}
+                onClick={() => openWebRtcSession(sessionId!, data.webrtc!, { force: true })}
                 sx={{
                   color: '#3b82f6',
                   borderColor: '#475569',

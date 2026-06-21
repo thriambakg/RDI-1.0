@@ -14,8 +14,13 @@ import {
 
 export type WebRtcConnectionState = 'closed' | 'connecting' | 'connected' | 'failed'
 
+export interface OpenWebRtcOptions {
+  /** Tear down any existing attempt and connect again (e.g. after reactivate + new KVS channel). */
+  force?: boolean
+}
+
 export interface SessionWebRtcContextType {
-  openSession: (sessionId: string, bundle: WebRtcViewerBundle) => void
+  openSession: (sessionId: string, bundle: WebRtcViewerBundle, options?: OpenWebRtcOptions) => void
   closeSession: (sessionId: string) => void
   getDataChannel: (sessionId: string) => RTCDataChannel | null
   connectionState: (sessionId: string) => WebRtcConnectionState
@@ -47,29 +52,34 @@ export function SessionWebRtcProvider({ children }: { children: ReactNode }) {
         connectionsRef.current.delete(sessionId)
       }
       viewerClientIdRef.current.delete(sessionId)
+      channelArnRef.current.delete(sessionId)
       setState(sessionId, 'closed', null)
     },
     [setState],
   )
 
   const viewerClientIdRef = useRef<Map<string, string>>(new Map())
+  const channelArnRef = useRef<Map<string, string>>(new Map())
 
   const openSession = useCallback(
-    (sessionId: string, bundle: WebRtcViewerBundle) => {
-      const existing = stateRef.current.get(sessionId)
-      if (existing === 'connecting') return
-      if (existing === 'connected') return
+    (sessionId: string, bundle: WebRtcViewerBundle, options?: OpenWebRtcOptions) => {
+      const force = options?.force === true
+      const existing = stateRef.current.get(sessionId) ?? 'closed'
+      const sameChannel = channelArnRef.current.get(sessionId) === bundle.channel_arn
+
+      if (!force) {
+        if (existing === 'connecting' && sameChannel) return
+        if (existing === 'connected' && sameChannel) return
+      }
 
       closeSession(sessionId)
+      channelArnRef.current.set(sessionId, bundle.channel_arn)
       const controller = new AbortController()
       abortRef.current.set(sessionId, controller)
       setState(sessionId, 'connecting', null)
 
-      let viewerClientId = viewerClientIdRef.current.get(sessionId)
-      if (!viewerClientId) {
-        viewerClientId = `viewer-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
-        viewerClientIdRef.current.set(sessionId, viewerClientId)
-      }
+      const viewerClientId = `viewer-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
+      viewerClientIdRef.current.set(sessionId, viewerClientId)
 
       connectKvsViewer(bundle, { signal: controller.signal, viewerClientId })
         .then((conn) => {
