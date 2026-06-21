@@ -77,11 +77,25 @@ def _encode_msg(action: str, payload, client_id: str) -> str:
     )
 
 
-def _normalize_answer_sdp(sdp: str) -> str:
-    """Chrome rejects session-level a=setup; answer role should be passive for browser offerers."""
+def _datachannel_attrs(sdp: str) -> dict[str, str]:
+    attrs: dict[str, str] = {}
+    for raw in sdp.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw.strip()
+        if line.startswith("a=sctp-port:"):
+            attrs["sctp_port"] = line.split(":", 1)[1]
+        elif line.startswith("a=max-message-size:"):
+            attrs["max_message_size"] = line.split(":", 1)[1]
+    return attrs
+
+
+def _normalize_answer_sdp(answer_sdp: str, offer_sdp: str) -> str:
+    """Drop session-level a=setup (Chrome rejects); keep aiortc media-level role for DTLS."""
+    offer_attrs = _datachannel_attrs(offer_sdp)
     lines_out: list[str] = []
     in_media = False
-    for raw in sdp.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+    has_sctp_port = False
+    has_max_msg = False
+    for raw in answer_sdp.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         line = raw.strip()
         if not line:
             continue
@@ -89,12 +103,21 @@ def _normalize_answer_sdp(sdp: str) -> str:
             in_media = True
             lines_out.append(line)
             continue
-        if line.startswith("a=setup:"):
-            if not in_media:
-                continue
-            lines_out.append("a=setup:passive")
+        if line.startswith("a=setup:") and not in_media:
             continue
+        if line.startswith("a=sctp-port:"):
+            has_sctp_port = True
+            if offer_attrs.get("sctp_port"):
+                line = f"a=sctp-port:{offer_attrs['sctp_port']}"
+        elif line.startswith("a=max-message-size:"):
+            has_max_msg = True
+            if offer_attrs.get("max_message_size"):
+                line = f"a=max-message-size:{offer_attrs['max_message_size']}"
         lines_out.append(line)
+    if in_media and offer_attrs.get("sctp_port") and not has_sctp_port:
+        lines_out.append(f"a=sctp-port:{offer_attrs['sctp_port']}")
+    if in_media and offer_attrs.get("max_message_size") and not has_max_msg:
+        lines_out.append(f"a=max-message-size:{offer_attrs['max_message_size']}")
     return "\r\n".join(lines_out) + "\r\n"
 
 
@@ -279,8 +302,9 @@ async def run_master(cfg: dict) -> None:
                         answer = await pc.createAnswer()
                         await pc.setLocalDescription(answer)
                         await _wait_for_local_ice(pc)
+                        offer_sdp = payload["sdp"]
                         answer_body = {
-                            "sdp": _normalize_answer_sdp(pc.localDescription.sdp),
+                            "sdp": _normalize_answer_sdp(pc.localDescription.sdp, offer_sdp),
                             "type": "answer",
                         }
                         await ws.send(_encode_msg("SDP_ANSWER", answer_body, client_id))

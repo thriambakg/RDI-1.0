@@ -127,7 +127,7 @@ function decodePayload<T = Record<string, unknown>>(b64: string): T {
   return JSON.parse(atob(b64)) as T
 }
 
-/** Chrome rejects session-level a=setup; aiortc answers need passive role in m= sections. */
+/** Chrome rejects session-level a=setup; keep aiortc media-level DTLS role unchanged. */
 function normalizeAnswerSdp(sdp: string): string {
   const linesOut: string[] = []
   let inMedia = false
@@ -139,11 +139,7 @@ function normalizeAnswerSdp(sdp: string): string {
       linesOut.push(line)
       continue
     }
-    if (line.startsWith('a=setup:')) {
-      if (!inMedia) continue
-      linesOut.push('a=setup:passive')
-      continue
-    }
+    if (line.startsWith('a=setup:') && !inMedia) continue
     linesOut.push(line)
   }
   return `${linesOut.join('\r\n')}\r\n`
