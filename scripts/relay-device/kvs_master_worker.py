@@ -64,7 +64,10 @@ def _decode_msg(msg: str) -> tuple[str, dict, str]:
 
 
 def _encode_msg(action: str, payload, client_id: str) -> str:
-    body = {"sdp": payload.sdp, "type": payload.type} if hasattr(payload, "sdp") else payload
+    if hasattr(payload, "sdp"):
+        body = {"sdp": payload.sdp, "type": payload.type}
+    else:
+        body = payload
     return json.dumps(
         {
             "action": action,
@@ -72,6 +75,27 @@ def _encode_msg(action: str, payload, client_id: str) -> str:
             "recipientClientId": client_id,
         }
     )
+
+
+def _normalize_answer_sdp(sdp: str) -> str:
+    """Chrome rejects session-level a=setup; answer role should be passive for browser offerers."""
+    lines_out: list[str] = []
+    in_media = False
+    for raw in sdp.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("m="):
+            in_media = True
+            lines_out.append(line)
+            continue
+        if line.startswith("a=setup:"):
+            if not in_media:
+                continue
+            lines_out.append("a=setup:passive")
+            continue
+        lines_out.append(line)
+    return "\r\n".join(lines_out) + "\r\n"
 
 
 def _ice_servers(channel_arn: str, https_endpoint: str, region: str, credentials: dict) -> list[RTCIceServer]:
@@ -255,7 +279,11 @@ async def run_master(cfg: dict) -> None:
                         answer = await pc.createAnswer()
                         await pc.setLocalDescription(answer)
                         await _wait_for_local_ice(pc)
-                        await ws.send(_encode_msg("SDP_ANSWER", pc.localDescription, client_id))
+                        answer_body = {
+                            "sdp": _normalize_answer_sdp(pc.localDescription.sdp),
+                            "type": "answer",
+                        }
+                        await ws.send(_encode_msg("SDP_ANSWER", answer_body, client_id))
                         LOG.info(
                             "sent SDP_ANSWER session_id=%s viewer=%s ice_state=%s",
                             session_id,

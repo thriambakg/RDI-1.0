@@ -127,6 +127,28 @@ function decodePayload<T = Record<string, unknown>>(b64: string): T {
   return JSON.parse(atob(b64)) as T
 }
 
+/** Chrome rejects session-level a=setup; aiortc answers need passive role in m= sections. */
+function normalizeAnswerSdp(sdp: string): string {
+  const linesOut: string[] = []
+  let inMedia = false
+  for (const raw of sdp.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')) {
+    const line = raw.trim()
+    if (!line) continue
+    if (line.startsWith('m=')) {
+      inMedia = true
+      linesOut.push(line)
+      continue
+    }
+    if (line.startsWith('a=setup:')) {
+      if (!inMedia) continue
+      linesOut.push('a=setup:passive')
+      continue
+    }
+    linesOut.push(line)
+  }
+  return `${linesOut.join('\r\n')}\r\n`
+}
+
 function encodeOutbound(action: string, payload: object): string {
   return JSON.stringify({ action, messagePayload: encodePayload(payload) })
 }
@@ -223,8 +245,8 @@ export class KvsSignalingViewer {
     if (messageType === 'SDP_ANSWER' && isFromMaster(senderClientId)) {
       this.remoteSdpReceived = true
       this.onSdpAnswer?.({
-        type: payload.type as RTCSdpType,
-        sdp: String(payload.sdp ?? '').trim(),
+        type: String(payload.type ?? 'answer').trim() as RTCSdpType,
+        sdp: normalizeAnswerSdp(String(payload.sdp ?? '').trim()),
       })
       for (const c of this.pendingRemoteIce) {
         this.onIceCandidate?.(c)
