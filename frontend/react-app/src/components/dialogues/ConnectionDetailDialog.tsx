@@ -217,13 +217,20 @@ export function ConnectionDetailDialog({
       setData(refreshed)
       setEditTtl(refreshed.ttl_seconds ?? editTtl)
       onSessionUpdated?.(sessionId, { name: editName.trim() || 'drone', ttl_seconds: patch.ttl_seconds })
+      if (
+        refreshed.status === 'active' &&
+        patch.webrtc &&
+        !usesWebSocketTransport(refreshed)
+      ) {
+        openWebRtcSession(sessionId, patch.webrtc)
+      }
       setSettingsAnchor(null)
     } catch (e) {
       setSettingsError(e instanceof Error ? e.message : 'Failed to save settings')
     } finally {
       setSavingSettings(false)
     }
-  }, [sessionId, data, editName, editTtl, onSessionUpdated])
+  }, [sessionId, data, editName, editTtl, onSessionUpdated, openWebRtcSession])
 
   // Listen for agent log messages (RLOG) when WebSocket is connected
   useEffect(() => {

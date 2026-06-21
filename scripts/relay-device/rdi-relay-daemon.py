@@ -42,10 +42,12 @@ class WorkerProcess:
         session_id: str,
         proc: subprocess.Popen | None = None,
         creds_expiration: str | None = None,
+        channel_arn: str | None = None,
     ):
         self.session_id = session_id
         self.proc = proc
         self.creds_expiration = creds_expiration
+        self.channel_arn = channel_arn or ""
 
 
 def _creds_expiration(session: dict) -> str | None:
@@ -98,6 +100,11 @@ def fetch_active_sessions(api_base: str, device_serial: str, device_secret: str)
     return sessions
 
 
+def _channel_arn(session: dict) -> str:
+    webrtc = session.get("webrtc") or {}
+    return str(webrtc.get("channel_arn") or "")
+
+
 def _worker_config(session: dict) -> dict:
     return {
         "session_id": session["session_id"],
@@ -116,7 +123,7 @@ def start_worker(session: dict) -> WorkerProcess | None:
 
     if WORKER_DRY_RUN:
         LOG.info("[dry-run] would start worker session_id=%s mavlink=%s:%s", session_id, session.get("mavlink_host"), session.get("mavlink_port"))
-        return WorkerProcess(session_id, None, _creds_expiration(session))
+        return WorkerProcess(session_id, None, _creds_expiration(session), _channel_arn(session))
 
     env = os.environ.copy()
     env["RDI_WORKER_CONFIG"] = json.dumps(_worker_config(session))
@@ -131,8 +138,14 @@ def start_worker(session: dict) -> WorkerProcess | None:
         bufsize=1,
         start_new_session=True,
     )
-    LOG.info("started worker pid=%s session_id=%s creds_exp=%s", proc.pid, session_id, _creds_expiration(session) or "?")
-    return WorkerProcess(session_id, proc, _creds_expiration(session))
+    LOG.info(
+        "started worker pid=%s session_id=%s channel=%s creds_exp=%s",
+        proc.pid,
+        session_id,
+        _channel_arn(session)[-36:] if _channel_arn(session) else "?",
+        _creds_expiration(session) or "?",
+    )
+    return WorkerProcess(session_id, proc, _creds_expiration(session), _channel_arn(session))
 
 
 def stop_worker(worker: WorkerProcess) -> None:
@@ -187,14 +200,23 @@ def reconcile(workers: dict[str, WorkerProcess], desired: list[dict]) -> dict[st
     by_id = {s["session_id"]: s for s in desired if s.get("session_id")}
     for sid, session in by_id.items():
         existing = workers.get(sid)
+        desired_arn = _channel_arn(session)
         if existing and existing.proc and existing.proc.poll() is None:
-            if not _creds_expire_within(existing.creds_expiration, CREDS_REFRESH_MARGIN_SEC):
+            creds_stale = _creds_expire_within(existing.creds_expiration, CREDS_REFRESH_MARGIN_SEC)
+            channel_changed = bool(desired_arn) and existing.channel_arn != desired_arn
+            if not creds_stale and not channel_changed:
                 continue
-            LOG.info(
-                "refreshing worker session_id=%s (KVS creds expired or expiring within %ss)",
-                sid,
-                CREDS_REFRESH_MARGIN_SEC,
-            )
+            if channel_changed:
+                LOG.info(
+                    "refreshing worker session_id=%s (KVS channel changed)",
+                    sid,
+                )
+            else:
+                LOG.info(
+                    "refreshing worker session_id=%s (KVS creds expired or expiring within %ss)",
+                    sid,
+                    CREDS_REFRESH_MARGIN_SEC,
+                )
             stop_worker(existing)
         elif existing:
             LOG.warning("restarting dead worker session_id=%s", sid)

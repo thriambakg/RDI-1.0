@@ -967,10 +967,11 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
 
     set_parts = ["updated_at = :now"]
     remove_parts: list[str] = []
-    expr_names = {"#status": "status"}
+    expr_names: dict[str, str] = {}
     expr_values: dict[str, dict] = {":now": {"N": str(now)}}
 
     if status:
+        expr_names["#status"] = "status"
         set_parts.append("#status = :status")
         expr_values[":status"] = {"S": status}
         effective_status = status
@@ -1010,13 +1011,15 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
         update_expr += " REMOVE " + ", ".join(remove_parts)
 
     try:
-        dynamodb.update_item(
-            TableName=TABLE_NAME,
-            Key={"user_id": {"S": user_id}, "session_id": {"S": session_id}},
-            UpdateExpression=update_expr,
-            ExpressionAttributeNames=expr_names,
-            ExpressionAttributeValues=expr_values,
-        )
+        update_kwargs: dict[str, Any] = {
+            "TableName": TABLE_NAME,
+            "Key": {"user_id": {"S": user_id}, "session_id": {"S": session_id}},
+            "UpdateExpression": update_expr,
+            "ExpressionAttributeValues": expr_values,
+        }
+        if expr_names:
+            update_kwargs["ExpressionAttributeNames"] = expr_names
+        dynamodb.update_item(**update_kwargs)
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
             _log("patch_session not found", session_id=session_id)
