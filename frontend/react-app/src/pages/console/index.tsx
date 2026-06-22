@@ -304,7 +304,7 @@ export default function Console() {
         })
         .catch(() => { /* ignore; session may be stale */ })
     })
-  }, [hierarchy, profileLoading, openSessionWs, openWebRtcSession, connectionState, webRtcState])
+  }, [hierarchy, profileLoading, openSessionWs, openWebRtcSession, connectionState])
 
   const handleConnectionCreated = useCallback(
     (res: CreateSessionResponse, displayName: string) => {
@@ -392,6 +392,9 @@ export default function Console() {
     setConnectionMenuAnchor(null)
     setDeleteLoading(sessionId)
     const session = allConnections.find((c) => c.session_id === sessionId)
+    allConnections.forEach((c) => {
+      if (c.status === 'active') suppressAutoConnectRef.current.add(c.session_id)
+    })
     suppressAutoConnectRef.current.add(sessionId)
     closeSessionWs(sessionId)
     closeWebRtcSession(sessionId)

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -182,12 +183,21 @@ def stop_worker(worker: WorkerProcess) -> None:
 
 
 def _drain_worker_logs(workers: dict[str, WorkerProcess]) -> None:
+    """Drain buffered worker stdout without blocking the poll loop.
+
+    readline() blocks until the next newline; idle workers only log on ~60s
+    heartbeats, which previously froze reconcile for up to a minute per worker.
+    """
     for sid, worker in list(workers.items()):
         proc = worker.proc
         if proc is None or proc.stdout is None:
             continue
+        stream = proc.stdout
         while True:
-            line = proc.stdout.readline()
+            ready, _, _ = select.select([stream], [], [], 0)
+            if not ready:
+                break
+            line = stream.readline()
             if not line:
                 break
             LOG.info("[worker %s] %s", sid[:8], line.rstrip())
