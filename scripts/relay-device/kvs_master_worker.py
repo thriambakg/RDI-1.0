@@ -297,6 +297,21 @@ async def run_master(cfg: dict) -> None:
                                 if c.connectionState in ("closed", "failed"):
                                     if pc_by_client.get(cid) is c:
                                         del pc_by_client[cid]
+                                        pending_ice.pop(cid, None)
+
+                            @pc.on("iceconnectionstatechange")
+                            async def on_ice_state(c=pc, cid=client_id) -> None:
+                                if c.iceConnectionState in ("failed", "closed"):
+                                    if pc_by_client.get(cid) is c:
+                                        LOG.info(
+                                            "ice closed session_id=%s viewer=%s ice=%s",
+                                            session_id,
+                                            cid,
+                                            c.iceConnectionState,
+                                        )
+                                        del pc_by_client[cid]
+                                        pending_ice.pop(cid, None)
+                                        await _close_pc(c)
 
                             await pc.setRemoteDescription(
                                 RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
