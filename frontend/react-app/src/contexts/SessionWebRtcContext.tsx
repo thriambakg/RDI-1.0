@@ -84,11 +84,20 @@ export function SessionWebRtcProvider({ children }: { children: ReactNode }) {
       const viewerClientId = `viewer-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
       viewerClientIdRef.current.set(sessionId, viewerClientId)
 
+      console.log('[RDI WebRTC] opening session', {
+        session_id: sessionId,
+        force,
+        waitForPiMs,
+        channel: bundle.channel_arn.slice(-36),
+      })
+
       void (async () => {
         if (waitForPiMs > 0) {
           await new Promise((resolve) => setTimeout(resolve, waitForPiMs))
           if (controller.signal.aborted) return
         }
+
+        console.log('[RDI WebRTC] starting KVS viewer connect', { session_id: sessionId, viewerClientId })
 
         try {
           const conn = await connectKvsViewer(bundle, { signal: controller.signal, viewerClientId })

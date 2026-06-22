@@ -44,7 +44,7 @@ import {
   type ConnectionHierarchy,
   type RelayRef,
 } from '../../services/profileApi'
-import { deleteSession, releaseSession, activateSession, getSession } from '../../services/sessionApi'
+import { deleteSession, releaseSession, activateSession, getSession, fetchWebRtcBundleForSession } from '../../services/sessionApi'
 import { deleteRelay, updateRelayStatus } from '../../services/relayApi'
 import type { CreateSessionResponse } from '../../services/sessionApi'
 import { usesWebSocketTransport } from '../../utils/sessionTransport'
@@ -402,16 +402,18 @@ export default function Console() {
         const relay = relays.find((r) => r.relay_id === session.relay_id)
         if (relay) updateRelays((r) => updateRelayStatusInRelays(r, relay.relay_id, relay.wavelength_zone_id, 'online'))
       }
-      const webrtcBundle = patch.webrtc
-        ?? (await getSession(sessionId).then((data) =>
-          data.status === 'active' ? data.webrtc : undefined
-        ))
+      const webrtcBundle = await fetchWebRtcBundleForSession(sessionId, patch)
       if (webrtcBundle) {
+        console.log('[RDI Console] Reactivate: opening WebRTC', { session_id: sessionId })
         openWebRtcSession(sessionId, webrtcBundle, { force: true, waitForPiMs: 6000 })
       } else if (patch.status === 'active') {
         const data = await getSession(sessionId)
         if (data.status === 'active' && data.endpoint && usesWebSocketTransport(data)) {
           openSessionWs(sessionId, data.endpoint)
+        } else {
+          throw new Error(
+            'Session reactivated but WebRTC credentials are missing. Deploy the latest Session API Lambda, then try again.',
+          )
         }
       }
     } catch (err) {

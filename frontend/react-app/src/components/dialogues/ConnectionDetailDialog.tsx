@@ -16,7 +16,7 @@ import {
 } from '@mui/material'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { getSession, updateSession } from '../../services/sessionApi'
+import { getSession, updateSession, fetchWebRtcBundleForSession } from '../../services/sessionApi'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import { useSessionWebRtc } from '../../contexts/SessionWebRtcContext'
 import { usesWebSocketTransport } from '../../utils/sessionTransport'
@@ -179,12 +179,15 @@ export function ConnectionDetailDialog({
         setEditTtl(session.ttl_seconds ?? 14400)
         const reactivated =
           prevStatus === 'idle' && session.status === 'active' && sessionStatus === 'active'
-        if (
-          reactivated &&
-          session.webrtc &&
-          !usesWebSocketTransport(session)
-        ) {
-          openWebRtcSession(sessionId, session.webrtc, { force: true, waitForPiMs: 6000 })
+        if (reactivated && !usesWebSocketTransport(session)) {
+          void fetchWebRtcBundleForSession(sessionId, undefined, { attempts: 5, delayMs: 1500 }).then(
+            (webrtc) => {
+              if (webrtc) {
+                console.log('[RDI ConnectionDetail] Reactivate: opening WebRTC', { session_id: sessionId })
+                openWebRtcSession(sessionId, webrtc, { force: true, waitForPiMs: 6000 })
+              }
+            },
+          )
         }
       })
       .catch(() => { /* ignore */ })

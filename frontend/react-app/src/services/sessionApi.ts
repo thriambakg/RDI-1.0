@@ -166,17 +166,60 @@ export async function updateSession(params: {
   if (params.status) body.status = params.status
   if (params.name != null) body.name = params.name
   if (params.ttl_seconds != null) body.ttl_seconds = params.ttl_seconds
+  console.log('🌐 [RDI Session API] PATCH /sessions', { url, body })
   const headers = await getAuthHeaders()
   const res = await fetch(url, {
     method: 'PATCH',
     headers,
     body: JSON.stringify(body),
   })
+  console.log('📥 [RDI Session API] PATCH response:', {
+    status: res.status,
+    statusText: res.statusText,
+    ok: res.ok,
+  })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
+    console.error('❌ [RDI Session API] PATCH session failed:', { status: res.status, error: err })
     throw new Error((err as { error?: string }).error || `Update session failed: ${res.status}`)
   }
-  return res.json()
+  const data = (await res.json()) as PatchSessionResponse
+  console.log('✅ [RDI Session API] Session updated:', {
+    session_id: data.session_id,
+    status: data.status,
+    hasWebrtc: Boolean(data.webrtc),
+  })
+  return data
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** Resolve viewer WebRTC bundle after activate/reactivate (PATCH may omit webrtc briefly). */
+export async function fetchWebRtcBundleForSession(
+  session_id: string,
+  patch?: PatchSessionResponse,
+  options?: { attempts?: number; delayMs?: number },
+): Promise<WebRtcViewerBundle | undefined> {
+  if (patch?.webrtc) return patch.webrtc
+  const attempts = options?.attempts ?? 5
+  const delayMs = options?.delayMs ?? 1500
+  for (let i = 0; i < attempts; i += 1) {
+    if (i > 0) await sleep(delayMs)
+    try {
+      const data = await getSession(session_id)
+      if (data.status === 'active' && data.webrtc) {
+        console.log('[RDI Session API] WebRTC bundle resolved via GET /sessions', {
+          session_id,
+          attempt: i + 1,
+          channel: data.webrtc.channel_arn.slice(-36),
+        })
+        return data.webrtc
+      }
+    } catch (e) {
+      console.warn('[RDI Session API] GET /sessions while resolving WebRTC failed', e)
+    }
+  }
+  return undefined
 }
 
 export async function listSessions(wavelengthZoneId?: string): Promise<ListSessionsResponse> {

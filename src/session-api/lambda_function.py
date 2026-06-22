@@ -1091,11 +1091,24 @@ def _patch_session(user_id: str, body: dict, headers: dict) -> dict:
     if name:
         out["name"] = name
     channel_arn = new_channel_arn or (item.get("signaling_channel_arn") or {}).get("S", "")
-    if webrtc_enabled() and effective_status == "active" and channel_arn:
-        try:
-            out["webrtc"] = build_webrtc_viewer_bundle(session_id, channel_arn)
-        except Exception as e:
-            _log("patch_session webrtc creds failed", session_id=session_id, error=str(e))
+    if webrtc_enabled() and effective_status == "active":
+        if not channel_arn and status == "active" and current_status == "idle":
+            return _response(
+                500,
+                {"error": "WebRTC reactivation failed: no signaling channel (redeploy Session API)"},
+                headers,
+            )
+        if channel_arn:
+            try:
+                out["webrtc"] = build_webrtc_viewer_bundle(session_id, channel_arn)
+            except Exception as e:
+                _log("patch_session webrtc creds failed", session_id=session_id, error=str(e))
+                if status == "active" and current_status == "idle":
+                    return _response(
+                        500,
+                        {"error": f"WebRTC reactivation failed: {e}"},
+                        headers,
+                    )
 
     _log("patch_session done", session_id=session_id, status=effective_status)
     return _response(200, out, headers)
