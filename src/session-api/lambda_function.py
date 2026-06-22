@@ -150,15 +150,21 @@ def _add_relay_active_session(
     drone_id: str = "",
     mavlink_port: int | None = None,
     mavlink_host: str = "",
-) -> None:
-    """Append or update one active WebRTC session on the relay (multi-drone)."""
+) -> bool:
+    """Append or update one active WebRTC session on the relay (multi-drone). Returns True on success."""
     if not RELAY_REGISTRY_TABLE or not relay_id or not channel_arn:
-        return
+        _log(
+            "add_relay_active_session skipped",
+            relay_id=relay_id or "(none)",
+            session_id=session_id,
+            reason="missing table, relay_id, or channel_arn",
+        )
+        return False
     try:
         item = _get_relay_registry_item(dynamodb, user_id, relay_id, wavelength_zone_id)
         if not item:
             _log("add_relay_active_session skipped", relay_id=relay_id, reason="relay not found")
-            return
+            return False
         relay_zone = (item.get("wavelength_zone_id") or {}).get("S") or wavelength_zone_id
         sessions = parse_active_sessions(item)
         entry = make_session_entry(
@@ -191,11 +197,21 @@ def _add_relay_active_session(
             "relay active_sessions updated",
             relay_id=relay_id,
             session_id=session_id,
+            channel=channel_arn[-36:],
             count=len(sessions),
         )
+        return True
     except ClientError as e:
-        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
-            raise
+        code = e.response["Error"]["Code"]
+        _log(
+            "add_relay_active_session failed",
+            relay_id=relay_id,
+            session_id=session_id,
+            channel=channel_arn[-36:],
+            error_code=code,
+            error=str(e),
+        )
+        return False
 
 
 _LEGACY_SESSION_FIELDS = (
@@ -793,7 +809,7 @@ def _reactivate_webrtc_session(
     wl_zone = (item.get("wavelength_zone_id") or {}).get("S", REGION)
     drone_id = (item.get("drone_id") or {}).get("S", "")
     if relay_id:
-        _add_relay_active_session(
+        if not _add_relay_active_session(
             dynamodb,
             user_id,
             relay_id,
@@ -803,7 +819,11 @@ def _reactivate_webrtc_session(
             drone_id=drone_id,
             mavlink_port=eff_port,
             mavlink_host=eff_host,
-        )
+        ):
+            raise RuntimeError(
+                f"Failed to register reactivated session on relay {relay_id} "
+                "(check relay ownership / relay-registry table)"
+            )
     _log("kvs channel reactivated", session_id=session_id, channel_arn=channel_arn)
     return channel_arn
 

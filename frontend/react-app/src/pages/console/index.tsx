@@ -47,7 +47,7 @@ import {
 import { deleteSession, releaseSession, activateSession, getSession, fetchWebRtcBundleForSession } from '../../services/sessionApi'
 import { deleteRelay, updateRelayStatus } from '../../services/relayApi'
 import type { CreateSessionResponse } from '../../services/sessionApi'
-import { usesWebSocketTransport } from '../../utils/sessionTransport'
+import { usesWebSocketTransport, WEBRTC_PI_READY_MS } from '../../utils/sessionTransport'
 import './Console.css'
 
 const { regions: REGION_OPTIONS } = getEnvironmentRegions()
@@ -299,7 +299,7 @@ export default function Console() {
             if (wsState === 'open' || wsState === 'connecting') return
             if (data.endpoint) openSessionWs(s.session_id, data.endpoint)
           } else if (data.webrtc) {
-            openWebRtcSession(s.session_id, data.webrtc, { waitForPiMs: 6000 })
+            openWebRtcSession(s.session_id, data.webrtc, { waitForPiMs: WEBRTC_PI_READY_MS })
           }
         })
         .catch(() => { /* ignore; session may be stale */ })
@@ -320,7 +320,7 @@ export default function Console() {
       if (usesWebSocketTransport(res)) {
         openSessionWs(res.session_id, res.endpoint)
       } else if (res.webrtc) {
-        openWebRtcSession(res.session_id, res.webrtc, { force: true, waitForPiMs: 6000 })
+        openWebRtcSession(res.session_id, res.webrtc, { force: true, waitForPiMs: WEBRTC_PI_READY_MS })
       }
       if (res.relay_id) {
         updateRelays((r) =>
@@ -405,7 +405,7 @@ export default function Console() {
       const webrtcBundle = await fetchWebRtcBundleForSession(sessionId, patch)
       if (webrtcBundle) {
         console.log('[RDI Console] Reactivate: opening WebRTC', { session_id: sessionId })
-        openWebRtcSession(sessionId, webrtcBundle, { force: true, waitForPiMs: 6000 })
+        openWebRtcSession(sessionId, webrtcBundle, { force: true, waitForPiMs: WEBRTC_PI_READY_MS })
       } else if (patch.status === 'active') {
         const data = await getSession(sessionId)
         if (data.status === 'active' && data.endpoint && usesWebSocketTransport(data)) {

@@ -30,7 +30,7 @@ from pathlib import Path
 from rdi_device_config import load_device_config
 
 LOG = logging.getLogger("rdi.daemon")
-POLL_INTERVAL_SEC = int(os.environ.get("RDI_POLL_INTERVAL_SEC", "5"))
+POLL_INTERVAL_SEC = int(os.environ.get("RDI_POLL_INTERVAL_SEC", "3"))
 CREDS_REFRESH_MARGIN_SEC = int(os.environ.get("RDI_CREDS_REFRESH_MARGIN_SEC", "300"))
 WORKER_SCRIPT = Path(__file__).resolve().parent / "kvs_master_worker.py"
 WORKER_DRY_RUN = os.environ.get("RDI_WORKER_DRY_RUN", "").strip() in ("1", "true", "yes")
@@ -96,12 +96,18 @@ def fetch_active_sessions(api_base: str, device_serial: str, device_secret: str)
     if not isinstance(sessions, list):
         return []
     api_status = body.get("status", "")
-    session_ids = [str(s.get("session_id", ""))[:8] for s in sessions if s.get("session_id")]
+    poll_tags: list[str] = []
+    for s in sessions:
+        sid = str(s.get("session_id", ""))[:8]
+        if not sid:
+            continue
+        ch = _channel_arn(s)
+        poll_tags.append(f"{sid}@{ch[-24:] if ch else '?'}")
     LOG.info(
         "poll active-sessions: %d session(s) status=%s ids=%s",
         len(sessions),
         api_status,
-        ",".join(session_ids) or "(none)",
+        ",".join(poll_tags) or "(none)",
     )
     return sessions
 
@@ -227,9 +233,11 @@ def reconcile(workers: dict[str, WorkerProcess], desired: list[dict]) -> dict[st
                     CREDS_REFRESH_MARGIN_SEC,
                 )
             stop_worker(existing)
+            del workers[sid]
         elif existing:
             LOG.warning("restarting dead worker session_id=%s", sid)
             stop_worker(existing)
+            del workers[sid]
         started = start_worker(session)
         if started:
             workers[sid] = started

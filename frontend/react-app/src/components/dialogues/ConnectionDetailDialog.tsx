@@ -19,7 +19,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { getSession, updateSession, fetchWebRtcBundleForSession } from '../../services/sessionApi'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import { useSessionWebRtc } from '../../contexts/SessionWebRtcContext'
-import { usesWebSocketTransport } from '../../utils/sessionTransport'
+import { usesWebSocketTransport, WEBRTC_PI_READY_MS } from '../../utils/sessionTransport'
 import { pingDataChannel, PING_BYTES, PONG_BYTES } from '../../utils/rdiPing'
 import type { WebRtcViewerBundle } from '../../services/sessionApi'
 import type { RelayRef } from '../../services/profileApi'
@@ -184,7 +184,7 @@ export function ConnectionDetailDialog({
             (webrtc) => {
               if (webrtc) {
                 console.log('[RDI ConnectionDetail] Reactivate: opening WebRTC', { session_id: sessionId })
-                openWebRtcSession(sessionId, webrtc, { force: true, waitForPiMs: 6000 })
+                openWebRtcSession(sessionId, webrtc, { force: true, waitForPiMs: WEBRTC_PI_READY_MS })
               }
             },
           )
@@ -219,7 +219,7 @@ export function ConnectionDetailDialog({
         patch.webrtc &&
         !usesWebSocketTransport(refreshed)
       ) {
-        openWebRtcSession(sessionId, patch.webrtc, { force: true, waitForPiMs: 6000 })
+        openWebRtcSession(sessionId, patch.webrtc, { force: true, waitForPiMs: WEBRTC_PI_READY_MS })
       }
       setSettingsAnchor(null)
     } catch (e) {
