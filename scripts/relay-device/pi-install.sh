@@ -18,7 +18,10 @@ apt-get install -y -qq python3 python3-pip python3-venv python3-boto3 \
   libavformat-dev libavdevice-dev libavfilter-dev libopus-dev libvpx-dev pkg-config
 
 mkdir -p "${INSTALL_DIR}"
-for f in rdi-relay-daemon.py kvs_master_worker.py rdi_device_config.py rdi-relay-claim.py requirements-worker.txt; do
+for f in rdi-relay-daemon.py kvs_master_worker.py rdi_device_config.py rdi-relay-claim.py \
+  radio_hop_protocol.py radio_serial_bridge.py radio_mavlink_bridge.py \
+  radio_telem_smoke_test.py radio_ping_desktop_agent.py \
+  requirements-worker.txt; do
   if [[ ! -f "${SCRIPT_DIR}/${f}" ]]; then
     echo "Missing ${SCRIPT_DIR}/${f}"
     exit 1
@@ -45,6 +48,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=${INSTALL_DIR}
 Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/rdi/radio.env
 ExecStart=${PYTHON} ${INSTALL_DIR}/rdi-relay-daemon.py
 Restart=on-failure
 RestartSec=10

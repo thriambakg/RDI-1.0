@@ -19,6 +19,11 @@ FILES=(
   kvs_master_worker.py
   rdi_device_config.py
   rdi-relay-claim.py
+  radio_hop_protocol.py
+  radio_serial_bridge.py
+  radio_mavlink_bridge.py
+  radio_telem_smoke_test.py
+  radio_ping_desktop_agent.py
   requirements-worker.txt
   pi-install.sh
 )

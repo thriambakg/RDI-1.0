@@ -277,8 +277,18 @@ export function ConnectionDetailDialog({
       setPingError(null)
       addLog('Pinging over WebRTC data channel…')
       pingDataChannel(channel)
-        .then((rttMs) => {
-          addLog(`Pi relay responded (round-trip ${rttMs}ms).`)
+        .then((result) => {
+          if (result.lines.length > 0) {
+            result.lines.forEach((line) => addLog(line))
+          }
+          if (result.error) {
+            addLog(`Radio note: ${result.error}`)
+          }
+          const hopNames = result.hops.map((h) => h.hop).filter(Boolean)
+          if (hopNames.length > 0) {
+            addLog(`Path: ${hopNames.join(' → ')}`)
+          }
+          addLog(`Round-trip ${result.rttMs}ms.`)
         })
         .catch((e) => {
           const message = e instanceof Error ? e.message : 'Ping failed'

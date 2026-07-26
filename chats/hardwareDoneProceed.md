@@ -16,15 +16,17 @@ This document covers the complete hardware wiring, jumper layout, and asynchrono
 
 * **PC Connection:** Plug the USB connector into a high-powered **USB 3.0 port** on your desktop PC to support peak transmit draws (~1A).
 
-### Air Side (Raspberry Pi CM4 / Holybro Baseboard Transmitter)
+### Air Side (Holybro Baseboard / Pixhawk TELEM1 Radio)
 
 * **Antennas:** Attach two **Stubby Monopole Antennas** (2.1 dBi) to minimize weight and aerodynamic drag on the airframe.
 
-* **Jumper Configuration:** Leave the plastic jumper block bridging **Pins 4 and 6** on the even row. 
+* **Jumper Configuration:** For the supplied Pixhawk telemetry cable, leave the plastic jumper block bridging **Pins 4 and 6** unless RFDesign's cable documentation says otherwise. The cable/jumper combination supplies the modem from TELEM1. Do not attach a second power source at the same time.
 
 * **Cable Connection:** Plug the **White JST-GH connector** into the **TELEM 1** port on the Holybro Baseboard. Plug the **Black female 6-pin connector** directly onto the single row of **Odd-numbered pins (1, 3, 5, 7, 9, 11)** on the radio modem.
 
-* **Alignment:** Align the **Black wire** of the telemetry cable with **Pin 1** of the modem's odd row. The 4/6 jumper routes the incoming 5V telemetry power correctly to the radio components.
+* **Alignment:** Align the **Black wire** of the telemetry cable with **Pin 1** of the modem's odd row. Verify the connector orientation against the modem's pin-1 marking before applying power.
+
+> **Critical architecture fact:** The external **TELEM1 connector belongs to the Pixhawk flight-controller module**, not directly to Linux on the CM4. On Pixhawk 6X it is FMU UART7 (`/dev/ttyS6` inside PX4/NuttX). It does **not** appear as `/dev/ttyAMA0` or another Linux device on the Raspberry Pi.
 
 ```text
 
@@ -44,277 +46,137 @@ This document covers the complete hardware wiring, jumper layout, and asynchrono
 
 ---
 
-## 2. Raspberry Pi System Configuration
+## 2. What Is Already Running
 
-To ensure the Linux operating system does not corrupt your radio data stream with boot messages or login prompts, disable the serial console on your CM4.
+The current relay software is intentionally independent of the radio:
 
-1. SSH into the Raspberry Pi after its system update finishes.
+```text
+Browser ── WebRTC data channel ──► kvs_master_worker.py ── PONG ──► Browser
+```
 
-2. Open the configuration tool:
+- `rdi-relay-daemon.py` handles device/session polling and worker lifecycle.
+- `kvs_master_worker.py` handles KVS signaling, WebRTC, and the current `PING` → `PONG`.
+- Neither process opens TELEM1 or another serial device today.
+- Keep `rdi-relay-daemon` running while testing the radio. A standalone serial test must not modify or restart it.
 
-   ```bash
-
-   sudo raspi-config
-
-   ```
-
-3. Navigate to: **Interface Options** -> **Serial Port**.
-
-4. Select **No** to: *"Would you like a login shell to be accessible over serial?"*
-
-5. Select **Yes** to: *"Would you like the serial port hardware to be enabled?"*
-
-6. Save the settings and reboot the Pi:
-
-   ```bash
-
-   sudo reboot
-
-   ```
+The `scripts/proxy-agent` directory contains older local proxy simulations. It is not the active Pi WebRTC path and should not be used to enable this radio.
 
 ---
 
-## 3. Python Asynchronous Serial Bridge (Cursor Component)
+## 3. Correct Port Topology
 
-This component uses a thread-safe, non-blocking asynchronous worker queue. Integrating this inside your background daemon prevents real-time WebRTC packet bursts from blocking your primary network or system control loop execution.
+```text
+CM4 Linux                         Pixhawk FMU                        RFD900x
+─────────                         ───────────                        ───────
+/dev/serial0 (typical) ◄──────► TELEM2 (internal)
+                                      │
+                                      │ PX4 MAVLink routing
+                                      ▼
+                                 TELEM1 UART7 ◄──────────────────► Radio
+```
 
-### Installation
-
-Install the physical serial interface library on the Pi:
+Exact Linux device aliases can vary. Check them instead of assuming:
 
 ```bash
-
-pip install pyserial
-
+readlink -f /dev/serial0
+readlink -f /dev/serial1
+ls -l /dev/ttyAMA* /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
 ```
 
-### Production-Ready Daemon Script
-
-Save this code in your Python project directory. You can use it as a standalone verification tool or import the class into your main script.
-
-```python
-
-import json
-
-import logging
-
-import queue
-
-import threading
-
-import time
-
-import serial
-
-# Configure clean logging output
-
-logging.basicConfig(level=[logging.INFO](http://logging.INFO), format="%(asctime)s [%(levelname)s] %(message)s")
-
-class WebRTCToRadioBridge:
-
-    def **init**(self, port='/dev/ttyAMA0', baudrate=57600):
-
-        """
-
-        Initializes the communication bridge parameters.
-
-        Default port for Holybro TELEM 1 on CM4 is typically /dev/ttyAMA0.
-
-        """
-
-        self.port = port
-
-        self.baudrate = baudrate
-
-        self.serial_queue = queue.Queue()
-
-        self.running = False
-
-        self.serial_conn = None
-
-        self.tx_thread = None
-
-    def start(self):
-
-        """Opens the physical hardware radio link and launches the TX engine thread."""
-
-        try:
-
-            # Configure industry-standard 8N1 serial communication parameters
-
-            self.serial_conn = serial.Serial(
-
-                port=self.port,
-
-                baudrate=self.baudrate,
-
-                bytesize=serial.EIGHTBITS,
-
-                parity=serial.PARITY_NONE,
-
-                stopbits=serial.STOPBITS_ONE,
-
-                timeout=1
-
-            )
-
-            self.running = True
-
-            
-
-            # Run the serialization loop on a background thread to preserve WebRTC loop performance
-
-            self.tx_thread = threading.Thread(target=self._tx_worker, daemon=True)
-
-            self.tx_thread.start()
-
-            [logging.info](http://logging.info)(f"Radio telemetry link successfully opened on {self.port} at {self.baudrate} baud.")
-
-        except serial.SerialException as e:
-
-            logging.error(f"Failed to open hardware serial port {self.port}: {e}")
-
-            raise
-
-    def queue_command(self, webrtc_payload: dict):
-
-        """
-
-        Safe entry point for your WebRTC data channel thread hooks.
-
-        Accepts a dictionary command payload and stages it for over-the-air transmission.
-
-        """
-
-        if self.running:
-
-            self.serial_queue.put(webrtc_payload)
-
-        else:
-
-            logging.warning("Cannot queue payload; radio telemetry bridge is offline.")
-
-    def *tx*worker(self):
-
-        """Background worker thread responsible for pushing data down the physical pipeline."""
-
-        while self.running:
-
-            try:
-
-                # Grab a command packet from the internal queue (gracefully blocks until data arrives)
-
-                command_data = self.serial_queue.get(timeout=0.5)
-
-                
-
-                # 1. Serialize dictionary data to JSON string with a newline delimiter
-
-                # Note: Swap this parsing block if your desktop HITL strictly requires raw binary or MAVLink
-
-                serialized_payload = json.dumps(command_data) + "\n"
-
-                
-
-                # 2. Transmit raw binary stream across the airwaves
-
-                self.serial_conn.write(serialized_payload.encode('utf-8'))
-
-                self.serial_conn.flush() # Forces immediate physical hardware packet clearance
-
-                
-
-                self.serial_queue.task_done()
-
-            except queue.Empty:
-
-                continue
-
-            except Exception as e:
-
-                logging.error(f"Error encountered during packet transmission over radio link: {e}")
-
-                time.sleep(1) # Grace interval to manage potential serial reconnect loops
-
-    def stop(self):
-
-        """Performs a structured teardown of background threads and serial handles."""
-
-        self.running = False
-
-        if self.tx_thread:
-
-            self.tx_thread.join()
-
-        if self.serial_conn and self.serial_[conn.is](http://conn.is)_open:
-
-            self.serial_conn.close()
-
-        [logging.info](http://logging.info)("Radio telemetry bridge gracefully decommissioned.")
-
-# =====================================================================
-
-# INTEGRATION & TESTING PATTERN:
-
-# =====================================================================
-
-if **name** == "__main__":
-
-    # 1. Initialize and bind the hardware bridge
-
-    bridge = WebRTCToRadioBridge(port='/dev/ttyAMA0', baudrate=57600)
-
-    bridge.start()
-
-    try:
-
-        [logging.info](http://logging.info)("Simulating incoming real-time WebRTC control data stream...")
-
-        while True:
-
-            # Mock structure representing your live incoming WebRTC commands
-
-            mock_webrtc_command = {
-
-                "timestamp": time.time(),
-
-                "command": "NAV_WAYPOINT",
-
-                "params": {"lat": 41.8781, "lng": -87.6298, "alt": 50.0}
-
-            }
-
-            
-
-            # Non-blocking injection into the wireless transmission pipeline
-
-            bridge.queue_command(mock_webrtc_command)
-
-            time.sleep(0.1) # Simulate a standard 10Hz flight navigation stream loop
-
-    except KeyboardInterrupt:
-
-        bridge.stop()
-
-```
+Do **not** run a Python serial bridge against `/dev/ttyAMA0` under the assumption that it is TELEM1. On this baseboard TELEM1 is not exposed directly to CM4 Linux.
 
 ---
 
-## 4. Verification & Simulation Testing Loop
+## 4. Two Valid Integration Paths
 
-1. **Verify Air Side Operation:** Execute the Python daemon script inside your cursor/terminal interface on the Pi. The status LEDs on the Air-side RFD900x will shift pattern to indicate active transmission.
+### Path A — Keep the Current TELEM1 Wiring
 
-2. **Open Desktop Monitoring:** 
+This is the installed hardware path. PX4 must participate:
 
-   * **On Windows:** Open a serial shell client like PuTTY, identify your Virtual COM assignment via Device Manager, choose a speed of `57600`, and confirm incoming clean JSON strings are printing to the display.
+1. CM4 communicates with the flight controller over the internal TELEM2 connection.
+2. PX4 runs MAVLink on TELEM1 at the same baud rate as the RFD900x (start with `57600`, 8N1).
+3. PX4 routes MAVLink between the companion link and the radio link.
+4. The desktop RFD900x appears as a Windows COM port and connects to QGroundControl, Mission Planner, or the simulator.
 
-   * **On Linux:** Use a screen interface command line link:
+This path carries **raw MAVLink frames**, not newline-delimited JSON. The earlier JSON bridge example was incompatible with PX4/HITL and has been removed.
 
-     ```bash
+Configure TELEM1 from QGroundControl/PX4 parameters for the exact flight-controller firmware. Typical settings are:
 
-     screen /dev/ttyUSB0 57600
+- TELEM1 protocol: MAVLink
+- TELEM1 baud: `57600`
+- MAVLink mode: Normal/Onboard as appropriate
+- Hardware flow control: off unless both radio configuration and cable use RTS/CTS
 
-     ```
+Parameter names differ by PX4 release. Confirm the serial-port assignment shown by QGroundControl rather than blindly applying parameter numbers.
 
-3. **Link to Drone HITL Platform:** Route this incoming serial resource `COMx` or `/dev/ttyUSBx`) to your specific simulation backend interface at an identical `57600` baud rate to pass your WebRTC flight commands directly to your simulated drone instance.
+### Path B — Direct CM4 USB (Best Isolated Radio Smoke Test)
+
+For a radio-only proof that bypasses PX4, connect the air RFD900x through a second 3.3 V-logic FTDI adapter into a CM4 Host USB port. It should appear as `/dev/ttyUSB0`.
+
+This is the only path where the Pi can directly run a serial smoke test against the radio. It requires a second FTDI adapter because the bundle's included FTDI cable is already used on the desktop side.
+
+---
+
+## 5. Daemon-Safe Serial Smoke Test
+
+A standalone test is available at:
+
+```text
+scripts/relay-device/radio_telem_smoke_test.py
+```
+
+It does not import, stop, or alter the relay daemon.
+
+Install `pyserial` in the existing Pi virtual environment:
+
+```bash
+sudo /opt/rdi/venv/bin/pip install pyserial
+```
+
+Copy and inspect ports:
+
+```powershell
+scp "C:\Users\thria\Documents\RDI\RDI-1.0\scripts\relay-device\radio_telem_smoke_test.py" relay@RDIRelay.local:/tmp/
+```
+
+```bash
+sudo cp /tmp/radio_telem_smoke_test.py /opt/rdi/
+/opt/rdi/venv/bin/python3 /opt/rdi/radio_telem_smoke_test.py --list
+```
+
+If using **Path B** and `/dev/ttyUSB0` is confirmed:
+
+```bash
+/opt/rdi/venv/bin/python3 /opt/rdi/radio_telem_smoke_test.py \
+  --port /dev/ttyUSB0 \
+  --baud 57600
+```
+
+On Windows, open the desktop modem's COM port at `57600` and look for `RDI_RADIO_SMOKE` lines.
+
+Do not run this smoke test on the CM4's internal TELEM2 UART while PX4 or another service is using it.
+
+---
+
+## 6. Next Software Step
+
+After the physical radio path is verified, add an optional radio bridge to the active WebRTC worker:
+
+```text
+Browser WebRTC bytes
+        │
+        ├── PING → local PONG (existing behavior remains unchanged)
+        │
+        └── MAVLink bytes → radio/FC transport
+```
+
+The bridge should be:
+
+- Disabled by default (for example, no `RDI_RADIO_PORT` means ping-only).
+- Non-blocking so serial stalls cannot freeze WebRTC or daemon polling.
+- Raw-byte/MAVLink aware; do not JSON-encode MAVLink.
+- Bidirectional so desktop/drone telemetry returns over the WebRTC data channel.
+- Isolated per physical radio endpoint; two workers must not open the same UART simultaneously.
+
+Until this is implemented, successful browser ping proves WebRTC-to-Pi only. It does not prove WebRTC-to-radio-to-desktop.
 

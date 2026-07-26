@@ -1,0 +1,196 @@
+"""MAVLink TUNNEL bridge: Pi /dev/serial0 (TELEM2) ↔ PX4 ↔ TELEM1 radio.
+
+Wraps our hop JSON inside MAVLink TUNNEL messages so PX4 can forward them
+between the companion UART and the air radio without a second FTDI.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import threading
+import time
+from typing import Any
+
+from radio_hop_protocol import decode_line, encode_line, make_ping
+
+LOG = logging.getLogger("rdi.radio_mavlink")
+
+# Custom payload type so we can ignore unrelated TUNNEL traffic.
+RDI_TUNNEL_PAYLOAD_TYPE = 201
+TUNNEL_PAYLOAD_MAX = 128
+# Companion / GCS-like ids; PX4 routes broadcast (0) to other instances when FORWARD=1.
+SOURCE_SYSTEM = 255
+SOURCE_COMPONENT = 190
+
+
+def _pack_payload(msg: dict[str, Any]) -> bytes:
+    raw = encode_line(msg).rstrip(b"\n")
+    if len(raw) > TUNNEL_PAYLOAD_MAX:
+        # Compact timestamps to ints (ms) to fit TUNNEL's 128-byte payload.
+        compact = {
+            "v": msg.get("v"),
+            "type": msg.get("type"),
+            "id": msg.get("id"),
+            "hops": [
+                {"hop": h.get("hop"), "ts": int(round(float(h.get("ts") or 0) * 1000))}
+                for h in (msg.get("hops") or [])
+            ],
+        }
+        raw = encode_line(compact).rstrip(b"\n")
+    if len(raw) > TUNNEL_PAYLOAD_MAX:
+        raise ValueError(f"hop payload too large for TUNNEL ({len(raw)} > {TUNNEL_PAYLOAD_MAX})")
+    return raw
+
+
+def _unpack_payload(payload: bytes, length: int) -> dict[str, Any] | None:
+    data = bytes(payload[: max(0, int(length))])
+    # Allow missing trailing newline from TUNNEL packing.
+    if data and not data.endswith(b"\n"):
+        data = data + b"\n"
+    msg = decode_line(data)
+    if not msg:
+        return None
+    # Expand compact ms timestamps back to float seconds for format_hops.
+    hops = []
+    for h in msg.get("hops") or []:
+        ts = h.get("ts")
+        # Compact encoder stores unix time as integer milliseconds.
+        if isinstance(ts, (int, float)) and ts > 1e11:
+            ts = float(ts) / 1000.0
+        hops.append({"hop": h.get("hop"), "ts": ts})
+    return {**msg, "hops": hops}
+
+
+class RadioMavlinkBridge:
+    """Background MAVLink reader + asyncio waiters for hop ping over TUNNEL."""
+
+    def __init__(self, port: str, baud: int = 921600, timeout_sec: float = 8.0):
+        self.port = port
+        self.baud = baud
+        self.timeout_sec = timeout_sec
+        self._conn = None
+        self._thread: threading.Thread | None = None
+        self._hb_thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._pending: dict[str, asyncio.Future] = {}
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return self._conn is not None
+
+    def start(self, loop: asyncio.AbstractEventLoop) -> None:
+        from pymavlink import mavutil
+
+        self._loop = loop
+        self._conn = mavutil.mavlink_connection(
+            self.port,
+            baud=self.baud,
+            source_system=SOURCE_SYSTEM,
+            source_component=SOURCE_COMPONENT,
+            autoreconnect=True,
+        )
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._reader, name="rdi-mav-rx", daemon=True)
+        self._hb_thread = threading.Thread(target=self._heartbeat, name="rdi-mav-hb", daemon=True)
+        self._thread.start()
+        self._hb_thread.start()
+        LOG.info("mavlink bridge open port=%s baud=%s", self.port, self.baud)
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2)
+        if self._hb_thread and self._hb_thread.is_alive():
+            self._hb_thread.join(timeout=2)
+        self._thread = None
+        self._hb_thread = None
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+        for fut in list(self._pending.values()):
+            if not fut.done():
+                fut.set_exception(TimeoutError("mavlink bridge stopped"))
+        self._pending.clear()
+        LOG.info("mavlink bridge closed")
+
+    def _heartbeat(self) -> None:
+        from pymavlink import mavutil
+
+        while not self._stop.is_set():
+            try:
+                with self._lock:
+                    if self._conn is not None:
+                        self._conn.mav.heartbeat_send(
+                            mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
+                            mavutil.mavlink.MAV_AUTOPILOT_INVALID,
+                            0,
+                            0,
+                            0,
+                        )
+            except Exception as e:
+                if not self._stop.is_set():
+                    LOG.warning("mavlink heartbeat error: %s", e)
+            self._stop.wait(1.0)
+
+    def _reader(self) -> None:
+        while not self._stop.is_set():
+            try:
+                if self._conn is None:
+                    time.sleep(0.1)
+                    continue
+                msg = self._conn.recv_match(type="TUNNEL", blocking=True, timeout=0.2)
+                if msg is None:
+                    continue
+                if int(getattr(msg, "payload_type", -1)) != RDI_TUNNEL_PAYLOAD_TYPE:
+                    continue
+                decoded = _unpack_payload(bytes(msg.payload), int(msg.payload_length))
+                if not decoded or decoded.get("type") != "pong":
+                    continue
+                ping_id = str(decoded.get("id") or "")
+                fut = self._pending.get(ping_id)
+                if fut and self._loop and not fut.done():
+                    self._loop.call_soon_threadsafe(fut.set_result, decoded)
+            except Exception as e:
+                if not self._stop.is_set():
+                    LOG.warning("mavlink rx error: %s", e)
+                    time.sleep(0.2)
+
+    def _send_tunnel(self, hop_msg: dict[str, Any]) -> int:
+        raw = _pack_payload(hop_msg)
+        payload = raw + b"\x00" * (TUNNEL_PAYLOAD_MAX - len(raw))
+        with self._lock:
+            assert self._conn is not None
+            self._conn.mav.tunnel_send(
+                0,  # target_system broadcast
+                0,  # target_component broadcast
+                RDI_TUNNEL_PAYLOAD_TYPE,
+                len(raw),
+                payload,
+            )
+        return len(raw)
+
+    async def roundtrip_ping(self, hop_relay: str = "relay") -> dict[str, Any]:
+        if not self.enabled or self._loop is None:
+            raise RuntimeError("mavlink bridge not started")
+
+        msg = make_ping(hop_relay)
+        ping_id = str(msg["id"])
+        fut: asyncio.Future = self._loop.create_future()
+        self._pending[ping_id] = fut
+        try:
+            nbytes = self._send_tunnel(msg)
+            LOG.info("mavlink tunnel ping tx id=%s bytes=%d", ping_id, nbytes)
+            pong = await asyncio.wait_for(fut, timeout=self.timeout_sec)
+            hops = list(pong.get("hops") or [])
+            hops.append({"hop": hop_relay, "ts": time.time()})
+            pong = {**pong, "hops": hops}
+            LOG.info("mavlink tunnel pong rx id=%s hops=%d", ping_id, len(hops))
+            return pong
+        finally:
+            self._pending.pop(ping_id, None)

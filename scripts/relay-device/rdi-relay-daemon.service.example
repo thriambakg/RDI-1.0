@@ -17,8 +17,11 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/rdi
 Environment=PYTHONUNBUFFERED=1
-# Optional override if not in /etc/rdi/relay.conf:
-# Environment=RDI_API_BASE_URL=https://YOUR_API.execute-api.us-east-1.amazonaws.com/production
+# Optional radio round-trip ping. Create /etc/rdi/radio.env with:
+#   RDI_RADIO_MODE=mavlink
+#   RDI_RADIO_PORT=/dev/serial0
+#   RDI_RADIO_BAUD=921600
+EnvironmentFile=-/etc/rdi/radio.env
 ExecStart=/usr/bin/python3 /opt/rdi/rdi-relay-daemon.py
 Restart=on-failure
 RestartSec=10
