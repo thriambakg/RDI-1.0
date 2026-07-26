@@ -211,10 +211,56 @@ jobs:
         working-directory: frontend/react-app
 
       - name: npm audit (SCA – dependency vulnerabilities)
+        working-directory: frontend/react-app
+        env:
+          # RSC CSRF — not applicable to BrowserRouter SPA. Latest react-router-dom
+          # 7.x is 7.18.1; npm's suggested downgrade to 7.11.0 reopens worse vulns.
+          NPM_AUDIT_ALLOWLIST: GHSA-qwww-vcr4-c8h2
         run: |
           echo "🔍 Running npm audit on frontend dependencies..."
-          npm audit --audit-level=high
-        working-directory: frontend/react-app
+          set +e
+          npm audit --audit-level=high --json > /tmp/npm-audit.json
+          set -e
+          if [ ! -s /tmp/npm-audit.json ]; then
+            echo "❌ npm audit produced no JSON output"
+            exit 1
+          fi
+          node <<'NODE'
+          const fs = require('fs');
+          const allow = new Set(
+            (process.env.NPM_AUDIT_ALLOWLIST || '')
+              .split(/[,\s]+/)
+              .map((s) => s.trim().toUpperCase())
+              .filter(Boolean),
+          );
+          const report = JSON.parse(fs.readFileSync('/tmp/npm-audit.json', 'utf8'));
+          if (report.error) {
+            console.error('npm audit error:', report.error);
+            process.exit(1);
+          }
+          const vulns = report.vulnerabilities || {};
+          const ghsas = new Set();
+          for (const v of Object.values(vulns)) {
+            if (!['high', 'critical'].includes(v.severity)) continue;
+            for (const x of v.via || []) {
+              if (!x || typeof x !== 'object') continue;
+              const id = String(x.url || '').match(/GHSA-[a-z0-9-]+/i)?.[0]?.toUpperCase();
+              if (id) ghsas.add(id);
+            }
+          }
+          const unallowed = [...ghsas].filter((id) => !allow.has(id));
+          if (unallowed.length) {
+            console.error('❌ Blocking high/critical advisories:', unallowed.join(', '));
+            console.error('Allowlist:', [...allow].join(', ') || '(empty)');
+            process.exit(1);
+          }
+          if (ghsas.size) {
+            console.log('⚠️  Allowlisted high/critical advisories (accepted risk):', [...ghsas].join(', '));
+          } else {
+            console.log('✅ npm audit: no high/critical vulnerabilities');
+          }
+          NODE
+          echo "✅ npm audit gate passed"
 
       - name: Install Semgrep
         run: pip install semgrep
