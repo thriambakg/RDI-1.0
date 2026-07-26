@@ -30,8 +30,9 @@ variable "force_destroy" {
 }
 
 variable "kms_key_arn" {
-  description = "ARN of the KMS key for S3 encryption"
+  description = "ARN of the KMS key for S3 encryption. If null, uses SSE-S3 (AES256)."
   type        = string
+  default     = null
 }
 
 # Lifecycle configuration variables

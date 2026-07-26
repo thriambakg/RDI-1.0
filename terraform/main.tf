@@ -113,7 +113,8 @@ module "proxy_ecs" {
   tags                            = {}
 }
 
-# KMS keys - owned by RDI-1.0 (per-region; Base Infra uses default encryption, no customer keys)
+# Single CMK per region for S3/ECR/Secrets. DynamoDB/CloudWatch use AWS-owned keys in Base Infra.
+# Do not add unused CMKs — each costs $1/month whether referenced or not.
 module "kms" {
   source = "./modules/kms"
 
