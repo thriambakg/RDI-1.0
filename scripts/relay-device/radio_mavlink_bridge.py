@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from typing import Any
+
+# TUNNEL exists only in MAVLink 2 dialects; must be set before pymavlink import.
+os.environ["MAVLINK20"] = "1"
 
 from radio_hop_protocol import decode_line, encode_line, make_ping
 
@@ -166,7 +170,14 @@ class RadioMavlinkBridge:
         payload = raw + b"\x00" * (TUNNEL_PAYLOAD_MAX - len(raw))
         with self._lock:
             assert self._conn is not None
-            self._conn.mav.tunnel_send(
+            mav = self._conn.mav
+            if not hasattr(mav, "tunnel_send"):
+                raise RuntimeError(
+                    "pymavlink lacks tunnel_send (need MAVLINK20=1 / MAVLink 2 dialect). "
+                    f"dialect={getattr(mav, '__module__', '?')}"
+                )
+            # pymavlink accepts bytes or a 128-length sequence.
+            mav.tunnel_send(
                 0,  # target_system broadcast
                 0,  # target_component broadcast
                 RDI_TUNNEL_PAYLOAD_TYPE,
@@ -192,5 +203,10 @@ class RadioMavlinkBridge:
             pong = {**pong, "hops": hops}
             LOG.info("mavlink tunnel pong rx id=%s hops=%d", ping_id, len(hops))
             return pong
+        except asyncio.TimeoutError as e:
+            raise TimeoutError(
+                f"no TUNNEL pong within {self.timeout_sec}s "
+                f"(check PX4 MAV_0/1_FORWARD, SER_TEL* baud, radio link)"
+            ) from e
         finally:
             self._pending.pop(ping_id, None)

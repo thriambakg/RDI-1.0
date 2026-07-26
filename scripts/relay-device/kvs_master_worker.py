@@ -33,6 +33,7 @@ from radio_serial_bridge import RadioSerialBridge
 LOG = logging.getLogger("rdi.kvs_master")
 
 PING_BYTES = b"PING"
+PING_RADIO_BYTES = b"PINGR"
 # Exit so rdi-relay-daemon can respawn with fresh STS creds from active-sessions.
 SIGNALING_AUTH_EXIT_CODE = 2
 SIGNALING_AUTH_MAX_RETRIES = int(os.environ.get("RDI_SIGNALING_AUTH_MAX_RETRIES", "3"))
@@ -217,18 +218,55 @@ async def run_master(cfg: dict) -> None:
             )
             radio = None
 
-    async def _handle_ping(channel, cid: str) -> None:
-        """Local PONG, or full WebRTC → (MAVLink/)radio → desktop → back hop ping."""
-        if radio is None or not radio.enabled:
+    async def _handle_ping(channel, cid: str, *, radio_path: bool) -> None:
+        """Local relay PONG, or full WebRTC → radio → desktop → back hop ping."""
+        t_browser = time.time()
+        if not radio_path:
+            hops = [
+                {"hop": "browser", "ts": t_browser},
+                {"hop": "relay", "ts": time.time()},
+            ]
+            channel.send(
+                json.dumps(
+                    {
+                        "type": "rdi_pong",
+                        "scope": "local",
+                        "hops": hops,
+                        "lines": format_hops(hops),
+                    }
+                ).encode("utf-8")
+            )
             channel.send(PONG_BYTES)
             LOG.info("ping pong (local) session_id=%s viewer=%s", session_id, cid)
             return
-        t_browser = time.time()
+
+        if radio is None or not radio.enabled:
+            err = "radio path not configured on relay (RDI_RADIO_PORT / bridge)"
+            hops = [
+                {"hop": "browser", "ts": t_browser},
+                {"hop": "relay", "ts": time.time()},
+            ]
+            channel.send(
+                json.dumps(
+                    {
+                        "type": "rdi_pong",
+                        "scope": "radio",
+                        "error": err,
+                        "hops": hops,
+                        "lines": [err, "fell back to local relay pong"],
+                    }
+                ).encode("utf-8")
+            )
+            channel.send(PONG_BYTES)
+            LOG.info("ping pong (radio unavailable) session_id=%s viewer=%s", session_id, cid)
+            return
+
         try:
             pong = await radio.roundtrip_ping(hop_relay="relay")
             hops = [{"hop": "browser", "ts": t_browser}] + list(pong.get("hops") or [])
             summary = {
                 "type": "rdi_pong",
+                "scope": "radio",
                 "id": pong.get("id"),
                 "hops": hops,
                 "lines": format_hops(hops),
@@ -244,17 +282,19 @@ async def run_master(cfg: dict) -> None:
                 ",".join(str(h.get("hop")) for h in hops),
             )
         except Exception as e:
-            LOG.warning("radio ping failed session_id=%s: %s — local pong fallback", session_id, e)
+            err = str(e) or e.__class__.__name__
+            LOG.warning("radio ping failed session_id=%s: %s — local pong fallback", session_id, err)
             channel.send(
                 json.dumps(
                     {
                         "type": "rdi_pong",
-                        "error": str(e),
+                        "scope": "radio",
+                        "error": err,
                         "hops": [
                             {"hop": "browser", "ts": t_browser},
                             {"hop": "relay", "ts": time.time()},
                         ],
-                        "lines": [f"radio ping failed: {e}", "fell back to local relay pong"],
+                        "lines": [f"radio ping failed: {err}", "fell back to local relay pong"],
                     }
                 ).encode("utf-8")
             )
@@ -335,7 +375,10 @@ async def run_master(cfg: dict) -> None:
                                     def on_message(message, channel=ch) -> None:
                                         if isinstance(message, bytes):
                                             if message == PING_BYTES:
-                                                loop.create_task(_handle_ping(channel, cid))
+                                                loop.create_task(_handle_ping(channel, cid, radio_path=False))
+                                                return
+                                            if message == PING_RADIO_BYTES:
+                                                loop.create_task(_handle_ping(channel, cid, radio_path=True))
                                                 return
                                             LOG.debug("datachannel rx %d bytes", len(message))
                                         else:

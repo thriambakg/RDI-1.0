@@ -20,7 +20,7 @@ import { getSession, updateSession, fetchWebRtcBundleForSession } from '../../se
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import { useSessionWebRtc } from '../../contexts/SessionWebRtcContext'
 import { usesWebSocketTransport, WEBRTC_PI_READY_MS } from '../../utils/sessionTransport'
-import { pingDataChannel, PING_BYTES, PONG_BYTES } from '../../utils/rdiPing'
+import { pingDataChannel, type PingMode, PING_BYTES, PONG_BYTES } from '../../utils/rdiPing'
 import type { WebRtcViewerBundle } from '../../services/sessionApi'
 import type { RelayRef } from '../../services/profileApi'
 
@@ -254,7 +254,7 @@ export function ConnectionDetailDialog({
     }
   }, [open, sessionId, data?.session_id, connectionState(sessionId ?? ''), getWs, addLog])
 
-  const runPing = useCallback(() => {
+  const runPing = useCallback((mode: PingMode = 'local') => {
     if (!data?.session_id) return
 
     const isWebRtcSession = !usesWebSocketTransport(data)
@@ -275,8 +275,8 @@ export function ConnectionDetailDialog({
 
       setPingRunning(true)
       setPingError(null)
-      addLog('Pinging over WebRTC data channel…')
-      pingDataChannel(channel)
+      addLog(mode === 'radio' ? 'Pinging full radio path…' : 'Pinging relay (WebRTC only)…')
+      pingDataChannel(channel, { mode })
         .then((result) => {
           if (result.lines.length > 0) {
             result.lines.forEach((line) => addLog(line))
@@ -288,7 +288,7 @@ export function ConnectionDetailDialog({
           if (hopNames.length > 0) {
             addLog(`Path: ${hopNames.join(' → ')}`)
           }
-          addLog(`Round-trip ${result.rttMs}ms.`)
+          addLog(`Round-trip ${result.rttMs}ms (${mode === 'radio' ? 'radio' : 'relay'}).`)
         })
         .catch((e) => {
           const message = e instanceof Error ? e.message : 'Ping failed'
@@ -296,6 +296,12 @@ export function ConnectionDetailDialog({
           addLog(`Ping failed: ${message}`)
         })
         .finally(() => setPingRunning(false))
+      return
+    }
+
+    if (mode === 'radio') {
+      setPingError('Radio ping requires a WebRTC (Pi relay) session.')
+      addLog('Radio ping is only available on WebRTC sessions.')
       return
     }
 
@@ -634,22 +640,41 @@ export function ConnectionDetailDialog({
             <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 1 }}>
               Test connection
             </Typography>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={runPing}
-              disabled={pingRunning || (isWebRtc && isConnecting)}
-              disableRipple
-              sx={{
-                color: '#3b82f6',
-                borderColor: '#475569',
-                mb: 1,
-                textTransform: 'none',
-                '&:hover': { borderColor: '#3b82f6' },
-              }}
-            >
-              {pingRunning ? 'Pinging…' : 'Ping'}
-            </Button>
+            <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => runPing('local')}
+                disabled={pingRunning || (isWebRtc && isConnecting)}
+                disableRipple
+                sx={{
+                  color: '#3b82f6',
+                  borderColor: '#475569',
+                  textTransform: 'none',
+                  '&:hover': { borderColor: '#3b82f6' },
+                }}
+              >
+                {pingRunning ? 'Pinging…' : 'Ping relay'}
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => runPing('radio')}
+                disabled={pingRunning || (isWebRtc && isConnecting) || !isWebRtc}
+                disableRipple
+                sx={{
+                  color: '#22c55e',
+                  borderColor: '#475569',
+                  textTransform: 'none',
+                  '&:hover': { borderColor: '#22c55e' },
+                }}
+              >
+                {pingRunning ? 'Pinging…' : 'Ping radio'}
+              </Button>
+            </Box>
+            <Typography sx={{ color: '#64748b', fontSize: '0.75rem', mb: 1 }}>
+              Ping relay = browser ↔ Pi only. Ping radio = browser ↔ Pi ↔ radio ↔ desktop (needs radio path configured).
+            </Typography>
             {pingError && (
               <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mb: 1 }}>{pingError}</Typography>
             )}

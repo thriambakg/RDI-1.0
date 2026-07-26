@@ -73,6 +73,9 @@ def _run_raw(port: str, baud: int) -> None:
 
 
 def _run_mavlink(port: str, baud: int) -> None:
+    import os
+
+    os.environ["MAVLINK20"] = "1"
     from pymavlink import mavutil
 
     device = _serial_device(port)
@@ -84,6 +87,11 @@ def _run_mavlink(port: str, baud: int) -> None:
         source_component=191,
         autoreconnect=True,
     )
+    if not hasattr(conn.mav, "tunnel_send"):
+        raise RuntimeError(
+            "pymavlink lacks tunnel_send — set MAVLINK20=1 before import "
+            f"(dialect={getattr(conn.mav, '__module__', '?')})"
+        )
     n = 0
     last_hb = 0.0
     try:

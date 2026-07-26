@@ -1,6 +1,9 @@
 /** Binary ping protocol shared with legacy proxy/agent and Pi WebRTC master. */
-export const PING_BYTES = new Uint8Array([0x50, 0x49, 0x4e, 0x47]) // "PING"
+export const PING_BYTES = new Uint8Array([0x50, 0x49, 0x4e, 0x47]) // "PING" — relay only
+export const PING_RADIO_BYTES = new Uint8Array([0x50, 0x49, 0x4e, 0x47, 0x52]) // "PINGR" — full radio path
 export const PONG_BYTES = new Uint8Array([0x50, 0x4f, 0x4e, 0x47]) // "PONG"
+
+export type PingMode = 'local' | 'radio'
 
 export type PingHop = { hop: string; ts?: number }
 
@@ -9,6 +12,7 @@ export type PingResult = {
   hops: PingHop[]
   lines: string[]
   error?: string
+  mode: PingMode
 }
 
 export function isPongPayload(data: ArrayBuffer | ArrayBufferView): boolean {
@@ -41,8 +45,21 @@ function parseRdiPong(raw: ArrayBuffer | ArrayBufferView | string): Partial<Ping
   }
 }
 
-/** Send PING on an open data channel; resolves with RTT and optional radio hop trackers. */
-export function pingDataChannel(channel: RTCDataChannel, timeoutMs = 12000): Promise<PingResult> {
+export type PingDataChannelOptions = {
+  mode?: PingMode
+  timeoutMs?: number
+}
+
+/** Send PING/PINGR on an open data channel; resolves with RTT and optional hop trackers. */
+export function pingDataChannel(
+  channel: RTCDataChannel,
+  options: PingDataChannelOptions | number = {},
+): Promise<PingResult> {
+  const opts: PingDataChannelOptions =
+    typeof options === 'number' ? { timeoutMs: options } : options ?? {}
+  const mode: PingMode = opts.mode ?? 'local'
+  const timeoutMs = opts.timeoutMs ?? (mode === 'radio' ? 12000 : 5000)
+
   if (channel.readyState !== 'open') {
     return Promise.reject(new Error('Data channel is not open'))
   }
@@ -66,6 +83,7 @@ export function pingDataChannel(channel: RTCDataChannel, timeoutMs = 12000): Pro
           hops,
           lines,
           error: hopError,
+          mode,
         })
     }
 
@@ -108,6 +126,6 @@ export function pingDataChannel(channel: RTCDataChannel, timeoutMs = 12000): Pro
     }, timeoutMs)
 
     channel.addEventListener('message', onMessage)
-    channel.send(PING_BYTES)
+    channel.send(mode === 'radio' ? PING_RADIO_BYTES : PING_BYTES)
   })
 }
