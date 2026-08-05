@@ -6,6 +6,7 @@ Separate Lambda from Session API for clear separation of concerns.
 import copy
 import json
 import os
+from decimal import Decimal
 from typing import Any
 
 import boto3
@@ -26,6 +27,23 @@ DEFAULT_HIERARCHY = {
     "My Drones": {"sessions": [], "subfolders": {}},
     "Shared": dict(SHARED_DEFAULT),
 }
+
+
+def _json_safe(obj: Any) -> Any:
+    """Convert DynamoDB/Python values into JSON-serializable forms (Decimal → int/float)."""
+    if isinstance(obj, Decimal):
+        if obj % 1 == 0:
+            return int(obj)
+        return float(obj)
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, tuple):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, set):
+        return [_json_safe(v) for v in obj]
+    return obj
 
 
 def _ensure_shared_folder(hierarchy: dict) -> None:
@@ -68,7 +86,7 @@ def _response(status_code: int, body: dict, headers: dict) -> dict:
     return {
         "statusCode": status_code,
         "headers": headers,
-        "body": json.dumps(body),
+        "body": json.dumps(_json_safe(body)),
     }
 
 
@@ -293,4 +311,4 @@ def _from_dynamo_value(val: dict | None) -> Any:
     if not val:
         return None
     from boto3.dynamodb.types import TypeDeserializer
-    return TypeDeserializer().deserialize(val)
+    return _json_safe(TypeDeserializer().deserialize(val))
