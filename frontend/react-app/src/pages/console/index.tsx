@@ -26,6 +26,7 @@ import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import { useSessionWebRtc } from '../../contexts/SessionWebRtcContext'
 import { getEnvironmentRegions } from '../../config'
 import { CreateConnectionDialog, CreateFolderDialog, ConnectionDetailDialog, RegisterRelayDialog, RelayDetailDialog } from '../../components/dialogues'
+import { MinimizedConnectionsMenu } from '../../components/dialogues/MinimizedConnectionsMenu'
 import { UserAccountMenu } from '../../components/console/UserAccountMenu'
 import { useProfile } from '../../contexts/ProfileContext'
 import {
@@ -225,6 +226,7 @@ export default function Console() {
   const [relayDetailDialogOpen, setRelayDetailDialogOpen] = useState(false)
   /** Multiple connection control windows open at once */
   const [openConnectionIds, setOpenConnectionIds] = useState<string[]>([])
+  const [minimizedConnectionIds, setMinimizedConnectionIds] = useState<string[]>([])
   const [focusedConnectionId, setFocusedConnectionId] = useState<string | null>(null)
   const [connectionWindowSeed, setConnectionWindowSeed] = useState(0)
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
@@ -349,6 +351,7 @@ export default function Console() {
     closeWebRtcSession(sessionId)
     if (openConnectionIds.includes(sessionId)) {
       setOpenConnectionIds((ids) => ids.filter((id) => id !== sessionId))
+      setMinimizedConnectionIds((ids) => ids.filter((id) => id !== sessionId))
       setFocusedConnectionId((cur) => (cur === sessionId ? null : cur))
     }
     updateHierarchy((h) => removeSessionFromHierarchy(h, sessionId))
@@ -513,19 +516,25 @@ export default function Console() {
     }
   }
 
+  const connectionWindowLabel = (sessionId: string) => {
+    const c = allConnections.find((x) => x.session_id === sessionId)
+    return c?.name || sessionId.slice(0, 8)
+  }
+
   const handleConnectionClick = (sessionId: string) => {
     setOpenConnectionIds((ids) => {
       if (ids.includes(sessionId)) {
-        // Already open — just bring to front
         return [...ids.filter((id) => id !== sessionId), sessionId]
       }
       setConnectionWindowSeed((n) => n + 1)
       return [...ids, sessionId]
     })
+    setMinimizedConnectionIds((ids) => ids.filter((id) => id !== sessionId))
     setFocusedConnectionId(sessionId)
   }
 
   const handleCloseConnectionWindow = (sessionId: string) => {
+    setMinimizedConnectionIds((ids) => ids.filter((id) => id !== sessionId))
     setOpenConnectionIds((ids) => {
       const next = ids.filter((id) => id !== sessionId)
       setFocusedConnectionId((cur) => {
@@ -536,7 +545,28 @@ export default function Console() {
     })
   }
 
+  const handleMinimizeConnectionWindow = (sessionId: string) => {
+    setMinimizedConnectionIds((ids) => (ids.includes(sessionId) ? ids : [...ids, sessionId]))
+    setFocusedConnectionId((cur) => {
+      if (cur !== sessionId) return cur
+      const visible = openConnectionIds.filter(
+        (id) => id !== sessionId && !minimizedConnectionIds.includes(id),
+      )
+      return visible[visible.length - 1] ?? null
+    })
+  }
+
+  const handleRestoreConnectionWindow = (sessionId: string) => {
+    setMinimizedConnectionIds((ids) => ids.filter((id) => id !== sessionId))
+    setOpenConnectionIds((ids) => {
+      if (!ids.includes(sessionId)) return [...ids, sessionId]
+      return [...ids.filter((id) => id !== sessionId), sessionId]
+    })
+    setFocusedConnectionId(sessionId)
+  }
+
   const handleFocusConnectionWindow = (sessionId: string) => {
+    setMinimizedConnectionIds((ids) => ids.filter((id) => id !== sessionId))
     setFocusedConnectionId(sessionId)
     setOpenConnectionIds((ids) => {
       if (!ids.includes(sessionId)) return ids
@@ -563,6 +593,22 @@ export default function Console() {
         <Typography variant="h6" component="h1" sx={{ flex: 1, margin: 0, color: '#f8fafc' }}>
           RDI Console
         </Typography>
+        <MinimizedConnectionsMenu
+          minimized={minimizedConnectionIds.map((sessionId) => ({
+            sessionId,
+            title: connectionWindowLabel(sessionId),
+            status: allConnections.find((c) => c.session_id === sessionId)?.status,
+          }))}
+          active={openConnectionIds
+            .filter((id) => !minimizedConnectionIds.includes(id))
+            .map((sessionId) => ({
+              sessionId,
+              title: connectionWindowLabel(sessionId),
+              status: allConnections.find((c) => c.session_id === sessionId)?.status,
+            }))}
+          onRestore={handleRestoreConnectionWindow}
+          onCloseWindow={handleCloseConnectionWindow}
+        />
         <UserAccountMenu />
       </header>
 
@@ -728,6 +774,8 @@ export default function Console() {
               sessionId={sessionId}
               sessionStatus={allConnections.find((c) => c.session_id === sessionId)?.status}
               open
+              minimized={minimizedConnectionIds.includes(sessionId)}
+              onMinimize={() => handleMinimizeConnectionWindow(sessionId)}
               onClose={() => handleCloseConnectionWindow(sessionId)}
               onSessionUpdated={(sid, updates) => {
                 if (updates.name) {
@@ -736,7 +784,7 @@ export default function Console() {
               }}
               relays={relays}
               zIndex={1300 + openConnectionIds.indexOf(sessionId)}
-              focused={focusedConnectionId === sessionId}
+              focused={focusedConnectionId === sessionId && !minimizedConnectionIds.includes(sessionId)}
               onFocus={() => handleFocusConnectionWindow(sessionId)}
               initialRect={{
                 x: 72 + ((connectionWindowSeed + index) % 8) * 28,

@@ -75,6 +75,9 @@ interface ConnectionDetailDialogProps {
   /** Only the focused window captures keyboard/gamepad control */
   focused?: boolean
   onFocus?: () => void
+  /** Hide window chrome; session/WebRTC stay alive */
+  minimized?: boolean
+  onMinimize?: () => void
   initialRect?: Partial<WindowRect>
 }
 
@@ -93,6 +96,8 @@ export function ConnectionDetailDialog({
   zIndex = 1300,
   focused = true,
   onFocus,
+  minimized = false,
+  onMinimize,
   initialRect,
 }: ConnectionDetailDialogProps) {
   const [data, setData] = useState<{
@@ -152,7 +157,7 @@ export function ConnectionDetailDialog({
   const controlPathRef = useRef<ControlPath>('relay')
   controlPathRef.current = controlPath
 
-  const listenInputs = open && panelView === 'controls' && focused
+  const listenInputs = open && panelView === 'controls' && focused && !minimized
   const { pressed, stream } = usePressedInputs(listenInputs)
   const activeActions = useMemo(() => resolveActiveActions(pressed, keybinds), [pressed, keybinds])
 
@@ -786,11 +791,13 @@ export function ConnectionDetailDialog({
   return (
     <FloatingWindow
       open={open}
+      minimized={minimized}
       title={windowTitle}
       zIndex={zIndex}
       focused={focused}
       onFocus={onFocus}
       onClose={onClose}
+      onMinimize={onMinimize}
       initialRect={initialRect}
       titleExtra={
         <IconButton

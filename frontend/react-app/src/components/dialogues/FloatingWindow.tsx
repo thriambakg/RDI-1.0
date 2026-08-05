@@ -4,8 +4,9 @@
  * - Drop near browser edges snaps like Windows: halves, quarters, maximize (top).
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { Box, IconButton, Paper, Typography } from '@mui/material'
+import { Box, IconButton, Paper, Tooltip, Typography } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
+import MinimizeIcon from '@mui/icons-material/Minimize'
 
 export type WindowRect = { x: number; y: number; width: number; height: number }
 
@@ -73,9 +74,12 @@ function clampFreeRect(r: WindowRect, vw: number, vh: number): WindowRect {
 
 export type FloatingWindowProps = {
   open: boolean
+  /** Hide chrome without unmounting parent (keeps session/WebRTC alive). */
+  minimized?: boolean
   title: ReactNode
   titleExtra?: ReactNode
   onClose: () => void
+  onMinimize?: () => void
   zIndex: number
   focused?: boolean
   onFocus?: () => void
@@ -86,9 +90,11 @@ export type FloatingWindowProps = {
 
 export function FloatingWindow({
   open,
+  minimized = false,
   title,
   titleExtra,
   onClose,
+  onMinimize,
   zIndex,
   focused = false,
   onFocus,
@@ -289,7 +295,7 @@ export function FloatingWindow({
     }
   }, [isResizing, handleResizeMove, handleResizeEnd])
 
-  if (!open) return null
+  if (!open || minimized) return null
 
   return (
     <>
@@ -371,6 +377,25 @@ export function FloatingWindow({
             )}
             {titleExtra}
           </Box>
+          {onMinimize && (
+            <Tooltip title="Minimize (keep link)">
+              <IconButton
+                size="small"
+                aria-label="Minimize"
+                data-no-drag
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onMinimize()
+                }}
+                sx={{
+                  color: '#64748b',
+                  '&:hover': { color: '#f8fafc', backgroundColor: 'rgba(148,163,184,0.12)' },
+                }}
+              >
+                <MinimizeIcon sx={{ fontSize: 18 }} />
+              </IconButton>
+            </Tooltip>
+          )}
           <IconButton
             size="small"
             aria-label="Close"
