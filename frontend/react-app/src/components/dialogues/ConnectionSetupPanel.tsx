@@ -125,7 +125,7 @@ export function ConnectionSetupPanel({
     const onKey = (e: KeyboardEvent) => {
       e.preventDefault()
       e.stopPropagation()
-      if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return
+      // Accept any physical key, including modifiers (ControlLeft, ShiftLeft, …).
       assignBinding(listeningFor, { device: 'keyboard', code: e.code })
     }
     window.addEventListener('keydown', onKey, true)
@@ -270,9 +270,18 @@ export function ConnectionSetupPanel({
       </Box>
 
       {groups.map((group) => (
-        <Box key={group} sx={{ mb: 1.5 }}>
-          <Typography sx={{ fontSize: '0.7rem', color: '#64748b', mb: 0.5 }}>{group}</Typography>
-          <List dense disablePadding sx={{ backgroundColor: '#020617', border: '1px solid #1e293b', borderRadius: '2px' }}>
+        <Box key={group} sx={{ mb: 2.5 }}>
+          <Typography sx={{ fontSize: '0.7rem', color: '#64748b', mb: 1 }}>{group}</Typography>
+          <List
+            dense
+            disablePadding
+            sx={{
+              backgroundColor: '#020617',
+              border: '1px solid #1e293b',
+              borderRadius: '2px',
+              py: 1.25,
+            }}
+          >
             {CONTROL_ACTIONS.filter((a) => a.group === group).map((action) => {
               const binding = keybinds[action.id]
               const listening = listeningFor === action.id
@@ -289,7 +298,7 @@ export function ConnectionSetupPanel({
                       {listening ? 'Listening…' : formatBinding(binding)}
                     </Button>
                   }
-                  sx={{ pr: 14 }}
+                  sx={{ pr: 14, py: 0.35 }}
                 >
                   <ListItemText
                     primary={action.label}

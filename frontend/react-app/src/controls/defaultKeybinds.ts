@@ -81,6 +81,14 @@ export function resolveConnectionKeybinds(
 
 export function formatKeyboardCode(code: string): string {
   if (code === 'Space') return 'Space'
+  if (code === 'ControlLeft') return 'LCtrl'
+  if (code === 'ControlRight') return 'RCtrl'
+  if (code === 'ShiftLeft') return 'LShift'
+  if (code === 'ShiftRight') return 'RShift'
+  if (code === 'AltLeft') return 'LAlt'
+  if (code === 'AltRight') return 'RAlt'
+  if (code === 'MetaLeft') return 'LMeta'
+  if (code === 'MetaRight') return 'RMeta'
   if (code.startsWith('Key') && code.length === 4) return code.slice(3)
   if (code.startsWith('Digit')) return code.slice(5)
   if (code.startsWith('Arrow')) return code.slice(5)
