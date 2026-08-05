@@ -68,6 +68,17 @@ export function mergeKeybinds(partial?: Partial<ControlKeybinds> | null): Contro
   return { ...DEFAULT_KEYBINDS, ...(partial ?? {}) }
 }
 
+/** Per-connection binds from profile, falling back to defaults (and optional legacy global). */
+export function resolveConnectionKeybinds(
+  connectionKeybinds?: Partial<ControlKeybinds> | null,
+  legacyGlobal?: Partial<ControlKeybinds> | null,
+): ControlKeybinds {
+  if (connectionKeybinds && Object.keys(connectionKeybinds).length > 0) {
+    return mergeKeybinds(connectionKeybinds)
+  }
+  return mergeKeybinds(legacyGlobal)
+}
+
 export function formatKeyboardCode(code: string): string {
   if (code === 'Space') return 'Space'
   if (code.startsWith('Key') && code.length === 4) return code.slice(3)

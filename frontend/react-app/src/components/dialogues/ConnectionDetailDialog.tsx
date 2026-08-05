@@ -6,13 +6,7 @@ import {
   Button,
   Box,
   Typography,
-  TextField,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
   IconButton,
-  Popover,
 } from '@mui/material'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -25,13 +19,14 @@ import { parseCtrlAck, sendCtrlFrame, type ControlPath } from '../../utils/rdiCo
 import { usePressedInputs } from '../../hooks/usePressedInputs'
 import {
   DEFAULT_KEYBINDS,
-  mergeKeybinds,
+  resolveConnectionKeybinds,
   resolveActiveActions,
   type ControlKeybinds,
 } from '../../controls/defaultKeybinds'
-import { getProfile, type RelayRef } from '../../services/profileApi'
+import { getProfile, updateUserSettings, type RelayRef } from '../../services/profileApi'
 import type { WebRtcViewerBundle } from '../../services/sessionApi'
 import { ConnectionControlHud, type LivePingState } from './ConnectionControlHud'
+import { ConnectionSetupPanel } from './ConnectionSetupPanel'
 
 const RLOG_PREFIX = new Uint8Array([0x52, 0x4c, 0x4f, 0x47]) // "RLOG"
 const LEGACY_CTRL_PREFIX = new TextEncoder().encode('CTRL')
@@ -112,8 +107,9 @@ export function ConnectionDetailDialog({
   const [editTtl, setEditTtl] = useState(14400)
   const [savingSettings, setSavingSettings] = useState(false)
   const [settingsError, setSettingsError] = useState<string | null>(null)
-  const [settingsAnchor, setSettingsAnchor] = useState<HTMLElement | null>(null)
-  const settingsOpen = Boolean(settingsAnchor)
+  const [settingsSavedMsg, setSettingsSavedMsg] = useState<string | null>(null)
+  /** controls = flight HUD; setup = connection info + per-connection keybinds */
+  const [panelView, setPanelView] = useState<'controls' | 'setup'>('controls')
   const [logLines, setLogLines] = useState<string[]>([])
   const [pingRunning, setPingRunning] = useState(false)
   const [pingError, setPingError] = useState<string | null>(null)
@@ -145,7 +141,7 @@ export function ConnectionDetailDialog({
   const controlPathRef = useRef<ControlPath>('relay')
   controlPathRef.current = controlPath
 
-  const listenInputs = open && !settingsOpen
+  const listenInputs = open && panelView === 'controls'
   const { pressed, stream } = usePressedInputs(listenInputs)
   const activeActions = useMemo(() => resolveActiveActions(pressed, keybinds), [pressed, keybinds])
 
@@ -183,7 +179,9 @@ export function ConnectionDetailDialog({
       setLogLines([])
       setPingError(null)
       setCtrlError(null)
-      setSettingsAnchor(null)
+      setSettingsError(null)
+      setSettingsSavedMsg(null)
+      setPanelView('controls')
       setLastTxNote(null)
       setTransmitting(false)
       setLivePing({ ms: null, status: 'idle', path: 'relay' })
@@ -206,12 +204,17 @@ export function ConnectionDetailDialog({
   }, [open, sessionId])
 
   useEffect(() => {
-    if (!open) return
+    if (!open || !sessionId) return
     let cancelled = false
     getProfile()
       .then((profile) => {
         if (cancelled) return
-        setKeybinds(mergeKeybinds(profile.settings?.controls?.keybinds as Partial<ControlKeybinds> | undefined))
+        const per =
+          profile.settings?.controls?.connection_keybinds?.[sessionId] as
+            | Partial<ControlKeybinds>
+            | undefined
+        const legacy = profile.settings?.controls?.keybinds as Partial<ControlKeybinds> | undefined
+        setKeybinds(resolveConnectionKeybinds(per, legacy))
       })
       .catch(() => {
         if (!cancelled) setKeybinds(DEFAULT_KEYBINDS)
@@ -219,7 +222,7 @@ export function ConnectionDetailDialog({
     return () => {
       cancelled = true
     }
-  }, [open])
+  }, [open, sessionId])
 
   useEffect(() => {
     if (!open || !sessionId || !sessionStatus) return
@@ -254,7 +257,7 @@ export function ConnectionDetailDialog({
 
   // Prevent browser shortcuts / scroll while flying the HUD
   useEffect(() => {
-    if (!open || settingsOpen) return
+    if (!open || panelView !== 'controls') return
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return
       // Block page scroll / shortcuts for held flight binds
@@ -267,7 +270,7 @@ export function ConnectionDetailDialog({
     }
     window.addEventListener('keydown', onKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
-  }, [open, settingsOpen, keybinds])
+  }, [open, panelView, keybinds])
 
   // Stream control frames over WebRTC — coalesce chords, heartbeat while held.
   const actionsKey = activeActions.join(',')
@@ -275,7 +278,7 @@ export function ConnectionDetailDialog({
   liveControlsRef.current = { actions: activeActions, stream }
 
   useEffect(() => {
-    if (!open || !data?.session_id || settingsOpen) return
+    if (!open || !data?.session_id || panelView !== 'controls') return
     if (usesWebSocketTransport(data)) return
 
     const isWebRtcConnected = webRtcState(data.session_id) === 'connected'
@@ -361,7 +364,7 @@ export function ConnectionDetailDialog({
   }, [
     open,
     data,
-    settingsOpen,
+    panelView,
     actionsKey,
     controlPath,
     getDataChannel,
@@ -396,7 +399,7 @@ export function ConnectionDetailDialog({
   pingRunningRef.current = pingRunning
 
   useEffect(() => {
-    if (!open || !data?.session_id || settingsOpen) return
+    if (!open || !data?.session_id || panelView !== 'controls') return
     if (usesWebSocketTransport(data)) return
 
     let cancelled = false
@@ -466,17 +469,26 @@ export function ConnectionDetailDialog({
       cancelled = true
       if (timer != null) window.clearTimeout(timer)
     }
-  }, [open, data, settingsOpen, controlPath, getDataChannel, webRtcState])
+  }, [open, data, panelView, controlPath, getDataChannel, webRtcState])
 
   const handleSaveSettings = useCallback(async () => {
     if (!sessionId || !data) return
     setSavingSettings(true)
     setSettingsError(null)
+    setSettingsSavedMsg(null)
     try {
       const patch = await updateSession({
         session_id: sessionId,
         name: editName.trim() || 'drone',
         ttl_seconds: editTtl,
+      })
+      await updateUserSettings({
+        controls: {
+          version: 1,
+          connection_keybinds: {
+            [sessionId]: keybinds,
+          },
+        },
       })
       const refreshed = await getSession(sessionId)
       setData(refreshed)
@@ -489,13 +501,13 @@ export function ConnectionDetailDialog({
       ) {
         openWebRtcSession(sessionId, patch.webrtc, { force: true, waitForPiMs: WEBRTC_PI_READY_MS })
       }
-      setSettingsAnchor(null)
+      setSettingsSavedMsg('Connection settings saved.')
     } catch (e) {
       setSettingsError(e instanceof Error ? e.message : 'Failed to save settings')
     } finally {
       setSavingSettings(false)
     }
-  }, [sessionId, data, editName, editTtl, onSessionUpdated, openWebRtcSession])
+  }, [sessionId, data, editName, editTtl, keybinds, onSessionUpdated, openWebRtcSession])
 
   // Listen for agent log messages (RLOG) when WebSocket is connected
   useEffect(() => {
@@ -716,72 +728,76 @@ export function ConnectionDetailDialog({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          pr: 6,
+          gap: 1,
+          pr: 1,
         }}
       >
-        Connection details
-        {data?.status === 'active' && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-            <Box
-              sx={{
-                width: 10,
-                height: 10,
-                borderRadius: '50%',
-                backgroundColor:
-                  isWebRtc
-                    ? rtcState === 'connected'
-                      ? '#22c55e'
-                      : rtcState === 'failed'
-                        ? '#ef4444'
-                        : rtcState === 'connecting'
-                          ? '#eab308'
-                          : '#3b82f6'
-                    : wsState === 'open'
-                      ? '#22c55e'
-                      : wsState === 'failed'
-                        ? '#ef4444'
-                        : wsState === 'connecting'
-                          ? '#eab308'
-                          : '#64748b',
-                flexShrink: 0,
-              }}
-              aria-label={
-                isWebRtc
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0, flex: 1 }}>
+          <Typography component="span" sx={{ fontSize: '0.85rem', fontWeight: 600, letterSpacing: '0.12em' }}>
+            {panelView === 'setup' ? 'Connection setup' : 'Control deck'}
+          </Typography>
+          {data?.status === 'active' && panelView === 'controls' && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+              <Box
+                sx={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: '50%',
+                  backgroundColor:
+                    isWebRtc
+                      ? rtcState === 'connected'
+                        ? '#22c55e'
+                        : rtcState === 'failed'
+                          ? '#ef4444'
+                          : rtcState === 'connecting'
+                            ? '#eab308'
+                            : '#3b82f6'
+                      : wsState === 'open'
+                        ? '#22c55e'
+                        : wsState === 'failed'
+                          ? '#ef4444'
+                          : wsState === 'connecting'
+                            ? '#eab308'
+                            : '#64748b',
+                  flexShrink: 0,
+                }}
+              />
+              <Typography component="span" variant="caption" sx={{ color: '#94a3b8', textTransform: 'none' }}>
+                {isWebRtc
                   ? isConnected
                     ? 'WebRTC connected'
                     : isFailed
-                      ? 'WebRTC connection failed'
+                      ? 'WebRTC failed'
                       : isConnecting
-                        ? 'WebRTC connecting'
+                        ? 'WebRTC connecting…'
                         : 'WebRTC not connected'
-                  : isConnected
+                  : wsState === 'open'
                     ? 'Connection established'
                     : isFailed
                       ? 'Connection failed'
                       : wsState === 'connecting'
-                        ? 'Connecting'
-                        : 'Not connected'
-              }
-            />
-            <Typography component="span" variant="caption" sx={{ color: '#94a3b8', textTransform: 'none' }}>
-              {isWebRtc
-                ? isConnected
-                  ? 'WebRTC connected'
-                  : isFailed
-                    ? 'WebRTC failed'
-                    : isConnecting
-                      ? 'WebRTC connecting…'
-                      : 'WebRTC not connected'
-                : wsState === 'open'
-                  ? 'Connection established'
-                  : isFailed
-                    ? 'Connection failed'
-                    : wsState === 'connecting'
-                      ? 'Connecting…'
-                      : 'Not connected'}
-            </Typography>
-          </Box>
-        )}
+                        ? 'Connecting…'
+                        : 'Not connected'}
+              </Typography>
+            </Box>
+          )}
+        </Box>
+        <IconButton
+          size="small"
+          aria-label={panelView === 'setup' ? 'Back to control deck' : 'Connection setup'}
+          disabled={!data}
+          onClick={() => {
+            setSettingsError(null)
+            setSettingsSavedMsg(null)
+            setPanelView((v) => (v === 'setup' ? 'controls' : 'setup'))
+          }}
+          sx={{
+            color: panelView === 'setup' ? '#38bdf8' : '#64748b',
+            '&:hover': { color: '#94a3b8', backgroundColor: 'rgba(148, 163, 184, 0.08)' },
+          }}
+        >
+          <SettingsOutlinedIcon sx={{ fontSize: 20 }} />
+        </IconButton>
       </DialogTitle>
       <DialogContent sx={{ color: '#f8fafc' }}>
         {loading && <Typography sx={{ color: '#94a3b8' }}>Loading…</Typography>}
@@ -850,43 +866,41 @@ export function ConnectionDetailDialog({
             )}
           </Box>
         )}
-        {data && (
+        {data && panelView === 'setup' && (
+          <ConnectionSetupPanel
+            connectionName={name || data.drone_id}
+            sessionId={data.session_id}
+            status={data.status}
+            relayLabel={
+              data.relay_id
+                ? relays.find((r) => r.relay_id === data.relay_id)?.name ?? data.relay_id
+                : null
+            }
+            mavlinkLabel={
+              data.mavlink_host || data.mavlink_port != null
+                ? `MAVLink ${data.mavlink_host ?? '127.0.0.1'}:${data.mavlink_port ?? '—'}`
+                : null
+            }
+            editName={editName}
+            onEditNameChange={setEditName}
+            editTtl={editTtl}
+            onEditTtlChange={setEditTtl}
+            ttlOptions={TTL_OPTIONS}
+            expiresLabel={data.status === 'active' ? formatExpiresAt(data.expires_at) : null}
+            keybinds={keybinds}
+            onKeybindsChange={(next) => {
+              setKeybinds(next)
+              setSettingsSavedMsg(null)
+            }}
+            saving={savingSettings}
+            error={settingsError}
+            savedMsg={settingsSavedMsg}
+            onSave={() => void handleSaveSettings()}
+            onBackToControls={() => setPanelView('controls')}
+          />
+        )}
+        {data && panelView === 'controls' && (
           <>
-            <Box
-              sx={{
-                p: 1.5,
-                backgroundColor: 'rgba(2, 6, 23, 0.7)',
-                border: '1px solid #1e293b',
-                borderRadius: '2px',
-                mb: 2,
-              }}
-            >
-              <Typography sx={{ fontSize: '0.8125rem', mb: 0.75, color: '#cbd5e1' }}>
-                <strong style={{ color: '#94a3b8' }}>Name:</strong> {editName || name || data.drone_id}
-              </Typography>
-              <Typography sx={{ fontSize: '0.75rem', mb: 0.5, color: '#64748b', fontFamily: 'ui-monospace, monospace' }}>
-                {data.session_id}
-              </Typography>
-              <Typography sx={{ fontSize: '0.8125rem', mb: 0.5 }}>
-                <strong style={{ color: '#94a3b8' }}>Status:</strong> {data.status}
-                {data.relay_id && (() => {
-                  const relay = relays.find((r) => r.relay_id === data.relay_id)
-                  return (
-                    <>
-                      {' · '}
-                      <strong style={{ color: '#94a3b8' }}>Relay:</strong>{' '}
-                      {relay?.name ?? data.relay_id}
-                    </>
-                  )
-                })()}
-              </Typography>
-              {(data.mavlink_host || data.mavlink_port != null) && (
-                <Typography sx={{ fontSize: '0.75rem', mt: 0.5, color: '#4ade80' }}>
-                  MAVLink {data.mavlink_host ?? '127.0.0.1'}:{data.mavlink_port ?? '—'}
-                </Typography>
-              )}
-            </Box>
-
             {isWebRtc && (
               <ConnectionControlHud
                 path={controlPath}
@@ -1015,105 +1029,14 @@ export function ConnectionDetailDialog({
         sx={{
           borderTop: '1px solid #334155',
           p: 2,
-          justifyContent: 'space-between',
+          justifyContent: 'flex-end',
           alignItems: 'center',
         }}
       >
-        <IconButton
-          size="small"
-          aria-label="Connection settings"
-          disabled={!data}
-          onClick={(e) => {
-            setSettingsError(null)
-            setSettingsAnchor(e.currentTarget)
-          }}
-          sx={{
-            color: '#64748b',
-            '&:hover': { color: '#94a3b8', backgroundColor: 'rgba(148, 163, 184, 0.08)' },
-          }}
-        >
-          <SettingsOutlinedIcon sx={{ fontSize: 20 }} />
-        </IconButton>
         <Button onClick={onClose} sx={{ color: '#3b82f6' }} disableRipple>
           Close
         </Button>
       </DialogActions>
-      <Popover
-        open={settingsOpen}
-        anchorEl={settingsAnchor}
-        onClose={() => setSettingsAnchor(null)}
-        anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
-        transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-        slotProps={{
-          paper: {
-            sx: {
-              backgroundColor: '#1e293b',
-              border: '1px solid #334155',
-              borderRadius: '0.5rem',
-              p: 2,
-              width: 280,
-              maxWidth: '90vw',
-            },
-          },
-        }}
-      >
-        <Typography sx={{ fontSize: '0.8125rem', fontWeight: 600, color: '#e2e8f0', mb: 1.5 }}>
-          Connection settings
-        </Typography>
-        <TextField
-          label="Name"
-          value={editName}
-          onChange={(e) => setEditName(e.target.value)}
-          size="small"
-          fullWidth
-          sx={{
-            mb: 1.5,
-            '& .MuiOutlinedInput-root': { color: '#f8fafc', backgroundColor: '#0f172a' },
-            '& .MuiInputLabel-root': { color: '#94a3b8' },
-          }}
-        />
-        <FormControl fullWidth size="small" sx={{ mb: 1.5 }}>
-          <InputLabel sx={{ color: '#94a3b8' }}>Session TTL</InputLabel>
-          <Select
-            label="Session TTL"
-            value={editTtl}
-            onChange={(e) => setEditTtl(Number(e.target.value))}
-            sx={{ color: '#f8fafc', backgroundColor: '#0f172a' }}
-          >
-            {TTL_OPTIONS.map((o) => (
-              <MenuItem key={o.value} value={o.value}>
-                {o.label}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-        {data?.status === 'active' && (
-          <Typography sx={{ fontSize: '0.75rem', mb: 1.5, color: '#64748b' }}>
-            Auto-idle: {formatExpiresAt(data.expires_at)}
-          </Typography>
-        )}
-        {settingsError && (
-          <Typography sx={{ color: '#f87171', fontSize: '0.8125rem', mb: 1 }}>{settingsError}</Typography>
-        )}
-        <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
-          <Button
-            size="small"
-            onClick={() => setSettingsAnchor(null)}
-            sx={{ color: '#94a3b8', textTransform: 'none' }}
-          >
-            Cancel
-          </Button>
-          <Button
-            size="small"
-            variant="contained"
-            disabled={savingSettings}
-            onClick={() => void handleSaveSettings()}
-            sx={{ textTransform: 'none', backgroundColor: '#3b82f6' }}
-          >
-            {savingSettings ? 'Saving…' : 'Save'}
-          </Button>
-        </Box>
-      </Popover>
     </Dialog>
   )
 }

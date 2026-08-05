@@ -208,11 +208,11 @@ export function ConnectionControlHud({
             {path === 'radio'
               ? 'Browser → Pi → radio (desktop agent should log ctrl frames).'
               : 'Browser → Pi only (relay logs + ack).'}{' '}
-            Binds from Settings
+            Binds for this connection (gear → setup)
             {keybinds.move_forward?.device === 'keyboard'
-              ? ` (e.g. ${formatKeyboardCode(
+              ? ` — e.g. ${formatKeyboardCode(
                   keybinds.move_forward.device === 'keyboard' ? keybinds.move_forward.code : 'KeyW',
-                )} = forward).`
+                )} = forward.`
               : '.'}
           </p>
         </div>

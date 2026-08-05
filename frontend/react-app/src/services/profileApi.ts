@@ -74,7 +74,10 @@ export interface UserProfile {
   settings?: {
     controls?: {
       version?: number
+      /** @deprecated Prefer connection_keybinds — kept for migration fallback. */
       keybinds?: Record<string, unknown>
+      /** Per-connection ControlKeybinds keyed by session_id */
+      connection_keybinds?: Record<string, Record<string, unknown>>
     }
     [key: string]: unknown
   }

@@ -1,37 +1,26 @@
 # Console controls / keybinds
 
-**Storage:** `user-profiles` DynamoDB table (`user_id` PK) — attribute `settings.controls`  
-(No new table; same profile row as `connection_hierarchy`.)
+**Storage:** `user-profiles` DynamoDB (`user_id` PK) — attribute `settings.controls`  
+(No new table; no Base-Infra schema change — DynamoDB is schemaless beyond keys.)
 
-**API:** `PATCH /user-profile` with `{ "action": "update_settings", "settings": { "controls": { ... } } }`  
-**GET** `/user-profile` now returns `settings`.
+| Path | Role |
+|------|------|
+| `settings.controls.connection_keybinds.<session_id>` | **Per-connection** control map (primary) |
+| `settings.controls.keybinds` | Legacy global map (fallback only if no per-connection entry) |
+| `settings.controls.version` | Schema version (`1`) |
 
-**UI:** Profile icon (top right) → Settings → Controls / keybinds (`/console/settings`)
+**Why not connection-pool?** Pool `metadata` is radio/MAVLink addressing; `PATCH /sessions` only allows name/status/TTL. Keybinds are operator UI prefs → profile `settings` with deep-merge.
 
-**Live stream:** `usePressedInputs` joins currently held keyboard `code`s and gamepad tokens, e.g. `KeyA+KeyW+GP0-BTN0`.
+**API:** `PATCH /user-profile` `{ "action": "update_settings", "settings": { "controls": { "connection_keybinds": { "<session_id>": { ... } } } } }`  
+**GET** `/user-profile` returns `settings` (Decimals JSON-safe).
 
-**Connection HUD:** Open an active WebRTC connection → Control link panel shows live keys, maps them to actions via your binds, and transmits `CTRL`+JSON over the data channel. Toggle **Relay only** vs **Via radio**. Ping buttons remain for link tests.
+**UI:** Open a connection → gear (top right) toggles **Connection setup** (identity + TTL + control map) vs **Control deck** (live HUD). Edits update the deck immediately; **Save** persists to the profile. Account **Settings** page is a stub pointing here.
 
-Wire format (WebRTC `mavlink` channel):
+**Live stream:** `usePressedInputs` joins held keyboard `code`s and gamepad tokens, e.g. `KeyA+KeyW+GP0-BTN0`.
 
-- `CTRL` + `{"type":"rdi_ctrl","path":"relay"|"radio","actions":[...],"stream":"...","ts":...}`
-- Ack: `{"type":"rdi_ctrl_ack","path":...,"actions":...,"delivered":true|false,"error"?}`
-- Radio path: fire-and-forget hop JSON `{type:"ctrl",...}` (desktop agent logs it). Does not replace PING/PINGR.
-
-## Gamepads (Xbox / PlayStation)
-
-Use the browser [Gamepad API](https://developer.mozilla.org/en-US/docs/Web/API/Gamepad_API):
-
-1. Plug in USB or pair Bluetooth.
-2. Press any button once so the browser “wakes” the pad (`gamepadconnected`).
-3. Chromium maps Xbox and DualSense to the **standard** layout (same button indices).
-4. We poll `navigator.getGamepads()` every animation frame.
-
-Safari / some Firefox builds are weaker on DualSense over Bluetooth; Chrome/Edge recommended for now.
+**Wire format** (WebRTC `mavlink` channel): unchanged — `CTRL` + JSON; radio CTRL uses compact TUNNEL payloads.
 
 ## Deploy
 
-1. Deploy **user-profile-api** Lambda (settings merge) — e.g. `tfpush` from RDI-1.0 app terraform.  
-2. Deploy frontend with the settings page + connection HUD.  
-3. Redeploy Pi relay scripts (`deploy-to-pi.sh`) so `kvs_master_worker` handles CTRL and radio `ctrl` frames.  
-4. Restart desktop `radio_ping_desktop_agent.py` to print CTRL lines over RF.
+1. Frontend + user-profile-api (Decimal fix already required for GET after numeric settings).  
+2. No Pi change for keybind storage.
