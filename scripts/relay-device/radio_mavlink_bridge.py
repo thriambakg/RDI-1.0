@@ -16,7 +16,7 @@ from typing import Any
 # TUNNEL exists only in MAVLink 2 dialects; must be set before pymavlink import.
 os.environ["MAVLINK20"] = "1"
 
-from radio_hop_protocol import decode_line, encode_line, make_ctrl, make_ping
+from radio_hop_protocol import compact_ctrl_for_tunnel, decode_line, encode_line, make_ctrl, make_ping
 
 LOG = logging.getLogger("rdi.radio_mavlink")
 
@@ -30,20 +30,35 @@ SOURCE_COMPONENT = 190
 
 def _pack_payload(msg: dict[str, Any]) -> bytes:
     raw = encode_line(msg).rstrip(b"\n")
-    if len(raw) > TUNNEL_PAYLOAD_MAX:
-        # Compact timestamps to ints (ms) to fit TUNNEL's 128-byte payload.
-        compact: dict[str, Any] = {
-            "v": msg.get("v"),
-            "type": msg.get("type"),
-            "id": msg.get("id"),
-            "hops": [
-                {"hop": h.get("hop"), "ts": int(round(float(h.get("ts") or 0) * 1000))}
-                for h in (msg.get("hops") or [])
-            ],
-        }
-        if msg.get("target_sysid") is not None:
-            compact["target_sysid"] = msg.get("target_sysid")
+    if len(raw) <= TUNNEL_PAYLOAD_MAX:
+        return raw
+
+    # CTRL must NOT use the ping hop-compaction path (that drops actions → false "release").
+    if msg.get("type") == "ctrl":
+        compact = compact_ctrl_for_tunnel(msg)
         raw = encode_line(compact).rstrip(b"\n")
+        if len(raw) > TUNNEL_PAYLOAD_MAX:
+            # Drop stream keys first — actions matter more.
+            compact.pop("s", None)
+            raw = encode_line(compact).rstrip(b"\n")
+        if len(raw) > TUNNEL_PAYLOAD_MAX:
+            raise ValueError(f"ctrl payload too large for TUNNEL ({len(raw)} > {TUNNEL_PAYLOAD_MAX})")
+        LOG.debug("ctrl tunnel compacted to %d bytes actions=%s", len(raw), compact.get("a"))
+        return raw
+
+    # Compact timestamps to ints (ms) to fit TUNNEL's 128-byte payload (ping/pong).
+    compact_ping: dict[str, Any] = {
+        "v": msg.get("v"),
+        "type": msg.get("type"),
+        "id": msg.get("id"),
+        "hops": [
+            {"hop": h.get("hop"), "ts": int(round(float(h.get("ts") or 0) * 1000))}
+            for h in (msg.get("hops") or [])
+        ],
+    }
+    if msg.get("target_sysid") is not None:
+        compact_ping["target_sysid"] = msg.get("target_sysid")
+    raw = encode_line(compact_ping).rstrip(b"\n")
     if len(raw) > TUNNEL_PAYLOAD_MAX:
         raise ValueError(f"hop payload too large for TUNNEL ({len(raw)} > {TUNNEL_PAYLOAD_MAX})")
     return raw
@@ -234,7 +249,10 @@ class RadioMavlinkBridge:
         """Fire-and-forget control frame over TUNNEL (no wait for ack)."""
         if not self.enabled:
             raise RuntimeError("mavlink bridge not started")
-        msg = make_ctrl(hop_relay, actions, stream, target_sysid=target_sysid)
+        # Always use compact wire form — full JSON exceeds TUNNEL 128B on chords.
+        msg = compact_ctrl_for_tunnel(
+            make_ctrl(hop_relay, actions, stream, target_sysid=target_sysid)
+        )
         target = int(target_sysid) if target_sysid is not None else 0
         nbytes = self._send_tunnel(msg, target_system=target)
         LOG.info(

@@ -11,9 +11,32 @@ from typing import Any
 PROTOCOL_VERSION = 1
 LINE_END = b"\n"
 
+# Short action codes for MAVLink TUNNEL's 128-byte payload limit.
+ACTION_TO_SHORT: dict[str, str] = {
+    "move_forward": "mf",
+    "move_back": "mb",
+    "move_left": "ml",
+    "move_right": "mr",
+    "move_up": "mu",
+    "move_down": "md",
+    "yaw_left": "yl",
+    "yaw_right": "yr",
+    "brake": "br",
+    "rtl": "rt",
+}
+SHORT_TO_ACTION: dict[str, str] = {v: k for k, v in ACTION_TO_SHORT.items()}
+
 
 def new_ping_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def abbreviate_actions(actions: list[str]) -> list[str]:
+    return [ACTION_TO_SHORT.get(str(a), str(a)[:8]) for a in actions]
+
+
+def expand_actions(actions: list[str]) -> list[str]:
+    return [SHORT_TO_ACTION.get(str(a), str(a)) for a in actions]
 
 
 def make_ping(
@@ -74,6 +97,42 @@ def make_ctrl(
     return msg
 
 
+def compact_ctrl_for_tunnel(msg: dict[str, Any]) -> dict[str, Any]:
+    """Minimal CTRL wire format that fits MAVLink TUNNEL (128 bytes)."""
+    actions = msg.get("actions") or msg.get("a") or []
+    if not isinstance(actions, list):
+        actions = []
+    out: dict[str, Any] = {
+        "v": PROTOCOL_VERSION,
+        "type": "ctrl",
+        "id": str(msg.get("id") or new_ping_id())[:12],
+        "a": abbreviate_actions([str(x) for x in actions]),
+    }
+    stream = str(msg.get("stream") or msg.get("s") or "")
+    if stream:
+        # Keep physical keys if they still fit; packer may drop later.
+        out["s"] = stream[:48]
+    if msg.get("target_sysid") is not None:
+        out["target_sysid"] = int(msg["target_sysid"])
+    return out
+
+
+def normalize_ctrl_msg(msg: dict[str, Any]) -> dict[str, Any]:
+    """Expand compact CTRL fields (`a`/`s`) to `actions`/`stream`."""
+    if msg.get("type") != "ctrl":
+        return msg
+    out = dict(msg)
+    if "actions" not in out and "a" in out:
+        raw = out.get("a") or []
+        out["actions"] = expand_actions([str(x) for x in raw] if isinstance(raw, list) else [])
+    elif "actions" in out and isinstance(out["actions"], list):
+        # May already be abbreviated on the wire.
+        out["actions"] = expand_actions([str(x) for x in out["actions"]])
+    if "stream" not in out and "s" in out:
+        out["stream"] = str(out.get("s") or "")
+    return out
+
+
 def encode_line(msg: dict[str, Any]) -> bytes:
     return (json.dumps(msg, separators=(",", ":")) + "\n").encode("utf-8")
 
@@ -93,6 +152,8 @@ def decode_line(line: bytes | str) -> dict[str, Any] | None:
         return None
     if msg.get("type") not in ("ping", "pong", "ctrl"):
         return None
+    if msg.get("type") == "ctrl":
+        return normalize_ctrl_msg(msg)
     return msg
 
 

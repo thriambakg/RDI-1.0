@@ -287,7 +287,7 @@ export function ConnectionDetailDialog({
     if (isTypingTarget(document.activeElement)) return
 
     const CHORD_MS = 40
-    const HEARTBEAT_MS = 100
+    const HEARTBEAT_MS = 200
     let chordTimer: number | undefined
     let beatTimer: number | undefined
 
