@@ -172,11 +172,15 @@ def _run_mavlink(port: str, baud: int, sysid: int | None) -> None:
 
             n += 1
             pong = make_pong(decoded, "desktop")
-            raw = _pack_payload(pong)
+            try:
+                raw = _pack_payload(pong)
+            except ValueError as e:
+                print(f"[{n}] CTRL/pong pack failed: {e} — skipping echo")
+                continue
             payload = raw + b"\x00" * (TUNNEL_PAYLOAD_MAX - len(raw))
             conn.mav.tunnel_send(0, 0, RDI_TUNNEL_PAYLOAD_TYPE, len(raw), payload)
             hops = format_hops(list(pong.get("hops") or []))
-            print(f"\n[{n}] echoed TUNNEL ping id={pong.get('id')} sysid={tgt}")
+            print(f"\n[{n}] echoed TUNNEL ping id={pong.get('id')} sysid={tgt} ({len(raw)}B)")
             for h in hops:
                 print(f"    {h}")
     except KeyboardInterrupt:

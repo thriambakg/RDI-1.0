@@ -1,5 +1,6 @@
 export { CreateConnectionDialog } from './CreateConnectionDialog'
 export { CreateFolderDialog } from './CreateFolderDialog'
 export { ConnectionDetailDialog } from './ConnectionDetailDialog'
+export { FloatingWindow } from './FloatingWindow'
 export { RegisterRelayDialog } from './RegisterRelayDialog'
 export { RelayDetailDialog } from './RelayDetailDialog'

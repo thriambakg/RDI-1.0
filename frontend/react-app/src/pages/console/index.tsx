@@ -223,8 +223,10 @@ export default function Console() {
   const [selectedRelayId, setSelectedRelayId] = useState<string | null>(null)
   const [detailRelay, setDetailRelay] = useState<RelayRef | null>(null)
   const [relayDetailDialogOpen, setRelayDetailDialogOpen] = useState(false)
-  const [detailSessionId, setDetailSessionId] = useState<string | null>(null)
-  const [detailDialogOpen, setDetailDialogOpen] = useState(false)
+  /** Multiple connection control windows open at once */
+  const [openConnectionIds, setOpenConnectionIds] = useState<string[]>([])
+  const [focusedConnectionId, setFocusedConnectionId] = useState<string | null>(null)
+  const [connectionWindowSeed, setConnectionWindowSeed] = useState(0)
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
     open: false,
     message: '',
@@ -345,9 +347,9 @@ export default function Console() {
     setDeleteLoading(sessionId)
     closeSessionWs(sessionId)
     closeWebRtcSession(sessionId)
-    if (detailSessionId === sessionId) {
-      setDetailSessionId(null)
-      setDetailDialogOpen(false)
+    if (openConnectionIds.includes(sessionId)) {
+      setOpenConnectionIds((ids) => ids.filter((id) => id !== sessionId))
+      setFocusedConnectionId((cur) => (cur === sessionId ? null : cur))
     }
     updateHierarchy((h) => removeSessionFromHierarchy(h, sessionId))
     try {
@@ -512,8 +514,34 @@ export default function Console() {
   }
 
   const handleConnectionClick = (sessionId: string) => {
-    setDetailSessionId(sessionId)
-    setDetailDialogOpen(true)
+    setOpenConnectionIds((ids) => {
+      if (ids.includes(sessionId)) {
+        // Already open — just bring to front
+        return [...ids.filter((id) => id !== sessionId), sessionId]
+      }
+      setConnectionWindowSeed((n) => n + 1)
+      return [...ids, sessionId]
+    })
+    setFocusedConnectionId(sessionId)
+  }
+
+  const handleCloseConnectionWindow = (sessionId: string) => {
+    setOpenConnectionIds((ids) => {
+      const next = ids.filter((id) => id !== sessionId)
+      setFocusedConnectionId((cur) => {
+        if (cur !== sessionId) return cur
+        return next[next.length - 1] ?? null
+      })
+      return next
+    })
+  }
+
+  const handleFocusConnectionWindow = (sessionId: string) => {
+    setFocusedConnectionId(sessionId)
+    setOpenConnectionIds((ids) => {
+      if (!ids.includes(sessionId)) return ids
+      return [...ids.filter((id) => id !== sessionId), sessionId]
+    })
   }
 
   const handleZoneChange = (e: SelectChangeEvent<string>) => {
@@ -694,18 +722,30 @@ export default function Console() {
             open={relayDetailDialogOpen}
             onClose={() => { setRelayDetailDialogOpen(false); setDetailRelay(null) }}
           />
-          <ConnectionDetailDialog
-            sessionId={detailSessionId}
-            sessionStatus={detailSessionId ? allConnections.find((c) => c.session_id === detailSessionId)?.status : undefined}
-            open={detailDialogOpen}
-            onClose={() => { setDetailDialogOpen(false); setDetailSessionId(null) }}
-            onSessionUpdated={(sessionId, updates) => {
-              if (updates.name) {
-                updateHierarchy((h) => updateSessionNameInHierarchy(h, sessionId, updates.name!))
-              }
-            }}
-            relays={relays}
-          />
+          {openConnectionIds.map((sessionId, index) => (
+            <ConnectionDetailDialog
+              key={sessionId}
+              sessionId={sessionId}
+              sessionStatus={allConnections.find((c) => c.session_id === sessionId)?.status}
+              open
+              onClose={() => handleCloseConnectionWindow(sessionId)}
+              onSessionUpdated={(sid, updates) => {
+                if (updates.name) {
+                  updateHierarchy((h) => updateSessionNameInHierarchy(h, sid, updates.name!))
+                }
+              }}
+              relays={relays}
+              zIndex={1300 + openConnectionIds.indexOf(sessionId)}
+              focused={focusedConnectionId === sessionId}
+              onFocus={() => handleFocusConnectionWindow(sessionId)}
+              initialRect={{
+                x: 72 + ((connectionWindowSeed + index) % 8) * 28,
+                y: 72 + ((connectionWindowSeed + index) % 8) * 28,
+                width: 720,
+                height: 640,
+              }}
+            />
+          ))}
 
           <Menu
             open={connectionMenuAnchor !== null}

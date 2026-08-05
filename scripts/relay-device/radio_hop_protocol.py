@@ -69,9 +69,67 @@ def make_pong(ping_msg: dict[str, Any], hop: str) -> dict[str, Any]:
         "id": str(ping_msg.get("id") or new_ping_id()),
         "hops": hops,
     }
-    if ping_msg.get("target_sysid") is not None:
-        msg["target_sysid"] = ping_msg.get("target_sysid")
+    # Do not echo target_sysid on pong — Pi matches by id; saves TUNNEL bytes.
     return msg
+
+
+def _hop_ts_ms(ts: Any) -> int:
+    try:
+        tsf = float(ts or 0)
+    except (TypeError, ValueError):
+        return 0
+    if tsf > 1e11:  # already milliseconds
+        return int(round(tsf))
+    return int(round(tsf * 1000.0))
+
+
+def compact_hop_msg_for_tunnel(msg: dict[str, Any]) -> dict[str, Any]:
+    """Minimal ping/pong wire format for MAVLink TUNNEL (128 bytes)."""
+    hops_out: list[dict[str, Any]] = []
+    for h in msg.get("hops") or []:
+        if not isinstance(h, dict):
+            continue
+        name = str(h.get("hop") or h.get("h") or "?")[:10]
+        ts = h.get("ts") if h.get("ts") is not None else h.get("t")
+        hops_out.append({"h": name, "t": _hop_ts_ms(ts)})
+
+    out: dict[str, Any] = {
+        "v": int(msg.get("v") or PROTOCOL_VERSION),
+        "type": str(msg.get("type") or "ping"),
+        "id": str(msg.get("id") or new_ping_id())[:12],
+        "hops": hops_out,
+    }
+    # sid only on ping (desktop filter); omit on pong.
+    if out["type"] == "ping":
+        sid = msg.get("target_sysid", msg.get("sid"))
+        if sid is not None:
+            try:
+                out["sid"] = int(sid)
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
+def expand_hop_msg(msg: dict[str, Any]) -> dict[str, Any]:
+    """Expand compact hop fields (`h`/`t`/`sid`) to full names."""
+    if msg.get("type") not in ("ping", "pong"):
+        return msg
+    out = dict(msg)
+    if "target_sysid" not in out and out.get("sid") is not None:
+        try:
+            out["target_sysid"] = int(out["sid"])
+        except (TypeError, ValueError):
+            pass
+    hops: list[dict[str, Any]] = []
+    for h in out.get("hops") or []:
+        if not isinstance(h, dict):
+            continue
+        name = str(h.get("hop") or h.get("h") or "?")
+        ts = h.get("ts") if h.get("ts") is not None else h.get("t")
+        t_ms = _hop_ts_ms(ts)
+        hops.append({"hop": name, "ts": t_ms / 1000.0})
+    out["hops"] = hops
+    return out
 
 
 def make_ctrl(
@@ -168,7 +226,7 @@ def decode_line(line: bytes | str) -> dict[str, Any] | None:
         return None
     if msg.get("type") == "ctrl":
         return normalize_ctrl_msg(msg)
-    return msg
+    return expand_hop_msg(msg)
 
 
 def format_hops(hops: list[dict[str, Any]]) -> list[str]:

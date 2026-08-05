@@ -1,15 +1,7 @@
-import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  Button,
-  Box,
-  Typography,
-  IconButton,
-} from '@mui/material'
+import { Button, Box, Typography, IconButton } from '@mui/material'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { FloatingWindow, type WindowRect } from './FloatingWindow'
 import { getSession, updateSession, fetchWebRtcBundleForSession } from '../../services/sessionApi'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import { useSessionWebRtc } from '../../contexts/SessionWebRtcContext'
@@ -78,6 +70,12 @@ interface ConnectionDetailDialogProps {
   sessionStatus?: string
   onSessionUpdated?: (sessionId: string, updates: { name?: string; ttl_seconds?: number }) => void
   relays?: RelayRef[]
+  /** Stacking order among multiple open connection windows */
+  zIndex?: number
+  /** Only the focused window captures keyboard/gamepad control */
+  focused?: boolean
+  onFocus?: () => void
+  initialRect?: Partial<WindowRect>
 }
 
 interface HopLog {
@@ -92,6 +90,10 @@ export function ConnectionDetailDialog({
   sessionStatus,
   onSessionUpdated,
   relays = [],
+  zIndex = 1300,
+  focused = true,
+  onFocus,
+  initialRect,
 }: ConnectionDetailDialogProps) {
   const [data, setData] = useState<{
     session_id: string
@@ -150,7 +152,7 @@ export function ConnectionDetailDialog({
   const controlPathRef = useRef<ControlPath>('relay')
   controlPathRef.current = controlPath
 
-  const listenInputs = open && panelView === 'controls'
+  const listenInputs = open && panelView === 'controls' && focused
   const { pressed, stream } = usePressedInputs(listenInputs)
   const activeActions = useMemo(() => resolveActiveActions(pressed, keybinds), [pressed, keybinds])
 
@@ -716,91 +718,84 @@ export function ConnectionDetailDialog({
   const isFailed = isWebRtc ? rtcState === 'failed' : wsState === 'failed'
   const isConnecting = isWebRtc ? rtcState === 'connecting' : wsState === 'connecting'
 
-  return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      maxWidth="md"
-      fullWidth
-      PaperProps={{
-        sx: {
-          backgroundColor: '#0b1220',
-          border: '1px solid #1e293b',
-          borderRadius: '2px',
-          backgroundImage:
-            'radial-gradient(ellipse at top, rgba(56,189,248,0.08), transparent 55%), linear-gradient(#0b1220, #050a12)',
-        },
-      }}
-      BackdropProps={{
-        sx: { backgroundColor: 'rgba(0, 0, 0, 0.7)', backdropFilter: 'blur(6px)' },
-      }}
-    >
-      <DialogTitle
+  const windowTitle = (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, minWidth: 0, flex: 1 }}>
+      <Typography
+        component="span"
         sx={{
-          color: '#ffffff',
+          fontSize: '0.85rem',
           fontWeight: 600,
           letterSpacing: '0.12em',
           textTransform: 'uppercase',
-          fontSize: '0.85rem',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 1,
-          pr: 1,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
         }}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0, flex: 1 }}>
-          <Typography component="span" sx={{ fontSize: '0.85rem', fontWeight: 600, letterSpacing: '0.12em' }}>
-            {panelView === 'setup' ? 'Connection setup' : 'Control deck'}
+        {name || data?.drone_id || 'Connection'}
+        <Typography component="span" sx={{ color: '#64748b', ml: 1, letterSpacing: '0.08em', fontWeight: 500 }}>
+          · {panelView === 'setup' ? 'Setup' : 'Control'}
+        </Typography>
+      </Typography>
+      {data?.status === 'active' && panelView === 'controls' && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexShrink: 0 }}>
+          <Box
+            sx={{
+              width: 10,
+              height: 10,
+              borderRadius: '50%',
+              backgroundColor: isWebRtc
+                ? rtcState === 'connected'
+                  ? '#22c55e'
+                  : rtcState === 'failed'
+                    ? '#ef4444'
+                    : rtcState === 'connecting'
+                      ? '#eab308'
+                      : '#3b82f6'
+                : wsState === 'open'
+                  ? '#22c55e'
+                  : wsState === 'failed'
+                    ? '#ef4444'
+                    : wsState === 'connecting'
+                      ? '#eab308'
+                      : '#64748b',
+            }}
+          />
+          <Typography component="span" variant="caption" sx={{ color: '#94a3b8', textTransform: 'none' }}>
+            {isWebRtc
+              ? isConnected
+                ? 'WebRTC'
+                : isFailed
+                  ? 'Failed'
+                  : isConnecting
+                    ? 'Connecting…'
+                    : 'Idle'
+              : wsState === 'open'
+                ? 'Connected'
+                : isFailed
+                  ? 'Failed'
+                  : wsState === 'connecting'
+                    ? 'Connecting…'
+                    : 'Idle'}
           </Typography>
-          {data?.status === 'active' && panelView === 'controls' && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-              <Box
-                sx={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: '50%',
-                  backgroundColor:
-                    isWebRtc
-                      ? rtcState === 'connected'
-                        ? '#22c55e'
-                        : rtcState === 'failed'
-                          ? '#ef4444'
-                          : rtcState === 'connecting'
-                            ? '#eab308'
-                            : '#3b82f6'
-                      : wsState === 'open'
-                        ? '#22c55e'
-                        : wsState === 'failed'
-                          ? '#ef4444'
-                          : wsState === 'connecting'
-                            ? '#eab308'
-                            : '#64748b',
-                  flexShrink: 0,
-                }}
-              />
-              <Typography component="span" variant="caption" sx={{ color: '#94a3b8', textTransform: 'none' }}>
-                {isWebRtc
-                  ? isConnected
-                    ? 'WebRTC connected'
-                    : isFailed
-                      ? 'WebRTC failed'
-                      : isConnecting
-                        ? 'WebRTC connecting…'
-                        : 'WebRTC not connected'
-                  : wsState === 'open'
-                    ? 'Connection established'
-                    : isFailed
-                      ? 'Connection failed'
-                      : wsState === 'connecting'
-                        ? 'Connecting…'
-                        : 'Not connected'}
-              </Typography>
-            </Box>
-          )}
         </Box>
+      )}
+    </Box>
+  )
+
+  return (
+    <FloatingWindow
+      open={open}
+      title={windowTitle}
+      zIndex={zIndex}
+      focused={focused}
+      onFocus={onFocus}
+      onClose={onClose}
+      initialRect={initialRect}
+      titleExtra={
         <IconButton
           size="small"
+          data-no-drag
           aria-label={panelView === 'setup' ? 'Back to control deck' : 'Connection setup'}
           disabled={!data}
           onClick={() => {
@@ -815,12 +810,42 @@ export function ConnectionDetailDialog({
         >
           <SettingsOutlinedIcon sx={{ fontSize: 20 }} />
         </IconButton>
-      </DialogTitle>
-      <DialogContent sx={{ color: '#f8fafc' }}>
-        {loading && <Typography sx={{ color: '#94a3b8' }}>Loading…</Typography>}
-        {error && <Typography sx={{ color: '#f87171' }}>{error}</Typography>}
-        {isWebRtc && data?.status === 'active' && !isConnected && !isFailed && !isConnecting && data?.webrtc && (
-          <Box sx={{ mb: 2 }}>
+      }
+      footer={
+        <Button onClick={onClose} sx={{ color: '#3b82f6' }} disableRipple>
+          Close
+        </Button>
+      }
+    >
+      {loading && <Typography sx={{ color: '#94a3b8' }}>Loading…</Typography>}
+      {error && <Typography sx={{ color: '#f87171' }}>{error}</Typography>}
+      {isWebRtc && data?.status === 'active' && !isConnected && !isFailed && !isConnecting && data?.webrtc && (
+        <Box sx={{ mb: 2 }}>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => openWebRtcSession(sessionId!, data.webrtc!, { force: true })}
+            sx={{
+              color: '#3b82f6',
+              borderColor: '#475569',
+              textTransform: 'none',
+              '&:hover': { borderColor: '#3b82f6' },
+            }}
+          >
+            Connect WebRTC
+          </Button>
+        </Box>
+      )}
+      {isWebRtc && data?.status === 'active' && !isConnected && !isFailed && (
+        <Typography sx={{ color: '#94a3b8', fontSize: '0.875rem', mb: 2 }}>
+          Connecting WebRTC viewer to Pi via KVS signaling. Ensure{' '}
+          <code style={{ color: '#cbd5e1' }}>rdi-relay-daemon</code> is running on the relay.
+        </Typography>
+      )}
+      {isWebRtc && isFailed && rtcError && (
+        <Box sx={{ mb: 2 }}>
+          <Typography sx={{ color: '#f87171', fontSize: '0.875rem' }}>{rtcError}</Typography>
+          {data?.webrtc && (
             <Button
               variant="outlined"
               size="small"
@@ -828,240 +853,208 @@ export function ConnectionDetailDialog({
               sx={{
                 color: '#3b82f6',
                 borderColor: '#475569',
+                mt: 1,
                 textTransform: 'none',
                 '&:hover': { borderColor: '#3b82f6' },
               }}
             >
-              Connect WebRTC
+              Retry WebRTC connection
+            </Button>
+          )}
+        </Box>
+      )}
+      {isFailed && wsError && (
+        <Box sx={{ mb: 2 }}>
+          <Typography sx={{ color: '#f87171', fontSize: '0.875rem' }}>{wsError}</Typography>
+          {data?.endpoint && usesWebSocketTransport(data) && (
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => openSession(sessionId!, data!.endpoint)}
+              sx={{
+                color: '#3b82f6',
+                borderColor: '#475569',
+                mt: 1,
+                textTransform: 'none',
+                '&:hover': { borderColor: '#3b82f6' },
+              }}
+            >
+              Retry connection
+            </Button>
+          )}
+        </Box>
+      )}
+      {data && panelView === 'setup' && (
+        <ConnectionSetupPanel
+          connectionName={name || data.drone_id}
+          sessionId={data.session_id}
+          status={data.status}
+          relayLabel={
+            data.relay_id
+              ? relays.find((r) => r.relay_id === data.relay_id)?.name ?? data.relay_id
+              : null
+          }
+          mavlinkLabel={
+            [
+              data.vehicle_stack ? `Stack: ${labelForVehicleStack(data.vehicle_stack)}` : null,
+              data.link_mode ? `Link: ${data.link_mode}` : null,
+              data.mavlink_host || data.mavlink_port != null
+                ? `MAVLink ${data.mavlink_host ?? '127.0.0.1'}:${data.mavlink_port ?? '—'}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' · ') || null
+          }
+          editName={editName}
+          onEditNameChange={setEditName}
+          editTtl={editTtl}
+          onEditTtlChange={setEditTtl}
+          ttlOptions={TTL_OPTIONS}
+          expiresLabel={data.status === 'active' ? formatExpiresAt(data.expires_at) : null}
+          keybinds={keybinds}
+          onKeybindsChange={(next) => {
+            setKeybinds(next)
+            setSettingsSavedMsg(null)
+          }}
+          saving={savingSettings}
+          error={settingsError}
+          savedMsg={settingsSavedMsg}
+          onSave={() => void handleSaveSettings()}
+          onBackToControls={() => setPanelView('controls')}
+        />
+      )}
+      {data && panelView === 'controls' && (
+        <>
+          {isWebRtc && (
+            <ConnectionControlHud
+              path={controlPath}
+              onPathChange={setControlPath}
+              stream={stream}
+              activeActions={activeActions}
+              keybinds={keybinds}
+              armed={isConnected && data.status === 'active' && focused}
+              transmitting={transmitting}
+              lastTxNote={lastTxNote}
+              connected={isConnected}
+              livePing={livePing}
+            />
+          )}
+          {ctrlError && (
+            <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mb: 1 }}>{ctrlError}</Typography>
+          )}
+
+          <Typography
+            variant="subtitle2"
+            sx={{
+              color: '#64748b',
+              mb: 1,
+              letterSpacing: '0.14em',
+              textTransform: 'uppercase',
+              fontSize: '0.65rem',
+            }}
+          >
+            Link test
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => runPing('local')}
+              disabled={pingRunning || (isWebRtc && isConnecting)}
+              disableRipple
+              sx={{
+                color: '#38bdf8',
+                borderColor: '#334155',
+                borderRadius: '2px',
+                textTransform: 'none',
+                '&:hover': { borderColor: '#38bdf8' },
+              }}
+            >
+              {pingRunning ? 'Pinging…' : 'Ping relay'}
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => runPing('radio')}
+              disabled={pingRunning || (isWebRtc && isConnecting) || !isWebRtc}
+              disableRipple
+              sx={{
+                color: '#fbbf24',
+                borderColor: '#334155',
+                borderRadius: '2px',
+                textTransform: 'none',
+                '&:hover': { borderColor: '#fbbf24' },
+              }}
+            >
+              {pingRunning ? 'Pinging…' : 'Ping radio'}
             </Button>
           </Box>
-        )}
-        {isWebRtc && data?.status === 'active' && !isConnected && !isFailed && (
-          <Typography sx={{ color: '#94a3b8', fontSize: '0.875rem', mb: 2 }}>
-            Connecting WebRTC viewer to Pi via KVS signaling. Ensure <code style={{ color: '#cbd5e1' }}>rdi-relay-daemon</code> is running on the relay.
+          <Typography sx={{ color: '#475569', fontSize: '0.75rem', mb: 1.5 }}>
+            Ping relay = browser ↔ Pi. Ping radio = full RF path. Controls use the toggle above.
+            {!focused && ' Click this window to capture keyboard.'}
           </Typography>
-        )}
-        {isWebRtc && isFailed && rtcError && (
-          <Box sx={{ mb: 2 }}>
-            <Typography sx={{ color: '#f87171', fontSize: '0.875rem' }}>{rtcError}</Typography>
-            {data?.webrtc && (
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={() => openWebRtcSession(sessionId!, data.webrtc!, { force: true })}
-                sx={{
-                  color: '#3b82f6',
-                  borderColor: '#475569',
-                  mt: 1,
-                  textTransform: 'none',
-                  '&:hover': { borderColor: '#3b82f6' },
-                }}
-              >
-                Retry WebRTC connection
-              </Button>
-            )}
-          </Box>
-        )}
-        {isFailed && wsError && (
-          <Box sx={{ mb: 2 }}>
-            <Typography sx={{ color: '#f87171', fontSize: '0.875rem' }}>{wsError}</Typography>
-            {data?.endpoint && usesWebSocketTransport(data) && (
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={() => openSession(sessionId!, data!.endpoint)}
-                sx={{
-                  color: '#3b82f6',
-                  borderColor: '#475569',
-                  mt: 1,
-                  textTransform: 'none',
-                  '&:hover': { borderColor: '#3b82f6' },
-                }}
-              >
-                Retry connection
-              </Button>
-            )}
-          </Box>
-        )}
-        {data && panelView === 'setup' && (
-          <ConnectionSetupPanel
-            connectionName={name || data.drone_id}
-            sessionId={data.session_id}
-            status={data.status}
-            relayLabel={
-              data.relay_id
-                ? relays.find((r) => r.relay_id === data.relay_id)?.name ?? data.relay_id
-                : null
-            }
-            mavlinkLabel={
-              [
-                data.vehicle_stack
-                  ? `Stack: ${labelForVehicleStack(data.vehicle_stack)}`
-                  : null,
-                data.link_mode ? `Link: ${data.link_mode}` : null,
-                data.mavlink_host || data.mavlink_port != null
-                  ? `MAVLink ${data.mavlink_host ?? '127.0.0.1'}:${data.mavlink_port ?? '—'}`
-                  : null,
-              ]
-                .filter(Boolean)
-                .join(' · ') || null
-            }
-            editName={editName}
-            onEditNameChange={setEditName}
-            editTtl={editTtl}
-            onEditTtlChange={setEditTtl}
-            ttlOptions={TTL_OPTIONS}
-            expiresLabel={data.status === 'active' ? formatExpiresAt(data.expires_at) : null}
-            keybinds={keybinds}
-            onKeybindsChange={(next) => {
-              setKeybinds(next)
-              setSettingsSavedMsg(null)
-            }}
-            saving={savingSettings}
-            error={settingsError}
-            savedMsg={settingsSavedMsg}
-            onSave={() => void handleSaveSettings()}
-            onBackToControls={() => setPanelView('controls')}
-          />
-        )}
-        {data && panelView === 'controls' && (
-          <>
-            {isWebRtc && (
-              <ConnectionControlHud
-                path={controlPath}
-                onPathChange={setControlPath}
-                stream={stream}
-                activeActions={activeActions}
-                keybinds={keybinds}
-                armed={isConnected && data.status === 'active'}
-                transmitting={transmitting}
-                lastTxNote={lastTxNote}
-                connected={isConnected}
-                livePing={livePing}
-              />
-            )}
-            {ctrlError && (
-              <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mb: 1 }}>{ctrlError}</Typography>
-            )}
-
-            <Typography
-              variant="subtitle2"
-              sx={{ color: '#64748b', mb: 1, letterSpacing: '0.14em', textTransform: 'uppercase', fontSize: '0.65rem' }}
-            >
-              Link test
-            </Typography>
-            <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={() => runPing('local')}
-                disabled={pingRunning || (isWebRtc && isConnecting)}
-                disableRipple
-                sx={{
-                  color: '#38bdf8',
-                  borderColor: '#334155',
-                  borderRadius: '2px',
-                  textTransform: 'none',
-                  '&:hover': { borderColor: '#38bdf8' },
-                }}
-              >
-                {pingRunning ? 'Pinging…' : 'Ping relay'}
-              </Button>
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={() => runPing('radio')}
-                disabled={pingRunning || (isWebRtc && isConnecting) || !isWebRtc}
-                disableRipple
-                sx={{
-                  color: '#fbbf24',
-                  borderColor: '#334155',
-                  borderRadius: '2px',
-                  textTransform: 'none',
-                  '&:hover': { borderColor: '#fbbf24' },
-                }}
-              >
-                {pingRunning ? 'Pinging…' : 'Ping radio'}
-              </Button>
-            </Box>
-            <Typography sx={{ color: '#475569', fontSize: '0.75rem', mb: 1.5 }}>
-              Ping relay = browser ↔ Pi. Ping radio = full RF path. Controls use the toggle above.
-            </Typography>
-            {pingError && (
-              <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mb: 1 }}>{pingError}</Typography>
-            )}
-            {!isWebRtc && (
-              <>
-                <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 1, mt: 1 }}>
-                  Legacy drone controls
-                </Typography>
-                <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    onClick={() => sendCommand('takeoff', 2.5)}
-                    disableRipple
-                    sx={{
-                      color: '#22c55e',
-                      borderColor: '#475569',
-                      textTransform: 'none',
-                      '&:hover': { borderColor: '#22c55e' },
-                    }}
-                  >
-                    Takeoff
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    onClick={() => sendCommand('land')}
-                    disableRipple
-                    sx={{
-                      color: '#eab308',
-                      borderColor: '#475569',
-                      textTransform: 'none',
-                      '&:hover': { borderColor: '#eab308' },
-                    }}
-                  >
-                    Land
-                  </Button>
-                </Box>
-              </>
-            )}
-            {logLines.length > 0 && (
-              <Box
-                component="pre"
-                sx={{
-                  p: 1.5,
-                  backgroundColor: '#020617',
-                  border: '1px solid #1e293b',
-                  borderRadius: '2px',
-                  fontSize: '0.75rem',
-                  color: '#94a3b8',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  maxHeight: 180,
-                  overflow: 'auto',
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                }}
-              >
-                {logLines.join('\n')}
+          {pingError && (
+            <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mb: 1 }}>{pingError}</Typography>
+          )}
+          {!isWebRtc && (
+            <>
+              <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 1, mt: 1 }}>
+                Legacy drone controls
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={() => sendCommand('takeoff', 2.5)}
+                  disableRipple
+                  sx={{
+                    color: '#22c55e',
+                    borderColor: '#475569',
+                    textTransform: 'none',
+                    '&:hover': { borderColor: '#22c55e' },
+                  }}
+                >
+                  Takeoff
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={() => sendCommand('land')}
+                  disableRipple
+                  sx={{
+                    color: '#eab308',
+                    borderColor: '#475569',
+                    textTransform: 'none',
+                    '&:hover': { borderColor: '#eab308' },
+                  }}
+                >
+                  Land
+                </Button>
               </Box>
-            )}
-          </>
-        )}
-      </DialogContent>
-      <DialogActions
-        sx={{
-          borderTop: '1px solid #334155',
-          p: 2,
-          justifyContent: 'flex-end',
-          alignItems: 'center',
-        }}
-      >
-        <Button onClick={onClose} sx={{ color: '#3b82f6' }} disableRipple>
-          Close
-        </Button>
-      </DialogActions>
-    </Dialog>
+            </>
+          )}
+          {logLines.length > 0 && (
+            <Box
+              component="pre"
+              sx={{
+                p: 1.5,
+                backgroundColor: '#020617',
+                border: '1px solid #1e293b',
+                borderRadius: '2px',
+                fontSize: '0.75rem',
+                color: '#94a3b8',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                maxHeight: 180,
+                overflow: 'auto',
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              }}
+            >
+              {logLines.join('\n')}
+            </Box>
+          )}
+        </>
+      )}
+    </FloatingWindow>
   )
 }

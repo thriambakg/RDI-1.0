@@ -16,7 +16,14 @@ from typing import Any
 # TUNNEL exists only in MAVLink 2 dialects; must be set before pymavlink import.
 os.environ["MAVLINK20"] = "1"
 
-from radio_hop_protocol import compact_ctrl_for_tunnel, decode_line, encode_line, make_ctrl, make_ping
+from radio_hop_protocol import (
+    compact_ctrl_for_tunnel,
+    compact_hop_msg_for_tunnel,
+    decode_line,
+    encode_line,
+    make_ctrl,
+    make_ping,
+)
 
 LOG = logging.getLogger("rdi.radio_mavlink")
 
@@ -29,10 +36,6 @@ SOURCE_COMPONENT = 190
 
 
 def _pack_payload(msg: dict[str, Any]) -> bytes:
-    raw = encode_line(msg).rstrip(b"\n")
-    if len(raw) <= TUNNEL_PAYLOAD_MAX:
-        return raw
-
     # CTRL must NOT use the ping hop-compaction path (that drops actions → false "release").
     if msg.get("type") == "ctrl":
         compact = compact_ctrl_for_tunnel(msg)
@@ -46,21 +49,23 @@ def _pack_payload(msg: dict[str, Any]) -> bytes:
         LOG.debug("ctrl tunnel compacted to %d bytes actions=%s", len(raw), compact.get("a"))
         return raw
 
-    # Compact timestamps to ints (ms) to fit TUNNEL's 128-byte payload (ping/pong).
-    compact_ping: dict[str, Any] = {
-        "v": msg.get("v"),
-        "type": msg.get("type"),
-        "id": msg.get("id"),
-        "hops": [
-            {"hop": h.get("hop"), "ts": int(round(float(h.get("ts") or 0) * 1000))}
-            for h in (msg.get("hops") or [])
-        ],
-    }
-    if msg.get("target_sysid") is not None:
-        compact_ping["target_sysid"] = msg.get("target_sysid")
-    raw = encode_line(compact_ping).rstrip(b"\n")
+    if msg.get("type") in ("ping", "pong"):
+        # Always compact — float hop timestamps alone blow the 128-byte TUNNEL limit.
+        compact = compact_hop_msg_for_tunnel(msg)
+        raw = encode_line(compact).rstrip(b"\n")
+        while len(raw) > TUNNEL_PAYLOAD_MAX and compact.get("hops"):
+            compact["hops"] = compact["hops"][1:]  # drop oldest hop
+            raw = encode_line(compact).rstrip(b"\n")
+        if len(raw) > TUNNEL_PAYLOAD_MAX:
+            compact.pop("sid", None)
+            raw = encode_line(compact).rstrip(b"\n")
+        if len(raw) > TUNNEL_PAYLOAD_MAX:
+            raise ValueError(f"hop payload too large for TUNNEL ({len(raw)} > {TUNNEL_PAYLOAD_MAX})")
+        return raw
+
+    raw = encode_line(msg).rstrip(b"\n")
     if len(raw) > TUNNEL_PAYLOAD_MAX:
-        raise ValueError(f"hop payload too large for TUNNEL ({len(raw)} > {TUNNEL_PAYLOAD_MAX})")
+        raise ValueError(f"payload too large for TUNNEL ({len(raw)} > {TUNNEL_PAYLOAD_MAX})")
     return raw
 
 
@@ -69,18 +74,8 @@ def _unpack_payload(payload: bytes, length: int) -> dict[str, Any] | None:
     # Allow missing trailing newline from TUNNEL packing.
     if data and not data.endswith(b"\n"):
         data = data + b"\n"
-    msg = decode_line(data)
-    if not msg:
-        return None
-    # Expand compact ms timestamps back to float seconds for format_hops.
-    hops = []
-    for h in msg.get("hops") or []:
-        ts = h.get("ts")
-        # Compact encoder stores unix time as integer milliseconds.
-        if isinstance(ts, (int, float)) and ts > 1e11:
-            ts = float(ts) / 1000.0
-        hops.append({"hop": h.get("hop"), "ts": ts})
-    return {**msg, "hops": hops}
+    # decode_line already expands compact hop/ctrl fields.
+    return decode_line(data)
 
 
 class RadioMavlinkBridge:
@@ -182,7 +177,7 @@ class RadioMavlinkBridge:
                     LOG.warning("mavlink rx error: %s", e)
                     time.sleep(0.2)
 
-    def _send_tunnel(self, hop_msg: dict[str, Any], *, target_system: int = 0) -> int:
+    def _send_tunnel(self, hop_msg: dict[str, Any]) -> int:
         raw = _pack_payload(hop_msg)
         payload = raw + b"\x00" * (TUNNEL_PAYLOAD_MAX - len(raw))
         with self._lock:
@@ -193,9 +188,11 @@ class RadioMavlinkBridge:
                     "pymavlink lacks tunnel_send (need MAVLINK20=1 / MAVLink 2 dialect). "
                     f"dialect={getattr(mav, '__module__', '?')}"
                 )
-            # 0 = broadcast; non-zero targets a specific MAVLink system id.
+            # Always MAVLink-broadcast (0). Per-vehicle addressing lives in the JSON
+            # `target_sysid` field — addressing TUNNEL at sysid=1 (FC) stops PX4 from
+            # forwarding TELEM2→TELEM1, so radio ping never reaches the desktop agent.
             mav.tunnel_send(
-                int(target_system) & 0xFF,
+                0,
                 0,
                 RDI_TUNNEL_PAYLOAD_TYPE,
                 len(raw),
@@ -216,13 +213,12 @@ class RadioMavlinkBridge:
         fut: asyncio.Future = self._loop.create_future()
         self._pending[ping_id] = fut
         try:
-            target = int(target_sysid) if target_sysid is not None else 0
-            nbytes = self._send_tunnel(msg, target_system=target)
+            nbytes = self._send_tunnel(msg)
             LOG.info(
                 "mavlink tunnel ping tx id=%s bytes=%d target_sysid=%s",
                 ping_id,
                 nbytes,
-                target_sysid if target_sysid is not None else "broadcast",
+                target_sysid if target_sysid is not None else "any",
             )
             pong = await asyncio.wait_for(fut, timeout=self.timeout_sec)
             hops = list(pong.get("hops") or [])
@@ -261,8 +257,7 @@ class RadioMavlinkBridge:
                 pipe=pipe or "radio_mavlink",
             )
         )
-        target = int(target_sysid) if target_sysid is not None else 0
-        nbytes = self._send_tunnel(msg, target_system=target)
+        nbytes = self._send_tunnel(msg)
         LOG.info(
             "mavlink tunnel ctrl tx id=%s actions=%s stack=%s pipe=%s bytes=%d target_sysid=%s",
             msg.get("id"),
@@ -270,6 +265,6 @@ class RadioMavlinkBridge:
             stack or "—",
             msg.get("pp") or pipe or "—",
             nbytes,
-            target_sysid if target_sysid is not None else "broadcast",
+            target_sysid if target_sysid is not None else "any",
         )
         return msg
