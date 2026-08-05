@@ -57,11 +57,15 @@ def _run_raw(port: str, baud: int, sysid: int | None) -> None:
                         continue
                     if msg.get("type") == "ctrl":
                         n += 1
-                        acts = msg.get("actions") or []
-                        print(
-                            f"\n[{n}] CTRL id={msg.get('id')} actions={acts} "
-                            f"stream={msg.get('stream') or '—'} sysid={msg.get('target_sysid')}"
-                        )
+                        acts = [str(a) for a in (msg.get("actions") or [])]
+                        stream = msg.get("stream") or "—"
+                        if not acts:
+                            print(f"[{n}] CTRL release")
+                        else:
+                            print(
+                                f"\n[{n}] CTRL hold  actions={'+'.join(acts)}  "
+                                f"keys={stream}  sysid={msg.get('target_sysid')}"
+                            )
                         continue
                     if msg.get("type") != "ping":
                         print(f"RX non-ping: {msg}")
@@ -134,11 +138,15 @@ def _run_mavlink(port: str, baud: int, sysid: int | None) -> None:
                 continue
             if decoded.get("type") == "ctrl":
                 n += 1
-                acts = decoded.get("actions") or []
-                print(
-                    f"\n[{n}] CTRL TUNNEL id={decoded.get('id')} actions={acts} "
-                    f"stream={decoded.get('stream') or '—'} sysid={decoded.get('target_sysid')}"
-                )
+                acts = [str(a) for a in (decoded.get("actions") or [])]
+                stream = decoded.get("stream") or "—"
+                if not acts:
+                    print(f"[{n}] CTRL release")
+                else:
+                    print(
+                        f"\n[{n}] CTRL hold  actions={'+'.join(acts)}  "
+                        f"keys={stream}  sysid={decoded.get('target_sysid')}"
+                    )
                 continue
             if decoded.get("type") != "ping":
                 print(f"RX TUNNEL non-ping: {decoded.get('type')}")
