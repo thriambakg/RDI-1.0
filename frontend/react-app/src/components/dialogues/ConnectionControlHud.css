@@ -63,6 +63,14 @@
   color: var(--hud-dim);
 }
 
+.rdi-hud-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
 .rdi-hud-armed {
   display: inline-flex;
   align-items: center;
@@ -93,6 +101,61 @@
   animation: none;
   box-shadow: none;
   opacity: 0.5;
+}
+
+.rdi-hud-ping {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.05rem;
+  min-width: 4.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.rdi-hud-ping-label {
+  font-size: 0.58rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--hud-dim);
+}
+
+.rdi-hud-ping-value {
+  font-family: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, monospace;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  color: var(--hud-dim);
+  text-shadow: 0 0 12px transparent;
+  transition: color 160ms ease, text-shadow 160ms ease;
+}
+
+.rdi-hud-ping-value.is-good {
+  color: var(--hud-green);
+  text-shadow: 0 0 14px rgba(74, 222, 128, 0.45);
+}
+
+.rdi-hud-ping-value.is-ok {
+  color: var(--hud-amber);
+  text-shadow: 0 0 14px rgba(251, 191, 36, 0.4);
+}
+
+.rdi-hud-ping-value.is-bad {
+  color: #f87171;
+  text-shadow: 0 0 14px rgba(248, 113, 113, 0.4);
+}
+
+.rdi-hud-ping-value.is-wait {
+  color: var(--hud-cyan);
+  animation: rdi-hud-pulse 1s ease-in-out infinite;
+}
+
+.rdi-hud-ping-unit {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  margin-left: 0.15rem;
+  opacity: 0.85;
 }
 
 @keyframes rdi-hud-pulse {

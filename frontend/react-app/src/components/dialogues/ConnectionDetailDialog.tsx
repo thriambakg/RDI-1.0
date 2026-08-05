@@ -31,7 +31,7 @@ import {
 } from '../../controls/defaultKeybinds'
 import { getProfile, type RelayRef } from '../../services/profileApi'
 import type { WebRtcViewerBundle } from '../../services/sessionApi'
-import { ConnectionControlHud } from './ConnectionControlHud'
+import { ConnectionControlHud, type LivePingState } from './ConnectionControlHud'
 
 const RLOG_PREFIX = new Uint8Array([0x52, 0x4c, 0x4f, 0x47]) // "RLOG"
 const LEGACY_CTRL_PREFIX = new TextEncoder().encode('CTRL')
@@ -122,6 +122,11 @@ export function ConnectionDetailDialog({
   const [keybinds, setKeybinds] = useState<ControlKeybinds>(DEFAULT_KEYBINDS)
   const [lastTxNote, setLastTxNote] = useState<string | null>(null)
   const [transmitting, setTransmitting] = useState(false)
+  const [livePing, setLivePing] = useState<LivePingState>({
+    ms: null,
+    status: 'idle',
+    path: 'relay',
+  })
 
   const { getWs, openSession, connectionState, connectionError } = useSessionWebSocket()
   const {
@@ -181,6 +186,7 @@ export function ConnectionDetailDialog({
       setSettingsAnchor(null)
       setLastTxNote(null)
       setTransmitting(false)
+      setLivePing({ ms: null, status: 'idle', path: 'relay' })
       lastCtrlSigRef.current = ''
       return
     }
@@ -382,6 +388,85 @@ export function ConnectionDetailDialog({
     channel.addEventListener('message', onMessage)
     return () => channel.removeEventListener('message', onMessage)
   }, [open, data, getDataChannel, webRtcState(data?.session_id ?? ''), addLog])
+
+  // Live ping meter for the Control link HUD (matches relay/radio toggle).
+  const transmittingRef = useRef(false)
+  transmittingRef.current = transmitting
+  const pingRunningRef = useRef(false)
+  pingRunningRef.current = pingRunning
+
+  useEffect(() => {
+    if (!open || !data?.session_id || settingsOpen) return
+    if (usesWebSocketTransport(data)) return
+
+    let cancelled = false
+    let timer: number | undefined
+    let inFlight = false
+
+    const schedule = (ms: number) => {
+      if (cancelled) return
+      timer = window.setTimeout(() => {
+        void tick()
+      }, ms)
+    }
+
+    const tick = async () => {
+      if (cancelled) return
+      if (webRtcState(data.session_id) !== 'connected') {
+        setLivePing((prev) => ({ ...prev, status: 'idle', ms: null, path: controlPathRef.current }))
+        schedule(1200)
+        return
+      }
+      const channel = getDataChannel(data.session_id)
+      if (!channel || channel.readyState !== 'open') {
+        setLivePing((prev) => ({ ...prev, status: 'idle', ms: null, path: controlPathRef.current }))
+        schedule(1200)
+        return
+      }
+      // Don't stack on manual ping buttons or radio CTRL heartbeats.
+      if (inFlight || pingRunningRef.current || transmittingRef.current) {
+        schedule(800)
+        return
+      }
+
+      const path = controlPathRef.current
+      const mode: PingMode = path === 'radio' ? 'radio' : 'local'
+      inFlight = true
+      setLivePing((prev) => ({
+        ...prev,
+        status: prev.ms == null ? 'probing' : 'live',
+        path,
+      }))
+      try {
+        const result = await pingDataChannel(channel, {
+          mode,
+          timeoutMs: mode === 'radio' ? 10000 : 4000,
+        })
+        if (cancelled) return
+        setLivePing({ ms: result.rttMs, status: 'live', path })
+      } catch (e) {
+        if (cancelled) return
+        const msg = e instanceof Error ? e.message : 'ping failed'
+        setLivePing((prev) => ({
+          ms: prev.ms,
+          status: /timed out/i.test(msg) ? 'timeout' : 'error',
+          path,
+        }))
+      } finally {
+        inFlight = false
+        // Radio samples slower so we don't contend with CTRL on the UART/RF path.
+        schedule(path === 'radio' ? 2500 : 1400)
+      }
+    }
+
+    setLivePing({ ms: null, status: 'probing', path: controlPathRef.current })
+    schedule(200)
+
+    return () => {
+      cancelled = true
+      if (timer != null) window.clearTimeout(timer)
+    }
+  }, [open, data, settingsOpen, controlPath, getDataChannel, webRtcState])
 
   const handleSaveSettings = useCallback(async () => {
     if (!sessionId || !data) return
@@ -813,6 +898,7 @@ export function ConnectionDetailDialog({
                 transmitting={transmitting}
                 lastTxNote={lastTxNote}
                 connected={isConnected}
+                livePing={livePing}
               />
             )}
             {ctrlError && (

@@ -24,6 +24,13 @@ const EXTRA: { label: string; action: ControlActionId }[] = [
   { label: 'R', action: 'rtl' },
 ]
 
+export type LivePingState = {
+  ms: number | null
+  /** probing | live | timeout | error | idle */
+  status: 'idle' | 'probing' | 'live' | 'timeout' | 'error'
+  path: ControlPath
+}
+
 function labelForAction(id: ControlActionId): string {
   return CONTROL_ACTIONS.find((a) => a.id === id)?.label ?? id
 }
@@ -41,6 +48,20 @@ function prettyStream(stream: string): string {
     .join(' + ')
 }
 
+function pingTone(path: ControlPath, ms: number | null, status: LivePingState['status']): string {
+  if (status === 'probing' && ms == null) return 'is-wait'
+  if (status === 'timeout' || status === 'error') return 'is-bad'
+  if (ms == null) return ''
+  if (path === 'radio') {
+    if (ms < 200) return 'is-good'
+    if (ms < 450) return 'is-ok'
+    return 'is-bad'
+  }
+  if (ms < 80) return 'is-good'
+  if (ms < 160) return 'is-ok'
+  return 'is-bad'
+}
+
 export type ConnectionControlHudProps = {
   path: ControlPath
   onPathChange: (path: ControlPath) => void
@@ -51,6 +72,7 @@ export type ConnectionControlHudProps = {
   transmitting: boolean
   lastTxNote?: string | null
   connected: boolean
+  livePing: LivePingState
 }
 
 export function ConnectionControlHud({
@@ -63,6 +85,7 @@ export function ConnectionControlHud({
   transmitting,
   lastTxNote,
   connected,
+  livePing,
 }: ConnectionControlHudProps) {
   const activeSet = useMemo(() => new Set(activeActions), [activeActions])
 
@@ -89,6 +112,18 @@ export function ConnectionControlHud({
     return cells
   }, [activeSet])
 
+  const tone = pingTone(livePing.path, livePing.ms, livePing.status)
+  const pingText =
+    livePing.status === 'timeout'
+      ? '—'
+      : livePing.status === 'error'
+        ? 'ERR'
+        : livePing.ms != null
+          ? String(livePing.ms)
+          : livePing.status === 'probing'
+            ? '···'
+            : '—'
+
   return (
     <section className="rdi-hud" aria-label="Flight control HUD">
       <div className="rdi-hud-header">
@@ -96,9 +131,20 @@ export function ConnectionControlHud({
           <strong>Control link</strong>
           <span>{connected ? 'Channel live — hold binds (chords OK)' : 'Waiting for WebRTC channel…'}</span>
         </div>
-        <div className={`rdi-hud-armed ${armed ? '' : 'is-off'}`}>
-          <span className="dot" />
-          {armed ? 'Armed' : 'Standby'}
+        <div className="rdi-hud-status">
+          <div className={`rdi-hud-armed ${armed ? '' : 'is-off'}`}>
+            <span className="dot" />
+            {armed ? 'Armed' : 'Standby'}
+          </div>
+          <div className="rdi-hud-ping" title={`Live ${livePing.path} round-trip`}>
+            <span className="rdi-hud-ping-label">{livePing.path === 'radio' ? 'Radio ping' : 'Relay ping'}</span>
+            <span className={`rdi-hud-ping-value ${tone}`}>
+              {pingText}
+              {livePing.ms != null && livePing.status !== 'timeout' && livePing.status !== 'error' ? (
+                <span className="rdi-hud-ping-unit">ms</span>
+              ) : null}
+            </span>
+          </div>
         </div>
       </div>
 
