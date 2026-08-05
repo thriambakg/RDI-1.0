@@ -932,7 +932,7 @@ export function ConnectionDetailDialog({
               stream={stream}
               activeActions={activeActions}
               keybinds={keybinds}
-              armed={isConnected && data.status === 'active' && focused}
+              armed={isConnected && data.status === 'active'}
               transmitting={transmitting}
               lastTxNote={lastTxNote}
               connected={isConnected}
@@ -991,7 +991,7 @@ export function ConnectionDetailDialog({
           </Box>
           <Typography sx={{ color: '#475569', fontSize: '0.75rem', mb: 1.5 }}>
             Ping relay = browser ↔ Pi. Ping radio = full RF path. Controls use the toggle above.
-            {!focused && ' Click this window to capture keyboard.'}
+            {!focused ? ' Click this window to capture keyboard.' : null}
           </Typography>
           {pingError && (
             <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mb: 1 }}>{pingError}</Typography>
