@@ -1,7 +1,7 @@
 # Plan: Per-drone connections with radio addressing
 
-**Status:** Draft  
-**Date:** 2026-07-26  
+**Status:** Phase A/B in progress (shared radio router + connection addressing fields)  
+**Date:** 2026-07-30  
 **Goal:** When creating a **connection** (one drone), capture enough identity that the mothership relay can route WebRTC / commands to **that** radio endpoint among N aircraft.
 
 ---

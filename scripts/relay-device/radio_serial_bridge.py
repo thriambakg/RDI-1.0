@@ -98,11 +98,15 @@ class RadioSerialBridge:
                     LOG.warning("radio rx error: %s", e)
                     time.sleep(0.2)
 
-    async def roundtrip_ping(self, hop_relay: str = "relay") -> dict[str, Any]:
+    async def roundtrip_ping(
+        self,
+        hop_relay: str = "relay",
+        target_sysid: int | None = None,
+    ) -> dict[str, Any]:
         if not self.enabled or self._loop is None:
             raise RuntimeError("radio bridge not started")
 
-        msg = make_ping(hop_relay)
+        msg = make_ping(hop_relay, target_sysid=target_sysid)
         ping_id = str(msg["id"])
         fut: asyncio.Future = self._loop.create_future()
         self._pending[ping_id] = fut
@@ -112,7 +116,12 @@ class RadioSerialBridge:
                 assert self._ser is not None
                 self._ser.write(data)
                 self._ser.flush()
-            LOG.info("radio ping tx id=%s bytes=%d", ping_id, len(data))
+            LOG.info(
+                "radio ping tx id=%s bytes=%d target_sysid=%s",
+                ping_id,
+                len(data),
+                target_sysid if target_sysid is not None else "any",
+            )
             pong = await asyncio.wait_for(fut, timeout=self.timeout_sec)
             # stamp relay return hop
             hops = list(pong.get("hops") or [])

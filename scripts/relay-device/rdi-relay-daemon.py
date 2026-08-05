@@ -2,6 +2,9 @@
 """
 RDI relay daemon — poll active WebRTC sessions and spawn one worker per session_id.
 
+Owns the shared radio serial port (when RDI_RADIO_PORT is set) via a localhost
+router so multiple workers do not fight over /dev/serial0.
+
 Requires hardware claim first (rdi-relay-claim.py → /etc/rdi/relay.conf + device.json).
 
 Usage:
@@ -10,6 +13,8 @@ Usage:
 Environment:
   RDI_POLL_INTERVAL_SEC  — default 5
   RDI_WORKER_DRY_RUN=1   — log spawns without starting workers (daemon test)
+  RDI_RADIO_PORT / MODE / BAUD — mothership radio (opens shared router)
+  RDI_RADIO_ROUTER_HOST / PORT — router listen address (default 127.0.0.1:18771)
 """
 
 from __future__ import annotations
@@ -29,12 +34,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from rdi_device_config import load_device_config
+from radio_router_server import maybe_start_from_env
 
 LOG = logging.getLogger("rdi.daemon")
 POLL_INTERVAL_SEC = int(os.environ.get("RDI_POLL_INTERVAL_SEC", "3"))
 CREDS_REFRESH_MARGIN_SEC = int(os.environ.get("RDI_CREDS_REFRESH_MARGIN_SEC", "300"))
 WORKER_SCRIPT = Path(__file__).resolve().parent / "kvs_master_worker.py"
 WORKER_DRY_RUN = os.environ.get("RDI_WORKER_DRY_RUN", "").strip() in ("1", "true", "yes")
+RADIO_ROUTER_HOST = os.environ.get("RDI_RADIO_ROUTER_HOST", "127.0.0.1").strip() or "127.0.0.1"
+RADIO_ROUTER_PORT = int(os.environ.get("RDI_RADIO_ROUTER_PORT", "18771"))
 
 
 class WorkerProcess:
@@ -103,7 +111,11 @@ def fetch_active_sessions(api_base: str, device_serial: str, device_secret: str)
         if not sid:
             continue
         ch = _channel_arn(s)
-        poll_tags.append(f"{sid}@{ch[-24:] if ch else '?'}")
+        sysid = s.get("mavlink_sysid")
+        tag = f"{sid}@{ch[-24:] if ch else '?'}"
+        if sysid is not None:
+            tag += f"/sys{sysid}"
+        poll_tags.append(tag)
     LOG.info(
         "poll active-sessions: %d session(s) status=%s ids=%s",
         len(sessions),
@@ -119,13 +131,38 @@ def _channel_arn(session: dict) -> str:
 
 
 def _worker_config(session: dict) -> dict:
-    return {
+    cfg = {
         "session_id": session["session_id"],
         "drone_id": session.get("drone_id", ""),
         "mavlink_host": session.get("mavlink_host") or "127.0.0.1",
         "mavlink_port": session.get("mavlink_port") or 18570,
         "webrtc": session["webrtc"],
+        "link_mode": session.get("link_mode") or "shared_serial",
     }
+    if session.get("mavlink_sysid") is not None:
+        cfg["mavlink_sysid"] = session.get("mavlink_sysid")
+    if session.get("mavlink_compid") is not None:
+        cfg["mavlink_compid"] = session.get("mavlink_compid")
+    if session.get("radio_net_id") is not None:
+        cfg["radio_net_id"] = session.get("radio_net_id")
+    if session.get("radio_device"):
+        cfg["radio_device"] = session.get("radio_device")
+    if session.get("radio_baud") is not None:
+        cfg["radio_baud"] = session.get("radio_baud")
+    return cfg
+
+
+def _worker_env(session: dict) -> dict[str, str]:
+    """Build worker env: inherit daemon env but strip serial port so workers use router."""
+    env = os.environ.copy()
+    env["RDI_WORKER_CONFIG"] = json.dumps(_worker_config(session))
+    env["PYTHONUNBUFFERED"] = "1"
+    # Daemon owns the physical UART; workers must not open it.
+    env.pop("RDI_RADIO_PORT", None)
+    env["RDI_RADIO_USE_ROUTER"] = "1"
+    env["RDI_RADIO_ROUTER_HOST"] = RADIO_ROUTER_HOST
+    env["RDI_RADIO_ROUTER_PORT"] = str(RADIO_ROUTER_PORT)
+    return env
 
 
 def start_worker(session: dict) -> WorkerProcess | None:
@@ -135,13 +172,17 @@ def start_worker(session: dict) -> WorkerProcess | None:
         return None
 
     if WORKER_DRY_RUN:
-        LOG.info("[dry-run] would start worker session_id=%s mavlink=%s:%s", session_id, session.get("mavlink_host"), session.get("mavlink_port"))
+        LOG.info(
+            "[dry-run] would start worker session_id=%s mavlink=%s:%s link_mode=%s sysid=%s",
+            session_id,
+            session.get("mavlink_host"),
+            session.get("mavlink_port"),
+            session.get("link_mode") or "shared_serial",
+            session.get("mavlink_sysid"),
+        )
         return WorkerProcess(session_id, None, _creds_expiration(session), _channel_arn(session))
 
-    env = os.environ.copy()
-    env["RDI_WORKER_CONFIG"] = json.dumps(_worker_config(session))
-    env["PYTHONUNBUFFERED"] = "1"
-
+    env = _worker_env(session)
     proc = subprocess.Popen(
         [sys.executable, str(WORKER_SCRIPT)],
         env=env,
@@ -152,11 +193,13 @@ def start_worker(session: dict) -> WorkerProcess | None:
         start_new_session=True,
     )
     LOG.info(
-        "started worker pid=%s session_id=%s channel=%s creds_exp=%s",
+        "started worker pid=%s session_id=%s channel=%s creds_exp=%s link_mode=%s sysid=%s",
         proc.pid,
         session_id,
         _channel_arn(session)[-36:] if _channel_arn(session) else "?",
         _creds_expiration(session) or "?",
+        session.get("link_mode") or "shared_serial",
+        session.get("mavlink_sysid"),
     )
     return WorkerProcess(session_id, proc, _creds_expiration(session), _channel_arn(session))
 
@@ -257,7 +300,7 @@ def reconcile(workers: dict[str, WorkerProcess], desired: list[dict]) -> dict[st
         for sid, w in workers.items()
         if w.proc and w.proc.poll() is None
     ]
-    if len(active) > 1:
+    if active:
         LOG.info("workers active: %s", ", ".join(active))
     return workers
 
@@ -279,12 +322,19 @@ def main() -> None:
         LOG.error("%s", e)
         sys.exit(1)
 
+    radio_router = None
+    try:
+        radio_router = maybe_start_from_env()
+    except Exception as e:
+        LOG.error("shared radio router failed to start: %s — radio path unavailable", e)
+
     LOG.info(
-        "relay daemon starting relay_id=%s api=%s poll=%ss dry_run=%s",
+        "relay daemon starting relay_id=%s api=%s poll=%ss dry_run=%s radio_router=%s",
         cfg.get("relay_id") or "(unknown)",
         cfg["api_base_url"],
         POLL_INTERVAL_SEC,
         WORKER_DRY_RUN,
+        "up" if radio_router and radio_router.enabled else "off",
     )
 
     workers: dict[str, WorkerProcess] = {}
@@ -309,6 +359,8 @@ def main() -> None:
 
     for sid in list(workers.keys()):
         stop_worker(workers[sid])
+    if radio_router is not None:
+        radio_router.stop()
     LOG.info("relay daemon stopped")
 
 

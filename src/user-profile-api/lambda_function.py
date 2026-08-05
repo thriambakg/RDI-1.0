@@ -108,7 +108,7 @@ def _get_user_id(event: dict) -> str | None:
 
 
 def _get_profile(user_id: str, headers: dict) -> dict:
-    """Get user profile including connection_hierarchy."""
+    """Get user profile including connection_hierarchy and settings."""
     dynamodb = boto3.client("dynamodb")
     try:
         resp = dynamodb.get_item(
@@ -134,19 +134,26 @@ def _get_profile(user_id: str, headers: dict) -> dict:
     if not isinstance(relays, list):
         relays = []
 
+    settings = {}
+    if item and "settings" in item:
+        settings = _from_dynamo_value(item["settings"]) or {}
+    if not isinstance(settings, dict):
+        settings = {}
+
     return _response(
         200,
         {
             "user_id": user_id,
             "connection_hierarchy": connection_hierarchy,
             "relays": relays,
+            "settings": settings,
         },
         headers,
     )
 
 
 def _patch_profile(user_id: str, body: dict, headers: dict) -> dict:
-    """Update profile - e.g. create_folder, delete_folder."""
+    """Update profile - e.g. create_folder, delete_folder, update_settings."""
     action = body.get("action")
     if action == "create_folder":
         parent_path = body.get("parent_path")
@@ -161,7 +168,48 @@ def _patch_profile(user_id: str, body: dict, headers: dict) -> dict:
         if not isinstance(folder_path, list) or not folder_path:
             return _response(400, {"error": "folder_path required (list)"}, headers)
         return _delete_folder(user_id, folder_path, headers)
+    if action == "update_settings":
+        settings_patch = body.get("settings")
+        if not isinstance(settings_patch, dict):
+            return _response(400, {"error": "settings object required"}, headers)
+        return _update_settings(user_id, settings_patch, headers)
     return _response(400, {"error": f"Unknown action: {action}"}, headers)
+
+
+def _update_settings(user_id: str, settings_patch: dict, headers: dict) -> dict:
+    """Deep-merge settings onto the user-profiles item (e.g. controls.keybinds)."""
+    dynamodb = boto3.client("dynamodb")
+    try:
+        resp = dynamodb.get_item(
+            TableName=TABLE_NAME,
+            Key={"user_id": {"S": user_id}},
+        )
+    except ClientError:
+        raise
+    item = resp.get("Item")
+    current: dict = {}
+    if item and "settings" in item:
+        current = _from_dynamo_value(item["settings"]) or {}
+    if not isinstance(current, dict):
+        current = {}
+    merged = _deep_merge_dicts(current, settings_patch)
+    dynamodb.update_item(
+        TableName=TABLE_NAME,
+        Key={"user_id": {"S": user_id}},
+        UpdateExpression="SET settings = :s",
+        ExpressionAttributeValues={":s": _to_dynamo(merged)},
+    )
+    return _response(200, {"message": "Settings updated", "settings": merged}, headers)
+
+
+def _deep_merge_dicts(base: dict, patch: dict) -> dict:
+    out = copy.deepcopy(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge_dicts(out[key], value)
+        else:
+            out[key] = copy.deepcopy(value)
+    return out
 
 
 def _create_folder(user_id: str, parent_path: list[str], folder_name: str, headers: dict) -> dict:

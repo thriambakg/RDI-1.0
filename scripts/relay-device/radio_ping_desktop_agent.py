@@ -31,10 +31,12 @@ def _serial_device(port: str) -> str:
     return p
 
 
-def _run_raw(port: str, baud: int) -> None:
+def _run_raw(port: str, baud: int, sysid: int | None) -> None:
     import serial
 
     print(f"\nOpening {port} @ {baud} raw JSON (Ctrl+C to stop)")
+    if sysid is not None:
+        print(f"Filtering target_sysid={sysid}")
     ser = serial.Serial(port, baud, timeout=0.2)
     buf = bytearray()
     n = 0
@@ -56,6 +58,10 @@ def _run_raw(port: str, baud: int) -> None:
                     if msg.get("type") != "ping":
                         print(f"RX non-ping: {msg}")
                         continue
+                    tgt = msg.get("target_sysid")
+                    if sysid is not None and tgt is not None and int(tgt) != sysid:
+                        print(f"RX ping id={msg.get('id')} for sysid={tgt} (skip)")
+                        continue
                     n += 1
                     pong = make_pong(msg, "desktop")
                     ser.write(encode_line(pong))
@@ -72,7 +78,7 @@ def _run_raw(port: str, baud: int) -> None:
         ser.close()
 
 
-def _run_mavlink(port: str, baud: int) -> None:
+def _run_mavlink(port: str, baud: int, sysid: int | None) -> None:
     import os
 
     os.environ["MAVLINK20"] = "1"
@@ -80,6 +86,8 @@ def _run_mavlink(port: str, baud: int) -> None:
 
     device = _serial_device(port)
     print(f"\nOpening {port} ({device}) @ {baud} MAVLink TUNNEL (Ctrl+C to stop)")
+    if sysid is not None:
+        print(f"Filtering target_sysid={sysid}")
     conn = mavutil.mavlink_connection(
         device,
         baud=baud,
@@ -119,6 +127,10 @@ def _run_mavlink(port: str, baud: int) -> None:
             if decoded.get("type") != "ping":
                 print(f"RX TUNNEL non-ping: {decoded.get('type')}")
                 continue
+            tgt = decoded.get("target_sysid")
+            if sysid is not None and tgt is not None and int(tgt) != sysid:
+                print(f"RX TUNNEL ping id={decoded.get('id')} for sysid={tgt} (skip)")
+                continue
 
             n += 1
             pong = make_pong(decoded, "desktop")
@@ -126,7 +138,7 @@ def _run_mavlink(port: str, baud: int) -> None:
             payload = raw + b"\x00" * (TUNNEL_PAYLOAD_MAX - len(raw))
             conn.mav.tunnel_send(0, 0, RDI_TUNNEL_PAYLOAD_TYPE, len(raw), payload)
             hops = format_hops(list(pong.get("hops") or []))
-            print(f"\n[{n}] echoed TUNNEL ping id={pong.get('id')}")
+            print(f"\n[{n}] echoed TUNNEL ping id={pong.get('id')} sysid={tgt}")
             for h in hops:
                 print(f"    {h}")
     except KeyboardInterrupt:
@@ -147,6 +159,12 @@ def main() -> None:
         choices=("mavlink", "raw"),
         default="mavlink",
         help="mavlink = TELEM1/PX4 path (default); raw = newline JSON",
+    )
+    ap.add_argument(
+        "--sysid",
+        type=int,
+        default=None,
+        help="Only echo pings with this target_sysid (omit to answer all)",
     )
     args = ap.parse_args()
 
@@ -169,9 +187,9 @@ def main() -> None:
         print(f"  {p.device:12s}  {p.description}")
 
     if args.mode == "mavlink":
-        _run_mavlink(args.port, args.baud)
+        _run_mavlink(args.port, args.baud, args.sysid)
     else:
-        _run_raw(args.port, args.baud)
+        _run_raw(args.port, args.baud, args.sysid)
 
 
 if __name__ == "__main__":

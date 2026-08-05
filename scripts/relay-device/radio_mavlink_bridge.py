@@ -32,7 +32,7 @@ def _pack_payload(msg: dict[str, Any]) -> bytes:
     raw = encode_line(msg).rstrip(b"\n")
     if len(raw) > TUNNEL_PAYLOAD_MAX:
         # Compact timestamps to ints (ms) to fit TUNNEL's 128-byte payload.
-        compact = {
+        compact: dict[str, Any] = {
             "v": msg.get("v"),
             "type": msg.get("type"),
             "id": msg.get("id"),
@@ -41,6 +41,8 @@ def _pack_payload(msg: dict[str, Any]) -> bytes:
                 for h in (msg.get("hops") or [])
             ],
         }
+        if msg.get("target_sysid") is not None:
+            compact["target_sysid"] = msg.get("target_sysid")
         raw = encode_line(compact).rstrip(b"\n")
     if len(raw) > TUNNEL_PAYLOAD_MAX:
         raise ValueError(f"hop payload too large for TUNNEL ({len(raw)} > {TUNNEL_PAYLOAD_MAX})")
@@ -165,7 +167,7 @@ class RadioMavlinkBridge:
                     LOG.warning("mavlink rx error: %s", e)
                     time.sleep(0.2)
 
-    def _send_tunnel(self, hop_msg: dict[str, Any]) -> int:
+    def _send_tunnel(self, hop_msg: dict[str, Any], *, target_system: int = 0) -> int:
         raw = _pack_payload(hop_msg)
         payload = raw + b"\x00" * (TUNNEL_PAYLOAD_MAX - len(raw))
         with self._lock:
@@ -176,27 +178,37 @@ class RadioMavlinkBridge:
                     "pymavlink lacks tunnel_send (need MAVLINK20=1 / MAVLink 2 dialect). "
                     f"dialect={getattr(mav, '__module__', '?')}"
                 )
-            # pymavlink accepts bytes or a 128-length sequence.
+            # 0 = broadcast; non-zero targets a specific MAVLink system id.
             mav.tunnel_send(
-                0,  # target_system broadcast
-                0,  # target_component broadcast
+                int(target_system) & 0xFF,
+                0,
                 RDI_TUNNEL_PAYLOAD_TYPE,
                 len(raw),
                 payload,
             )
         return len(raw)
 
-    async def roundtrip_ping(self, hop_relay: str = "relay") -> dict[str, Any]:
+    async def roundtrip_ping(
+        self,
+        hop_relay: str = "relay",
+        target_sysid: int | None = None,
+    ) -> dict[str, Any]:
         if not self.enabled or self._loop is None:
             raise RuntimeError("mavlink bridge not started")
 
-        msg = make_ping(hop_relay)
+        msg = make_ping(hop_relay, target_sysid=target_sysid)
         ping_id = str(msg["id"])
         fut: asyncio.Future = self._loop.create_future()
         self._pending[ping_id] = fut
         try:
-            nbytes = self._send_tunnel(msg)
-            LOG.info("mavlink tunnel ping tx id=%s bytes=%d", ping_id, nbytes)
+            target = int(target_sysid) if target_sysid is not None else 0
+            nbytes = self._send_tunnel(msg, target_system=target)
+            LOG.info(
+                "mavlink tunnel ping tx id=%s bytes=%d target_sysid=%s",
+                ping_id,
+                nbytes,
+                target_sysid if target_sysid is not None else "broadcast",
+            )
             pong = await asyncio.wait_for(fut, timeout=self.timeout_sec)
             hops = list(pong.get("hops") or [])
             hops.append({"hop": hop_relay, "ts": time.time()})

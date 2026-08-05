@@ -28,6 +28,7 @@ from kvs_signaling import (
 from relay_active_sessions import (
     make_session_entry,
     parse_active_sessions,
+    radio_fields_from_metadata,
     remove_session_entry,
     upsert_session_entry,
 )
@@ -150,6 +151,12 @@ def _add_relay_active_session(
     drone_id: str = "",
     mavlink_port: int | None = None,
     mavlink_host: str = "",
+    link_mode: str = "",
+    mavlink_sysid: int | None = None,
+    mavlink_compid: int | None = None,
+    radio_net_id: int | None = None,
+    radio_device: str = "",
+    radio_baud: int | None = None,
 ) -> bool:
     """Append or update one active WebRTC session on the relay (multi-drone). Returns True on success."""
     if not RELAY_REGISTRY_TABLE or not relay_id or not channel_arn:
@@ -173,6 +180,12 @@ def _add_relay_active_session(
             drone_id=drone_id,
             mavlink_port=mavlink_port,
             mavlink_host=mavlink_host,
+            link_mode=link_mode,
+            mavlink_sysid=mavlink_sysid,
+            mavlink_compid=mavlink_compid,
+            radio_net_id=radio_net_id,
+            radio_device=radio_device,
+            radio_baud=radio_baud,
         )
         sessions = upsert_session_entry(sessions, entry)
         dynamodb.update_item(
@@ -199,6 +212,8 @@ def _add_relay_active_session(
             session_id=session_id,
             channel=channel_arn[-36:],
             count=len(sessions),
+            link_mode=link_mode or None,
+            mavlink_sysid=mavlink_sysid,
         )
         return True
     except ClientError as e:
@@ -654,6 +669,7 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
         if eff_port is None:
             eff_port = int(MAVLINK_PORT) if MAVLINK_PORT else 18570
         eff_host = (relay_config or {}).get("mavlink_host") or "127.0.0.1"
+        radio = radio_fields_from_metadata(metadata if isinstance(metadata, dict) else None)
         _add_relay_active_session(
             dynamodb,
             user_id,
@@ -664,6 +680,12 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
             drone_id=drone_id,
             mavlink_port=eff_port,
             mavlink_host=eff_host,
+            link_mode=radio.get("link_mode") or "shared_serial",
+            mavlink_sysid=radio.get("mavlink_sysid"),
+            mavlink_compid=radio.get("mavlink_compid"),
+            radio_net_id=radio.get("radio_net_id"),
+            radio_device=radio.get("radio_device") or "",
+            radio_baud=radio.get("radio_baud"),
         )
 
     if not WAVELENGTH_INSTANCE_ID:
@@ -808,6 +830,14 @@ def _reactivate_webrtc_session(
     eff_port, eff_host, relay_id = _session_mavlink_target(dynamodb, user_id, item)
     wl_zone = (item.get("wavelength_zone_id") or {}).get("S", REGION)
     drone_id = (item.get("drone_id") or {}).get("S", "")
+    metadata_raw = item.get("metadata", {}).get("S")
+    metadata = {}
+    if metadata_raw:
+        try:
+            metadata = json.loads(metadata_raw)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    radio = radio_fields_from_metadata(metadata if isinstance(metadata, dict) else None)
     if relay_id:
         if not _add_relay_active_session(
             dynamodb,
@@ -819,6 +849,12 @@ def _reactivate_webrtc_session(
             drone_id=drone_id,
             mavlink_port=eff_port,
             mavlink_host=eff_host,
+            link_mode=radio.get("link_mode") or "shared_serial",
+            mavlink_sysid=radio.get("mavlink_sysid"),
+            mavlink_compid=radio.get("mavlink_compid"),
+            radio_net_id=radio.get("radio_net_id"),
+            radio_device=radio.get("radio_device") or "",
+            radio_baud=radio.get("radio_baud"),
         ):
             raise RuntimeError(
                 f"Failed to register reactivated session on relay {relay_id} "

@@ -3,6 +3,8 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import Landing from './pages/landing'
 import AuthCallbackPage from './pages/AuthCallbackPage'
 import { ConsoleRoute } from './components/ConsoleRoute'
+import Console from './pages/console'
+import SettingsPage from './pages/settings'
 import { getConfig, getEnvironmentRegions } from './config'
 
 export default function App() {
@@ -27,24 +29,17 @@ export default function App() {
       <Route path="/" element={<Landing />} />
       <Route
         path="/auth/callback"
-        element={
-          hasAuth ? (
-            <AuthCallbackPage />
-          ) : (
-            <Navigate to="/" replace />
-          )
-        }
+        element={hasAuth ? <AuthCallbackPage /> : <Navigate to="/" replace />}
       />
       <Route
         path="/console"
         element={
-          hasAuth ? (
-            <ConsoleRoute socialProviders={socialProviders} />
-          ) : (
-            <Navigate to="/" replace />
-          )
+          hasAuth ? <ConsoleRoute socialProviders={socialProviders} /> : <Navigate to="/" replace />
         }
-      />
+      >
+        <Route index element={<Console />} />
+        <Route path="settings" element={<SettingsPage />} />
+      </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

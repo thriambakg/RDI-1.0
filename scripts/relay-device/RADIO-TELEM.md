@@ -92,14 +92,18 @@ sudo systemctl restart rdi-relay-daemon
 sudo journalctl -u rdi-relay-daemon -f
 ```
 
-Worker log should show `radio=/dev/serial0 mode=mavlink baud=921600`.
+The **daemon** owns `/dev/serial0` via a localhost radio router (`127.0.0.1:18771`).
+Workers no longer open the UART themselves — multiple WebRTC sessions can share one radio.
+
+Look for: `radio router listening` and `radio_router=up`. Worker logs should show `radio=router`.
 
 ## 4. Test
 
 1. Antennas on both radios; desktop agent running (`mavlink` mode).
 2. Air radio on **TELEM1**; Pi daemon restarted with env above.
-3. Website: open session → Ping.
-4. Expect hop lines in the UI and matching echoes in the desktop agent.
+3. Website: open **one or more** sessions → Ping radio (shared router).
+4. Optional: create connections with **MAVLink system ID** so pings stamp `target_sysid`.
+5. Desktop agent: `py -3.12 -u radio_ping_desktop_agent.py --port COM5 --baud 57600 --mode mavlink [--sysid N]`
 
 If the tunnel times out, ping falls back to **local** WebRTC PONG so sessions still work.
 

@@ -16,27 +16,39 @@ def new_ping_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
-def make_ping(hop: str, ping_id: str | None = None, hops: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def make_ping(
+    hop: str,
+    ping_id: str | None = None,
+    hops: list[dict[str, Any]] | None = None,
+    *,
+    target_sysid: int | None = None,
+) -> dict[str, Any]:
     now = time.time()
     out_hops = list(hops or [])
     out_hops.append({"hop": hop, "ts": now})
-    return {
+    msg: dict[str, Any] = {
         "v": PROTOCOL_VERSION,
         "type": "ping",
         "id": ping_id or new_ping_id(),
         "hops": out_hops,
     }
+    if target_sysid is not None:
+        msg["target_sysid"] = int(target_sysid)
+    return msg
 
 
 def make_pong(ping_msg: dict[str, Any], hop: str) -> dict[str, Any]:
     hops = list(ping_msg.get("hops") or [])
     hops.append({"hop": hop, "ts": time.time()})
-    return {
+    msg: dict[str, Any] = {
         "v": PROTOCOL_VERSION,
         "type": "pong",
         "id": str(ping_msg.get("id") or new_ping_id()),
         "hops": hops,
     }
+    if ping_msg.get("target_sysid") is not None:
+        msg["target_sysid"] = ping_msg.get("target_sysid")
+    return msg
 
 
 def encode_line(msg: dict[str, Any]) -> bytes:

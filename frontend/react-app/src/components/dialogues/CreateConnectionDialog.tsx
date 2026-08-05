@@ -29,6 +29,13 @@ const MAVLINK_PORT_OPTIONS = [
   { value: 14540, label: '14540 (PX4 legacy)' },
 ]
 
+const LINK_MODE_OPTIONS = [
+  { value: 'shared_serial', label: 'Shared radio (mothership TELEM1)' },
+  { value: 'none', label: 'None (WebRTC only)' },
+  { value: 'udp_mavlink', label: 'UDP MAVLink (SITL / local)' },
+  { value: 'dedicated_serial', label: 'Dedicated serial (lab FTDI)' },
+]
+
 const inputSx = {
   '& .MuiOutlinedInput-root': {
     color: '#f8fafc !important',
@@ -83,6 +90,10 @@ export function CreateConnectionDialog({
   const [relayId, setRelayId] = useState('')
   const [ttlSeconds, setTtlSeconds] = useState(14400)
   const [mavlinkPort, setMavlinkPort] = useState(18570)
+  const [linkMode, setLinkMode] = useState('shared_serial')
+  const [mavlinkSysid, setMavlinkSysid] = useState(1)
+  const [radioNetId, setRadioNetId] = useState(25)
+  const [radioDevice, setRadioDevice] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<CreateSessionResponse | null>(null)
@@ -96,17 +107,27 @@ export function CreateConnectionDialog({
     setError(null)
     setLoading(true)
     try {
+      const metadata: NonNullable<Parameters<typeof createSession>[0]['metadata']> = {
+        mavlink_port: mavlinkPort,
+        mavlink_host: '127.0.0.1',
+        px4_version: mavlinkPort === 18570 ? 'v1.13+' : 'legacy',
+        link_mode: linkMode as 'none' | 'shared_serial' | 'dedicated_serial' | 'udp_mavlink',
+      }
+      if (linkMode === 'shared_serial' || linkMode === 'dedicated_serial') {
+        metadata.mavlink_sysid = mavlinkSysid
+        metadata.radio_net_id = radioNetId
+      }
+      if (linkMode === 'dedicated_serial' && radioDevice.trim()) {
+        metadata.radio_device = radioDevice.trim()
+        metadata.radio_baud = 57600
+      }
       const res = await createSession({
         drone_name: droneName.trim() || 'drone',
         ttl_seconds: ttlSeconds === 0 ? 0 : ttlSeconds,
         wavelength_zone_id: wavelengthZoneId,
         folder_path: folderPath,
         relay_id: relayId,
-        metadata: {
-          mavlink_port: mavlinkPort,
-          mavlink_host: '127.0.0.1',
-          px4_version: mavlinkPort === 18570 ? 'v1.13+' : 'legacy',
-        },
+        metadata,
       })
       setResult(res)
       onSuccess?.(res, droneName.trim() || res.drone_id)
@@ -122,6 +143,10 @@ export function CreateConnectionDialog({
     setRelayId('')
     setTtlSeconds(14400)
     setMavlinkPort(18570)
+    setLinkMode('shared_serial')
+    setMavlinkSysid(1)
+    setRadioNetId(25)
+    setRadioDevice('')
     setError(null)
     setResult(null)
     onClose()
@@ -280,7 +305,7 @@ export function CreateConnectionDialog({
               margin="normal"
               sx={inputSx}
               SelectProps={{ MenuProps: menuProps }}
-              helperText="Per-connection port; multiple connections can use different ports on the same relay"
+              helperText="Local UDP port on the relay (SITL / future bridge)"
             >
               {MAVLINK_PORT_OPTIONS.map((o) => (
                 <MenuItem key={o.value} value={o.value} disableRipple>
@@ -288,6 +313,61 @@ export function CreateConnectionDialog({
                 </MenuItem>
               ))}
             </TextField>
+            <TextField
+              fullWidth
+              select
+              label="Radio link mode"
+              value={linkMode}
+              onChange={(e) => setLinkMode(e.target.value)}
+              margin="normal"
+              sx={inputSx}
+              SelectProps={{ MenuProps: menuProps }}
+              helperText="Shared radio = one mothership RFD900, address by MAVLink sysid"
+            >
+              {LINK_MODE_OPTIONS.map((o) => (
+                <MenuItem key={o.value} value={o.value} disableRipple>
+                  {o.label}
+                </MenuItem>
+              ))}
+            </TextField>
+            {(linkMode === 'shared_serial' || linkMode === 'dedicated_serial') && (
+              <>
+                <TextField
+                  fullWidth
+                  type="number"
+                  label="MAVLink system ID"
+                  value={mavlinkSysid}
+                  onChange={(e) => setMavlinkSysid(Math.max(1, Math.min(255, Number(e.target.value) || 1)))}
+                  margin="normal"
+                  sx={inputSx}
+                  inputProps={{ min: 1, max: 255 }}
+                  helperText="Must match the drone FC MAV_SYS_ID (unique per aircraft on this relay)"
+                />
+                <TextField
+                  fullWidth
+                  type="number"
+                  label="Radio Net ID"
+                  value={radioNetId}
+                  onChange={(e) => setRadioNetId(Math.max(0, Math.min(255, Number(e.target.value) || 0)))}
+                  margin="normal"
+                  sx={inputSx}
+                  inputProps={{ min: 0, max: 255 }}
+                  helperText="SiK / RFD network ID (same for mothership + this drone)"
+                />
+              </>
+            )}
+            {linkMode === 'dedicated_serial' && (
+              <TextField
+                fullWidth
+                label="Serial device on Pi"
+                placeholder="/dev/ttyUSB0"
+                value={radioDevice}
+                onChange={(e) => setRadioDevice(e.target.value)}
+                margin="normal"
+                sx={inputSx}
+                helperText="Lab-only: this connection owns that UART"
+              />
+            )}
             {error && (
               <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mt: 1 }}>
                 {error}

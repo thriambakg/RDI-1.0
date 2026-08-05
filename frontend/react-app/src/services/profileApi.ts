@@ -71,6 +71,13 @@ export interface UserProfile {
   user_id: string
   connection_hierarchy: ConnectionHierarchy
   relays?: RelayRef[]
+  settings?: {
+    controls?: {
+      version?: number
+      keybinds?: Record<string, unknown>
+    }
+    [key: string]: unknown
+  }
 }
 
 export async function getProfile(): Promise<UserProfile> {
@@ -85,6 +92,25 @@ export async function getProfile(): Promise<UserProfile> {
     throw new Error(err?.error || `Get profile failed: ${res.status}`)
   }
   return res.json()
+}
+
+export async function updateUserSettings(settings: Record<string, unknown>): Promise<UserProfile['settings']> {
+  const url = `${getApiBaseUrl()}/user-profile`
+  const body = { action: 'update_settings', settings }
+  const headers = await getAuthHeaders()
+  logProfileRequest('PATCH', url, headers, body)
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify(body),
+  })
+  const data = await res.json().catch(() => ({}))
+  logProfileResponse('PATCH', url, res.status, res.ok, res.ok ? undefined : data)
+  if (!res.ok) {
+    const err = data as { error?: string }
+    throw new Error(err?.error || `Update settings failed: ${res.status}`)
+  }
+  return (data as { settings?: UserProfile['settings'] }).settings
 }
 
 export async function createFolder(parentPath: string[], folderName: string): Promise<void> {

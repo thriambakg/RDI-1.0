@@ -409,6 +409,12 @@ def _device_active_sessions(params: dict, headers: dict) -> dict:
                 "drone_id": entry.get("drone_id", ""),
                 "mavlink_port": entry.get("mavlink_port"),
                 "mavlink_host": entry.get("mavlink_host") or "127.0.0.1",
+                "link_mode": entry.get("link_mode") or "shared_serial",
+                "mavlink_sysid": entry.get("mavlink_sysid"),
+                "mavlink_compid": entry.get("mavlink_compid"),
+                "radio_net_id": entry.get("radio_net_id"),
+                "radio_device": entry.get("radio_device"),
+                "radio_baud": entry.get("radio_baud"),
                 "webrtc": master,
             }
         )

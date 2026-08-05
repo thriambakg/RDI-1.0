@@ -1,14 +1,13 @@
 import { useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import Console from '../pages/console'
 
 interface ConsoleRouteProps {
   socialProviders?: ('google' | 'amazon' | 'apple' | 'facebook')[]
 }
 
 /**
- * Protects /console: unauthenticated users are redirected to /?auth=signin
+ * Protects /console/*: unauthenticated users are redirected to /?auth=signin
  */
 export function ConsoleRoute(_props: ConsoleRouteProps) {
   const navigate = useNavigate()
@@ -23,5 +22,5 @@ export function ConsoleRoute(_props: ConsoleRouteProps) {
   if (isLoading) return null
   if (!isAuthenticated) return null
 
-  return <Console />
+  return <Outlet />
 }

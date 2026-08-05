@@ -22,6 +22,8 @@ FILES=(
   radio_hop_protocol.py
   radio_serial_bridge.py
   radio_mavlink_bridge.py
+  radio_router_server.py
+  radio_router_client.py
   radio_telem_smoke_test.py
   radio_ping_desktop_agent.py
   requirements-worker.txt

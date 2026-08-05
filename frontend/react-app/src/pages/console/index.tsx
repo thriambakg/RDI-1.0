@@ -1,5 +1,4 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
 import {
   Alert,
   Box,
@@ -23,11 +22,11 @@ import {
 } from '@mui/material'
 import type { SelectChangeEvent } from '@mui/material'
 import { Delete as DeleteIcon, ExpandLess, ExpandMore, Folder, FolderOpen, MoreVert, PauseCircleOutline, PlayArrow } from '@mui/icons-material'
-import { useAuth } from '../../contexts/AuthContext'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import { useSessionWebRtc } from '../../contexts/SessionWebRtcContext'
 import { getEnvironmentRegions } from '../../config'
 import { CreateConnectionDialog, CreateFolderDialog, ConnectionDetailDialog, RegisterRelayDialog, RelayDetailDialog } from '../../components/dialogues'
+import { UserAccountMenu } from '../../components/console/UserAccountMenu'
 import { useProfile } from '../../contexts/ProfileContext'
 import {
   deleteFolder,
@@ -231,7 +230,6 @@ export default function Console() {
     message: '',
     severity: 'error',
   })
-  const navigate = useNavigate()
 
   function showSessionError(message: string) {
     setSnackbar({ open: true, message, severity: 'error' })
@@ -245,7 +243,6 @@ export default function Console() {
     if (action === 'delete') return 'Delete failed.'
     return msg || 'Something went wrong.'
   }
-  const { logout } = useAuth()
 
   const allConnections = collectSessions(hierarchy, selectedFolderPath)
   const connections = selectedRelayId
@@ -519,11 +516,6 @@ export default function Console() {
     setDetailDialogOpen(true)
   }
 
-  const handleSignOut = async () => {
-    await logout()
-    navigate('/')
-  }
-
   const handleZoneChange = (e: SelectChangeEvent<string>) => {
     const z = REGION_OPTIONS.find((x) => x.id === e.target.value)
     if (z) {
@@ -543,9 +535,7 @@ export default function Console() {
         <Typography variant="h6" component="h1" sx={{ flex: 1, margin: 0, color: '#f8fafc' }}>
           RDI Console
         </Typography>
-        <Button onClick={handleSignOut} disableRipple sx={{ color: '#3b82f6', textTransform: 'none' }}>
-          Sign Out
-        </Button>
+        <UserAccountMenu />
       </header>
 
       <div className={`sidebar-backdrop ${sidebarOpen ? 'open' : ''}`} onClick={() => setSidebarOpen(false)} aria-hidden="true" />

@@ -20,6 +20,7 @@ apt-get install -y -qq python3 python3-pip python3-venv python3-boto3 \
 mkdir -p "${INSTALL_DIR}"
 for f in rdi-relay-daemon.py kvs_master_worker.py rdi_device_config.py rdi-relay-claim.py \
   radio_hop_protocol.py radio_serial_bridge.py radio_mavlink_bridge.py \
+  radio_router_server.py radio_router_client.py \
   radio_telem_smoke_test.py radio_ping_desktop_agent.py \
   requirements-worker.txt; do
   if [[ ! -f "${SCRIPT_DIR}/${f}" ]]; then

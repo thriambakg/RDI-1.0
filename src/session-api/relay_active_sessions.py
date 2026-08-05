@@ -40,6 +40,12 @@ def make_session_entry(
     drone_id: str = "",
     mavlink_port: int | None = None,
     mavlink_host: str = "",
+    link_mode: str = "",
+    mavlink_sysid: int | None = None,
+    mavlink_compid: int | None = None,
+    radio_net_id: int | None = None,
+    radio_device: str = "",
+    radio_baud: int | None = None,
 ) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "session_id": session_id,
@@ -51,7 +57,40 @@ def make_session_entry(
         entry["mavlink_port"] = mavlink_port
     if mavlink_host:
         entry["mavlink_host"] = mavlink_host
+    if link_mode:
+        entry["link_mode"] = str(link_mode)
+    if mavlink_sysid is not None:
+        entry["mavlink_sysid"] = int(mavlink_sysid)
+    if mavlink_compid is not None:
+        entry["mavlink_compid"] = int(mavlink_compid)
+    if radio_net_id is not None:
+        entry["radio_net_id"] = int(radio_net_id)
+    if radio_device:
+        entry["radio_device"] = str(radio_device)
+    if radio_baud is not None:
+        entry["radio_baud"] = int(radio_baud)
     return entry
+
+
+def radio_fields_from_metadata(metadata: dict | None) -> dict[str, Any]:
+    """Extract optional radio-addressing fields from session metadata dict."""
+    out: dict[str, Any] = {}
+    if not isinstance(metadata, dict):
+        return out
+    link_mode = metadata.get("link_mode")
+    if isinstance(link_mode, str) and link_mode.strip():
+        out["link_mode"] = link_mode.strip().lower()
+    for key in ("mavlink_sysid", "mavlink_compid", "radio_net_id", "radio_baud"):
+        if metadata.get(key) is None:
+            continue
+        try:
+            out[key] = int(metadata[key])
+        except (TypeError, ValueError):
+            pass
+    radio_device = metadata.get("radio_device")
+    if isinstance(radio_device, str) and radio_device.strip():
+        out["radio_device"] = radio_device.strip()
+    return out
 
 
 def upsert_session_entry(sessions: list[dict[str, Any]], entry: dict[str, Any]) -> list[dict[str, Any]]:

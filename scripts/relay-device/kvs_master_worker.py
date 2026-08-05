@@ -28,6 +28,7 @@ from botocore.credentials import Credentials
 
 from radio_hop_protocol import format_hops
 from radio_mavlink_bridge import RadioMavlinkBridge
+from radio_router_client import RadioRouterClient, router_client_from_env
 from radio_serial_bridge import RadioSerialBridge
 
 LOG = logging.getLogger("rdi.kvs_master")
@@ -38,9 +39,11 @@ PING_RADIO_BYTES = b"PINGR"
 SIGNALING_AUTH_EXIT_CODE = 2
 SIGNALING_AUTH_MAX_RETRIES = int(os.environ.get("RDI_SIGNALING_AUTH_MAX_RETRIES", "3"))
 PONG_BYTES = b"PONG"
-# Optional radio round-trip. Modes:
-#   mavlink — TELEM2 /dev/serial0 → PX4 → TELEM1 radio (default when port set)
+# Optional radio round-trip. Prefer daemon-owned router (RDI_RADIO_USE_ROUTER=1).
+# Modes for dedicated_serial lab fallback:
+#   mavlink — TELEM2 /dev/serial0 → PX4 → TELEM1 radio
 #   raw     — direct serial JSON (second FTDI / USB lab path)
+RADIO_USE_ROUTER = os.environ.get("RDI_RADIO_USE_ROUTER", "").strip() in ("1", "true", "yes")
 RADIO_PORT = os.environ.get("RDI_RADIO_PORT", "").strip()
 RADIO_MODE = os.environ.get("RDI_RADIO_MODE", "mavlink").strip().lower() or "mavlink"
 _DEFAULT_BAUD = "921600" if RADIO_MODE == "mavlink" else "57600"
@@ -168,6 +171,17 @@ async def run_master(cfg: dict) -> None:
     credentials = webrtc["credentials"]
     mavlink_host = cfg.get("mavlink_host") or "127.0.0.1"
     mavlink_port = int(cfg.get("mavlink_port") or 18570)
+    link_mode = str(cfg.get("link_mode") or "shared_serial").strip().lower() or "shared_serial"
+    mavlink_sysid = cfg.get("mavlink_sysid")
+    try:
+        target_sysid = int(mavlink_sysid) if mavlink_sysid is not None else None
+    except (TypeError, ValueError):
+        target_sysid = None
+    dedicated_device = str(cfg.get("radio_device") or "").strip()
+    try:
+        dedicated_baud = int(cfg.get("radio_baud") or RADIO_BAUD)
+    except (TypeError, ValueError):
+        dedicated_baud = RADIO_BAUD
 
     kv = boto3.client(
         "kinesisvideo",
@@ -188,35 +202,52 @@ async def run_master(cfg: dict) -> None:
     )
 
     LOG.info(
-        "worker start session_id=%s mavlink=%s:%s channel=%s radio=%s mode=%s baud=%s",
+        "worker start session_id=%s mavlink=%s:%s channel=%s link_mode=%s sysid=%s radio=%s",
         session_id,
         mavlink_host,
         mavlink_port,
         channel_arn,
-        RADIO_PORT or "(local ping only)",
-        RADIO_MODE if RADIO_PORT else "-",
-        RADIO_BAUD if RADIO_PORT else "-",
+        link_mode,
+        target_sysid,
+        "router" if RADIO_USE_ROUTER else (dedicated_device or RADIO_PORT or "off"),
     )
 
     pc_by_client: dict[str, RTCPeerConnection] = {}
     pending_ice: dict[str, list[dict]] = {}
     loop = asyncio.get_running_loop()
-    radio: RadioSerialBridge | RadioMavlinkBridge | None = None
-    if RADIO_PORT:
+    radio: RadioSerialBridge | RadioMavlinkBridge | RadioRouterClient | None = None
+
+    if link_mode == "none":
+        LOG.info("link_mode=none — radio ping disabled for session_id=%s", session_id)
+    elif link_mode == "dedicated_serial" and dedicated_device:
         if RADIO_MODE == "raw":
-            radio = RadioSerialBridge(RADIO_PORT, RADIO_BAUD, RADIO_TIMEOUT_SEC)
+            radio = RadioSerialBridge(dedicated_device, dedicated_baud, RADIO_TIMEOUT_SEC)
         else:
-            radio = RadioMavlinkBridge(RADIO_PORT, RADIO_BAUD, RADIO_TIMEOUT_SEC)
+            radio = RadioMavlinkBridge(dedicated_device, dedicated_baud, RADIO_TIMEOUT_SEC)
         try:
             radio.start(loop)
         except Exception as e:
-            LOG.error(
-                "radio bridge failed to open %s mode=%s: %s — falling back to local ping",
-                RADIO_PORT,
-                RADIO_MODE,
-                e,
-            )
+            LOG.error("dedicated radio failed %s: %s", dedicated_device, e)
             radio = None
+    elif link_mode in ("shared_serial", "udp_mavlink") or RADIO_USE_ROUTER:
+        # udp_mavlink still allows shared radio hop when router is up (HITL may use both).
+        if link_mode == "udp_mavlink" and not RADIO_USE_ROUTER and not RADIO_PORT:
+            LOG.info("link_mode=udp_mavlink without radio — local ping only")
+        elif RADIO_USE_ROUTER or not RADIO_PORT:
+            client = router_client_from_env(RADIO_TIMEOUT_SEC)
+            await client.start()
+            radio = client if client.enabled else None
+        elif RADIO_PORT:
+            # Legacy fallback if worker still has RDI_RADIO_PORT (should be rare).
+            if RADIO_MODE == "raw":
+                radio = RadioSerialBridge(RADIO_PORT, RADIO_BAUD, RADIO_TIMEOUT_SEC)
+            else:
+                radio = RadioMavlinkBridge(RADIO_PORT, RADIO_BAUD, RADIO_TIMEOUT_SEC)
+            try:
+                radio.start(loop)
+            except Exception as e:
+                LOG.error("radio bridge failed to open %s: %s", RADIO_PORT, e)
+                radio = None
 
     async def _handle_ping(channel, cid: str, *, radio_path: bool) -> None:
         """Local relay PONG, or full WebRTC → radio → desktop → back hop ping."""
@@ -240,8 +271,28 @@ async def run_master(cfg: dict) -> None:
             LOG.info("ping pong (local) session_id=%s viewer=%s", session_id, cid)
             return
 
+        if link_mode == "none":
+            err = "link_mode=none (radio not configured for this connection)"
+            hops = [
+                {"hop": "browser", "ts": t_browser},
+                {"hop": "relay", "ts": time.time()},
+            ]
+            channel.send(
+                json.dumps(
+                    {
+                        "type": "rdi_pong",
+                        "scope": "radio",
+                        "error": err,
+                        "hops": hops,
+                        "lines": [err, "fell back to local relay pong"],
+                    }
+                ).encode("utf-8")
+            )
+            channel.send(PONG_BYTES)
+            return
+
         if radio is None or not radio.enabled:
-            err = "radio path not configured on relay (RDI_RADIO_PORT / bridge)"
+            err = "radio path not available (shared router / bridge)"
             hops = [
                 {"hop": "browser", "ts": t_browser},
                 {"hop": "relay", "ts": time.time()},
@@ -262,23 +313,25 @@ async def run_master(cfg: dict) -> None:
             return
 
         try:
-            pong = await radio.roundtrip_ping(hop_relay="relay")
+            pong = await radio.roundtrip_ping(hop_relay="relay", target_sysid=target_sysid)
             hops = [{"hop": "browser", "ts": t_browser}] + list(pong.get("hops") or [])
             summary = {
                 "type": "rdi_pong",
                 "scope": "radio",
                 "id": pong.get("id"),
+                "target_sysid": target_sysid,
                 "hops": hops,
                 "lines": format_hops(hops),
             }
             channel.send(json.dumps(summary).encode("utf-8"))
             channel.send(PONG_BYTES)
             LOG.info(
-                "ping pong (radio/%s) session_id=%s viewer=%s id=%s hops=%s",
-                RADIO_MODE,
+                "ping pong (radio/%s) session_id=%s viewer=%s id=%s sysid=%s hops=%s",
+                link_mode,
                 session_id,
                 cid,
                 pong.get("id"),
+                target_sysid,
                 ",".join(str(h.get("hop")) for h in hops),
             )
         except Exception as e:

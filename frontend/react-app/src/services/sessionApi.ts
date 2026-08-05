@@ -28,6 +28,12 @@ export interface CreateSessionParams {
     mavlink_port?: number
     mavlink_host?: string
     px4_version?: string
+    link_mode?: 'none' | 'shared_serial' | 'dedicated_serial' | 'udp_mavlink'
+    mavlink_sysid?: number
+    mavlink_compid?: number
+    radio_net_id?: number
+    radio_device?: string
+    radio_baud?: number
   }
 }
 
