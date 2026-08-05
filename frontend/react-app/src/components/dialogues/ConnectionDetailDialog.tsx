@@ -263,7 +263,11 @@ export function ConnectionDetailDialog({
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
   }, [open, settingsOpen, keybinds])
 
-  // Stream control frames over WebRTC when actions change
+  // Stream control frames over WebRTC — coalesce chords, heartbeat while held.
+  const actionsKey = activeActions.join(',')
+  const liveControlsRef = useRef({ actions: activeActions, stream })
+  liveControlsRef.current = { actions: activeActions, stream }
+
   useEffect(() => {
     if (!open || !data?.session_id || settingsOpen) return
     if (usesWebSocketTransport(data)) return
@@ -282,45 +286,82 @@ export function ConnectionDetailDialog({
 
     if (isTypingTarget(document.activeElement)) return
 
-    const path = controlPathRef.current
-    const actionKey = activeActions.join(',')
-    const sig = `${path}|${actionKey}`
-    if (sig === lastCtrlSigRef.current) return
-    const prevSig = lastCtrlSigRef.current
-    lastCtrlSigRef.current = sig
+    const CHORD_MS = 40
+    const HEARTBEAT_MS = 100
+    let chordTimer: number | undefined
+    let beatTimer: number | undefined
 
-    try {
-      sendCtrlFrame(channel, {
-        path,
-        actions: activeActions,
-        stream,
-        ts: Date.now(),
-      })
-      setCtrlError(null)
-      setTransmitting(activeActions.length > 0)
-      if (activeActions.length > 0) {
-        setLastTxNote(activeActions.join(', '))
-        addLog(`[ctrl/${path}] ${activeActions.join('+')} · ${stream || '—'}`)
-      } else {
-        setTransmitting(false)
-        if (prevSig.includes('|') && !prevSig.endsWith('|')) {
-          addLog(`[ctrl/${path}] release`)
+    const flush = (reason: 'edge' | 'beat') => {
+      if (channel.readyState !== 'open') return
+      if (isTypingTarget(document.activeElement)) return
+
+      const { actions, stream: liveStream } = liveControlsRef.current
+      const path = controlPathRef.current
+      const sig = `${path}|${actions.join(',')}`
+
+      if (reason === 'edge') {
+        if (sig === lastCtrlSigRef.current) return
+        // Don't announce idle when the dialog first opens / path toggles with no keys.
+        if (!lastCtrlSigRef.current && actions.length === 0) {
+          lastCtrlSigRef.current = sig
+          return
         }
+      } else if (actions.length === 0) {
+        return
       }
-    } catch (e) {
-      setTransmitting(false)
-      setCtrlError(e instanceof Error ? e.message : 'Failed to send control frame')
+
+      const prevSig = lastCtrlSigRef.current
+      lastCtrlSigRef.current = sig
+
+      try {
+        sendCtrlFrame(channel, {
+          path,
+          actions,
+          stream: liveStream,
+          ts: Date.now(),
+        })
+        setCtrlError(null)
+        setTransmitting(actions.length > 0)
+        if (reason === 'edge') {
+          if (actions.length > 0) {
+            setLastTxNote(actions.join(' + '))
+            addLog(`[ctrl/${path}] ${actions.join(' + ')} · ${liveStream || '—'}`)
+          } else {
+            setTransmitting(false)
+            if (prevSig.includes('|') && !prevSig.endsWith('|')) {
+              addLog(`[ctrl/${path}] release`)
+            }
+          }
+        }
+      } catch (e) {
+        setTransmitting(false)
+        setCtrlError(e instanceof Error ? e.message : 'Failed to send control frame')
+      }
+    }
+
+    if (activeActions.length === 0) {
+      // Release immediately so the receiver clears stick state.
+      flush('edge')
+    } else {
+      // Wait briefly so W+D in the same gesture merge into one frame.
+      chordTimer = window.setTimeout(() => flush('edge'), CHORD_MS)
+      beatTimer = window.setInterval(() => flush('beat'), HEARTBEAT_MS)
+    }
+
+    return () => {
+      if (chordTimer != null) window.clearTimeout(chordTimer)
+      if (beatTimer != null) window.clearInterval(beatTimer)
     }
   }, [
     open,
     data,
     settingsOpen,
-    activeActions,
-    stream,
+    actionsKey,
     controlPath,
     getDataChannel,
     webRtcState,
     addLog,
+    activeActions.length,
   ])
 
   // Listen for control acks on the data channel
@@ -335,7 +376,7 @@ export function ConnectionDetailDialog({
       if (ack.error) {
         addLog(`[ctrl ack] ${ack.path}: ${ack.error}`)
       } else if (ack.actions?.length) {
-        addLog(`[ctrl ack] ${ack.path} ok · ${ack.actions.join('+')}`)
+        addLog(`[ctrl ack] ${ack.path} ok · ${ack.actions.join(' + ')}`)
       }
     }
     channel.addEventListener('message', onMessage)

@@ -94,7 +94,7 @@ export function ConnectionControlHud({
       <div className="rdi-hud-header">
         <div className="rdi-hud-title">
           <strong>Control link</strong>
-          <span>{connected ? 'Channel live — press binds to transmit' : 'Waiting for WebRTC channel…'}</span>
+          <span>{connected ? 'Channel live — hold binds (chords OK)' : 'Waiting for WebRTC channel…'}</span>
         </div>
         <div className={`rdi-hud-armed ${armed ? '' : 'is-off'}`}>
           <span className="dot" />

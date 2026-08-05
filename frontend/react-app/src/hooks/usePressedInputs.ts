@@ -44,25 +44,47 @@ function collectGamepadTokens(out: Set<string>): { index: number; id: string }[]
   return connected
 }
 
+function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false
+  for (const v of a) if (!b.has(v)) return false
+  return true
+}
+
 export function usePressedInputs(enabled = true): PressedInputsState {
   const keysRef = useRef<Set<string>>(new Set())
   const [pressed, setPressed] = useState<ReadonlySet<string>>(() => new Set())
   const [gamepads, setGamepads] = useState<{ index: number; id: string }[]>([])
   const rafRef = useRef<number>(0)
+  const lastStreamRef = useRef('')
+  const lastGpSigRef = useRef('')
 
   const publish = useCallback(() => {
     const next = new Set(keysRef.current)
     const gp = collectGamepadTokens(next)
-    setGamepads(gp)
-    setPressed(next)
+    const stream = sortedStream(next)
+    const gpSig = gp.map((g) => `${g.index}:${g.id}`).join('|')
+
+    if (gpSig !== lastGpSigRef.current) {
+      lastGpSigRef.current = gpSig
+      setGamepads(gp)
+    }
+
+    // Only re-render when the held set actually changes (avoids RAF spam).
+    if (stream === lastStreamRef.current) return
+    lastStreamRef.current = stream
+    setPressed((prev) => (sameSet(prev, next) ? prev : next))
   }, [])
 
   useEffect(() => {
-    if (!enabled) return
+    if (!enabled) {
+      keysRef.current.clear()
+      lastStreamRef.current = ''
+      setPressed(new Set())
+      return
+    }
 
     const onDown = (e: KeyboardEvent) => {
       if (e.repeat) return
-      // Ignore pure modifier-only as primary stream noise when composing binds
       keysRef.current.add(e.code)
       publish()
     }
@@ -75,8 +97,9 @@ export function usePressedInputs(enabled = true): PressedInputsState {
       publish()
     }
 
-    window.addEventListener('keydown', onDown)
-    window.addEventListener('keyup', onUp)
+    // Capture so Dialog / buttons don't swallow chords before we see them.
+    window.addEventListener('keydown', onDown, true)
+    window.addEventListener('keyup', onUp, true)
     window.addEventListener('blur', onBlur)
 
     const onGpConnect = () => publish()
@@ -91,8 +114,8 @@ export function usePressedInputs(enabled = true): PressedInputsState {
     rafRef.current = requestAnimationFrame(tick)
 
     return () => {
-      window.removeEventListener('keydown', onDown)
-      window.removeEventListener('keyup', onUp)
+      window.removeEventListener('keydown', onDown, true)
+      window.removeEventListener('keyup', onUp, true)
       window.removeEventListener('blur', onBlur)
       window.removeEventListener('gamepadconnected', onGpConnect)
       window.removeEventListener('gamepaddisconnected', onGpDisconnect)
