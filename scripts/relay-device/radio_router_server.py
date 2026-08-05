@@ -181,6 +181,29 @@ class RadioRouterServer:
                 return {"ok": True, "pong": pong}
             except Exception as e:
                 return {"ok": False, "error": str(e) or e.__class__.__name__}
+        if cmd == "ctrl":
+            if self._bridge is None or not self._bridge.enabled:
+                return {"ok": False, "error": "radio bridge not ready"}
+            hop_relay = str(req.get("hop_relay") or "relay")
+            target_sysid = req.get("target_sysid")
+            try:
+                target = int(target_sysid) if target_sysid is not None else None
+            except (TypeError, ValueError):
+                target = None
+            actions = req.get("actions") or []
+            if not isinstance(actions, list):
+                actions = []
+            stream = str(req.get("stream") or "")
+            try:
+                msg = self._bridge.send_ctrl(
+                    [str(a) for a in actions],
+                    stream,
+                    hop_relay=hop_relay,
+                    target_sysid=target,
+                )
+                return {"ok": True, "ctrl": msg}
+            except Exception as e:
+                return {"ok": False, "error": str(e) or e.__class__.__name__}
         return {"ok": False, "error": f"unknown cmd: {cmd or '(empty)'}"}
 
 

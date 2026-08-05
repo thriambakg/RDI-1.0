@@ -1,0 +1,295 @@
+.rdi-hud {
+  --hud-bg: #050a12;
+  --hud-panel: rgba(8, 16, 28, 0.92);
+  --hud-line: rgba(56, 189, 248, 0.35);
+  --hud-cyan: #38bdf8;
+  --hud-amber: #fbbf24;
+  --hud-green: #4ade80;
+  --hud-dim: #64748b;
+  --hud-text: #e2e8f0;
+  position: relative;
+  margin-bottom: 1rem;
+  padding: 1rem 1rem 1.1rem;
+  border: 1px solid var(--hud-line);
+  border-radius: 2px;
+  background:
+    linear-gradient(135deg, rgba(56, 189, 248, 0.06), transparent 42%),
+    linear-gradient(180deg, #071018 0%, var(--hud-bg) 100%);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.8);
+  overflow: hidden;
+  font-family: 'Segoe UI', 'IBM Plex Sans', system-ui, sans-serif;
+}
+
+.rdi-hud::before {
+  content: '';
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(56, 189, 248, 0.02) 2px,
+    rgba(56, 189, 248, 0.02) 4px
+  );
+  opacity: 0.7;
+}
+
+.rdi-hud-header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+
+.rdi-hud-title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.rdi-hud-title strong {
+  font-size: 0.72rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--hud-cyan);
+}
+
+.rdi-hud-title span {
+  font-size: 0.75rem;
+  color: var(--hud-dim);
+}
+
+.rdi-hud-armed {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid rgba(74, 222, 128, 0.45);
+  color: var(--hud-green);
+  font-size: 0.65rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.rdi-hud-armed.is-off {
+  border-color: rgba(100, 116, 139, 0.5);
+  color: var(--hud-dim);
+}
+
+.rdi-hud-armed .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+  animation: rdi-hud-pulse 1.4s ease-in-out infinite;
+}
+
+.rdi-hud-armed.is-off .dot {
+  animation: none;
+  box-shadow: none;
+  opacity: 0.5;
+}
+
+@keyframes rdi-hud-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.rdi-hud-path {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  margin-bottom: 0.9rem;
+  padding: 0.25rem;
+  background: rgba(2, 6, 23, 0.85);
+  border: 1px solid rgba(51, 65, 85, 0.9);
+}
+
+.rdi-hud-path button {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--hud-dim);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 0.55rem 0.4rem;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.rdi-hud-path button:hover {
+  color: var(--hud-text);
+}
+
+.rdi-hud-path button.is-active {
+  color: #020617;
+  background: var(--hud-cyan);
+  border-color: var(--hud-cyan);
+  box-shadow: 0 0 18px rgba(56, 189, 248, 0.35);
+  font-weight: 700;
+}
+
+.rdi-hud-path button.is-active.is-radio {
+  background: var(--hud-amber);
+  border-color: var(--hud-amber);
+  box-shadow: 0 0 18px rgba(251, 191, 36, 0.3);
+}
+
+.rdi-hud-body {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(140px, 0.9fr) 1.1fr;
+  gap: 0.9rem;
+}
+
+@media (max-width: 560px) {
+  .rdi-hud-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.rdi-hud-pad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 0.35rem;
+  aspect-ratio: 1;
+  max-width: 168px;
+}
+
+.rdi-hud-key {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(51, 65, 85, 0.95);
+  background: rgba(15, 23, 42, 0.75);
+  color: #94a3b8;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  min-height: 40px;
+  transition: background 80ms ease, color 80ms ease, border-color 80ms ease, transform 80ms ease,
+    box-shadow 80ms ease;
+}
+
+.rdi-hud-key.is-empty {
+  visibility: hidden;
+}
+
+.rdi-hud-key.is-lit {
+  color: #020617;
+  background: var(--hud-cyan);
+  border-color: var(--hud-cyan);
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.45);
+  transform: translateY(1px);
+}
+
+.rdi-hud-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.rdi-hud-stream {
+  flex: 1;
+  min-height: 72px;
+  padding: 0.65rem 0.75rem;
+  background: #020617;
+  border: 1px solid #1e293b;
+  font-family: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, monospace;
+  font-size: 0.85rem;
+  color: var(--hud-green);
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.rdi-hud-stream.is-idle {
+  color: var(--hud-dim);
+}
+
+.rdi-hud-stream-label {
+  font-size: 0.65rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--hud-dim);
+  margin-bottom: 0.35rem;
+}
+
+.rdi-hud-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  min-height: 28px;
+}
+
+.rdi-hud-chip {
+  padding: 0.18rem 0.45rem;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  color: var(--hud-cyan);
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.rdi-hud-chip.is-radio {
+  border-color: rgba(251, 191, 36, 0.45);
+  color: var(--hud-amber);
+  background: rgba(251, 191, 36, 0.08);
+}
+
+.rdi-hud-meta {
+  font-size: 0.7rem;
+  color: var(--hud-dim);
+  line-height: 1.35;
+}
+
+.rdi-hud-meta strong {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.rdi-hud-tx {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.15rem;
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--hud-dim);
+}
+
+.rdi-hud-tx.is-live {
+  color: var(--hud-green);
+}
+
+.rdi-hud-extra {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+}
+
+.rdi-hud-extra .rdi-hud-key {
+  min-width: 42px;
+  min-height: 34px;
+  padding: 0 0.45rem;
+}

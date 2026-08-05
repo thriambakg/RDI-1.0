@@ -16,7 +16,7 @@ from typing import Any
 # TUNNEL exists only in MAVLink 2 dialects; must be set before pymavlink import.
 os.environ["MAVLINK20"] = "1"
 
-from radio_hop_protocol import decode_line, encode_line, make_ping
+from radio_hop_protocol import decode_line, encode_line, make_ctrl, make_ping
 
 LOG = logging.getLogger("rdi.radio_mavlink")
 
@@ -222,3 +222,26 @@ class RadioMavlinkBridge:
             ) from e
         finally:
             self._pending.pop(ping_id, None)
+
+    def send_ctrl(
+        self,
+        actions: list[str],
+        stream: str = "",
+        *,
+        hop_relay: str = "relay",
+        target_sysid: int | None = None,
+    ) -> dict[str, Any]:
+        """Fire-and-forget control frame over TUNNEL (no wait for ack)."""
+        if not self.enabled:
+            raise RuntimeError("mavlink bridge not started")
+        msg = make_ctrl(hop_relay, actions, stream, target_sysid=target_sysid)
+        target = int(target_sysid) if target_sysid is not None else 0
+        nbytes = self._send_tunnel(msg, target_system=target)
+        LOG.info(
+            "mavlink tunnel ctrl tx id=%s actions=%s bytes=%d target_sysid=%s",
+            msg.get("id"),
+            ",".join(actions) or "(none)",
+            nbytes,
+            target_sysid if target_sysid is not None else "broadcast",
+        )
+        return msg

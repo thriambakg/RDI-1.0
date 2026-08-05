@@ -55,6 +55,14 @@ def _run_raw(port: str, baud: int, sysid: int | None) -> None:
                     if not msg:
                         print(f"RX (ignored): {line!r}")
                         continue
+                    if msg.get("type") == "ctrl":
+                        n += 1
+                        acts = msg.get("actions") or []
+                        print(
+                            f"\n[{n}] CTRL id={msg.get('id')} actions={acts} "
+                            f"stream={msg.get('stream') or '—'} sysid={msg.get('target_sysid')}"
+                        )
+                        continue
                     if msg.get("type") != "ping":
                         print(f"RX non-ping: {msg}")
                         continue
@@ -123,6 +131,14 @@ def _run_mavlink(port: str, baud: int, sysid: int | None) -> None:
             decoded = _unpack_payload(bytes(msg.payload), int(msg.payload_length))
             if not decoded:
                 print(f"RX TUNNEL (ignored) len={msg.payload_length}")
+                continue
+            if decoded.get("type") == "ctrl":
+                n += 1
+                acts = decoded.get("actions") or []
+                print(
+                    f"\n[{n}] CTRL TUNNEL id={decoded.get('id')} actions={acts} "
+                    f"stream={decoded.get('stream') or '—'} sysid={decoded.get('target_sysid')}"
+                )
                 continue
             if decoded.get("type") != "ping":
                 print(f"RX TUNNEL non-ping: {decoded.get('type')}")

@@ -73,6 +73,30 @@ class RadioRouterClient:
             raise RuntimeError("radio router returned no pong payload")
         return pong
 
+    async def send_ctrl(
+        self,
+        actions: list[str],
+        stream: str = "",
+        *,
+        hop_relay: str = "relay",
+        target_sysid: int | None = None,
+    ) -> dict[str, Any]:
+        if not self._enabled:
+            raise RuntimeError("radio router client not connected")
+        req: dict[str, Any] = {
+            "cmd": "ctrl",
+            "hop_relay": hop_relay,
+            "actions": list(actions),
+            "stream": stream,
+        }
+        if target_sysid is not None:
+            req["target_sysid"] = int(target_sysid)
+        resp = await self._request(req, timeout=3.0)
+        if not resp.get("ok"):
+            raise RuntimeError(str(resp.get("error") or "radio router ctrl failed"))
+        ctrl = resp.get("ctrl")
+        return ctrl if isinstance(ctrl, dict) else {}
+
     async def _request(self, req: dict[str, Any], timeout: float) -> dict[str, Any]:
         async def _once() -> dict[str, Any]:
             reader, writer = await asyncio.open_connection(self.host, self.port)

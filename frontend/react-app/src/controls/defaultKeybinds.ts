@@ -81,6 +81,38 @@ export function formatBinding(b: ControlBinding): string {
   return formatGamepadControl(b.control)
 }
 
+/** True when a physical input token set satisfies a binding. */
+export function bindingMatches(pressed: ReadonlySet<string>, binding: ControlBinding): boolean {
+  if (binding.device === 'keyboard') return pressed.has(binding.code)
+  if (binding.control.startsWith('axis:')) {
+    const parts = binding.control.split(':')
+    const idx = parts[1]
+    const dir = parts[2]
+    if (!idx || (dir !== '+' && dir !== '-')) return false
+    for (const token of pressed) {
+      if (token.startsWith('GP') && token.includes(`-AX${idx}${dir}`)) return true
+    }
+    return false
+  }
+  for (const token of pressed) {
+    if (token.startsWith('GP') && token.endsWith(`-BTN${binding.control}`)) return true
+  }
+  return false
+}
+
+/** Logical actions currently held given keybinds + live pressed set. */
+export function resolveActiveActions(
+  pressed: ReadonlySet<string>,
+  keybinds: ControlKeybinds,
+): ControlActionId[] {
+  const out: ControlActionId[] = []
+  for (const action of CONTROL_ACTIONS) {
+    const binding = keybinds[action.id]
+    if (binding && bindingMatches(pressed, binding)) out.push(action.id)
+  }
+  return out
+}
+
 /** Human labels for standard gamepad button indices (Xbox naming; DualSense maps similarly). */
 const GP_BUTTON_LABELS: Record<number, string> = {
   0: 'A / ✕',

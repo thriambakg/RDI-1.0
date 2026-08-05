@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Any
 
-from radio_hop_protocol import decode_line, encode_line, make_ping
+from radio_hop_protocol import decode_line, encode_line, make_ctrl, make_ping
 
 LOG = logging.getLogger("rdi.radio_bridge")
 
@@ -131,3 +131,29 @@ class RadioSerialBridge:
             return pong
         finally:
             self._pending.pop(ping_id, None)
+
+    def send_ctrl(
+        self,
+        actions: list[str],
+        stream: str = "",
+        *,
+        hop_relay: str = "relay",
+        target_sysid: int | None = None,
+    ) -> dict[str, Any]:
+        """Fire-and-forget control frame over raw serial JSON."""
+        if not self.enabled:
+            raise RuntimeError("radio bridge not started")
+        msg = make_ctrl(hop_relay, actions, stream, target_sysid=target_sysid)
+        data = encode_line(msg)
+        with self._lock:
+            assert self._ser is not None
+            self._ser.write(data)
+            self._ser.flush()
+        LOG.info(
+            "radio ctrl tx id=%s actions=%s bytes=%d target_sysid=%s",
+            msg.get("id"),
+            ",".join(actions) or "(none)",
+            len(data),
+            target_sysid if target_sysid is not None else "any",
+        )
+        return msg

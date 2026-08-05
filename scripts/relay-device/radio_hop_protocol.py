@@ -51,6 +51,29 @@ def make_pong(ping_msg: dict[str, Any], hop: str) -> dict[str, Any]:
     return msg
 
 
+def make_ctrl(
+    hop: str,
+    actions: list[str],
+    stream: str = "",
+    *,
+    target_sysid: int | None = None,
+    ctrl_id: str | None = None,
+) -> dict[str, Any]:
+    """Fire-and-forget control frame for radio path (preliminary / simulation)."""
+    msg: dict[str, Any] = {
+        "v": PROTOCOL_VERSION,
+        "type": "ctrl",
+        "id": ctrl_id or new_ping_id(),
+        "hop": hop,
+        "ts": time.time(),
+        "actions": list(actions or []),
+        "stream": stream or "",
+    }
+    if target_sysid is not None:
+        msg["target_sysid"] = int(target_sysid)
+    return msg
+
+
 def encode_line(msg: dict[str, Any]) -> bytes:
     return (json.dumps(msg, separators=(",", ":")) + "\n").encode("utf-8")
 
@@ -68,7 +91,7 @@ def decode_line(line: bytes | str) -> dict[str, Any] | None:
         return None
     if not isinstance(msg, dict) or msg.get("v") != PROTOCOL_VERSION:
         return None
-    if msg.get("type") not in ("ping", "pong"):
+    if msg.get("type") not in ("ping", "pong", "ctrl"):
         return None
     return msg
 

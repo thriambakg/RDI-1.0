@@ -35,6 +35,7 @@ LOG = logging.getLogger("rdi.kvs_master")
 
 PING_BYTES = b"PING"
 PING_RADIO_BYTES = b"PINGR"
+CTRL_PREFIX = b"CTRL"
 # Exit so rdi-relay-daemon can respawn with fresh STS creds from active-sessions.
 SIGNALING_AUTH_EXIT_CODE = 2
 SIGNALING_AUTH_MAX_RETRIES = int(os.environ.get("RDI_SIGNALING_AUTH_MAX_RETRIES", "3"))
@@ -353,6 +354,68 @@ async def run_master(cfg: dict) -> None:
             )
             channel.send(PONG_BYTES)
 
+    async def _handle_ctrl(channel, cid: str, payload: dict) -> None:
+        """Preliminary control frames: relay log/ack, or fire-and-forget over radio."""
+        path = str(payload.get("path") or "relay").strip().lower()
+        if path not in ("relay", "radio"):
+            path = "relay"
+        actions = payload.get("actions") or []
+        if not isinstance(actions, list):
+            actions = []
+        actions_s = [str(a) for a in actions]
+        stream = str(payload.get("stream") or "")
+        delivered = True
+        err: str | None = None
+
+        LOG.info(
+            "ctrl rx session_id=%s viewer=%s path=%s actions=%s stream=%s",
+            session_id,
+            cid,
+            path,
+            ",".join(actions_s) or "(none)",
+            stream or "—",
+        )
+
+        if path == "radio":
+            if link_mode == "none":
+                delivered = False
+                err = "link_mode=none (radio not configured for this connection)"
+            elif radio is None or not radio.enabled:
+                delivered = False
+                err = "radio path not available (shared router / bridge)"
+            else:
+                try:
+                    send = getattr(radio, "send_ctrl", None)
+                    if send is None:
+                        delivered = False
+                        err = "radio client lacks send_ctrl"
+                    else:
+                        result = send(
+                            actions_s,
+                            stream,
+                            hop_relay="relay",
+                            target_sysid=target_sysid,
+                        )
+                        if asyncio.iscoroutine(result):
+                            await result
+                except Exception as e:
+                    delivered = False
+                    err = str(e) or e.__class__.__name__
+                    LOG.warning("ctrl radio tx failed session_id=%s: %s", session_id, err)
+
+        ack = {
+            "type": "rdi_ctrl_ack",
+            "path": path,
+            "actions": actions_s,
+            "delivered": delivered,
+        }
+        if err:
+            ack["error"] = err
+        try:
+            channel.send(json.dumps(ack).encode("utf-8"))
+        except Exception as e:
+            LOG.warning("ctrl ack send failed session_id=%s: %s", session_id, e)
+
     async def _apply_ice(pc: RTCPeerConnection, payload: dict) -> None:
         candidate = candidate_from_sdp(payload["candidate"])
         candidate.sdpMid = payload.get("sdpMid")
@@ -432,6 +495,25 @@ async def run_master(cfg: dict) -> None:
                                                 return
                                             if message == PING_RADIO_BYTES:
                                                 loop.create_task(_handle_ping(channel, cid, radio_path=True))
+                                                return
+                                            if message.startswith(CTRL_PREFIX) and len(message) > len(CTRL_PREFIX):
+                                                try:
+                                                    payload = json.loads(
+                                                        message[len(CTRL_PREFIX) :].decode("utf-8")
+                                                    )
+                                                except Exception as e:
+                                                    LOG.warning("ctrl parse failed session_id=%s: %s", session_id, e)
+                                                    return
+                                                if isinstance(payload, dict):
+                                                    # Legacy takeoff/land used {cmd}; new frames use type rdi_ctrl
+                                                    if payload.get("type") == "rdi_ctrl" or "actions" in payload or "path" in payload:
+                                                        loop.create_task(_handle_ctrl(channel, cid, payload))
+                                                    else:
+                                                        LOG.info(
+                                                            "legacy CTRL ignored on webrtc session_id=%s payload=%s",
+                                                            session_id,
+                                                            payload,
+                                                        )
                                                 return
                                             LOG.debug("datachannel rx %d bytes", len(message))
                                         else:

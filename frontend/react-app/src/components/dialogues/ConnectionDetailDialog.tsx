@@ -15,17 +15,33 @@ import {
   Popover,
 } from '@mui/material'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getSession, updateSession, fetchWebRtcBundleForSession } from '../../services/sessionApi'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import { useSessionWebRtc } from '../../contexts/SessionWebRtcContext'
 import { usesWebSocketTransport, WEBRTC_PI_READY_MS } from '../../utils/sessionTransport'
 import { pingDataChannel, type PingMode, PING_BYTES, PONG_BYTES } from '../../utils/rdiPing'
+import { parseCtrlAck, sendCtrlFrame, type ControlPath } from '../../utils/rdiControl'
+import { usePressedInputs } from '../../hooks/usePressedInputs'
+import {
+  DEFAULT_KEYBINDS,
+  mergeKeybinds,
+  resolveActiveActions,
+  type ControlKeybinds,
+} from '../../controls/defaultKeybinds'
+import { getProfile, type RelayRef } from '../../services/profileApi'
 import type { WebRtcViewerBundle } from '../../services/sessionApi'
-import type { RelayRef } from '../../services/profileApi'
+import { ConnectionControlHud } from './ConnectionControlHud'
 
 const RLOG_PREFIX = new Uint8Array([0x52, 0x4c, 0x4f, 0x47]) // "RLOG"
-const CTRL_PREFIX = new TextEncoder().encode('CTRL')
+const LEGACY_CTRL_PREFIX = new TextEncoder().encode('CTRL')
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  const tag = target.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+  return target.isContentEditable
+}
 
 const TTL_OPTIONS = [
   { value: 0, label: 'No TTL (indefinite)' },
@@ -47,9 +63,9 @@ function isRlogMessage(arr: Uint8Array): boolean {
 function sendDroneCommand(ws: WebSocket, cmd: string, alt?: number): void {
   const payload = alt != null ? { cmd, alt } : { cmd }
   const json = JSON.stringify(payload)
-  const full = new Uint8Array(CTRL_PREFIX.length + json.length)
-  full.set(CTRL_PREFIX)
-  full.set(new TextEncoder().encode(json), CTRL_PREFIX.length)
+  const full = new Uint8Array(LEGACY_CTRL_PREFIX.length + json.length)
+  full.set(LEGACY_CTRL_PREFIX)
+  full.set(new TextEncoder().encode(json), LEGACY_CTRL_PREFIX.length)
   ws.send(full.buffer)
 }
 
@@ -102,6 +118,10 @@ export function ConnectionDetailDialog({
   const [pingRunning, setPingRunning] = useState(false)
   const [pingError, setPingError] = useState<string | null>(null)
   const [ctrlError, setCtrlError] = useState<string | null>(null)
+  const [controlPath, setControlPath] = useState<ControlPath>('relay')
+  const [keybinds, setKeybinds] = useState<ControlKeybinds>(DEFAULT_KEYBINDS)
+  const [lastTxNote, setLastTxNote] = useState<string | null>(null)
+  const [transmitting, setTransmitting] = useState(false)
 
   const { getWs, openSession, connectionState, connectionError } = useSessionWebSocket()
   const {
@@ -116,6 +136,13 @@ export function ConnectionDetailDialog({
   }, [])
 
   const prevSessionStatusRef = useRef<string | undefined>(undefined)
+  const lastCtrlSigRef = useRef<string>('')
+  const controlPathRef = useRef<ControlPath>('relay')
+  controlPathRef.current = controlPath
+
+  const listenInputs = open && !settingsOpen
+  const { pressed, stream } = usePressedInputs(listenInputs)
+  const activeActions = useMemo(() => resolveActiveActions(pressed, keybinds), [pressed, keybinds])
 
   const sendCommand = useCallback(
     (cmd: 'takeoff' | 'land', alt?: number) => {
@@ -152,6 +179,9 @@ export function ConnectionDetailDialog({
       setPingError(null)
       setCtrlError(null)
       setSettingsAnchor(null)
+      setLastTxNote(null)
+      setTransmitting(false)
+      lastCtrlSigRef.current = ''
       return
     }
     setLoading(true)
@@ -168,6 +198,22 @@ export function ConnectionDetailDialog({
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'))
       .finally(() => setLoading(false))
   }, [open, sessionId])
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    getProfile()
+      .then((profile) => {
+        if (cancelled) return
+        setKeybinds(mergeKeybinds(profile.settings?.controls?.keybinds as Partial<ControlKeybinds> | undefined))
+      })
+      .catch(() => {
+        if (!cancelled) setKeybinds(DEFAULT_KEYBINDS)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open || !sessionId || !sessionStatus) return
@@ -199,6 +245,102 @@ export function ConnectionDetailDialog({
     if (!usesWebSocketTransport(data)) return
     openSession(sessionId, data.endpoint)
   }, [open, sessionId, data?.endpoint, data?.status, data?.transport, openSession])
+
+  // Prevent browser shortcuts / scroll while flying the HUD
+  useEffect(() => {
+    if (!open || settingsOpen) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target)) return
+      // Block page scroll / shortcuts for held flight binds
+      const codes = new Set(
+        Object.values(keybinds)
+          .filter((b) => b.device === 'keyboard')
+          .map((b) => (b.device === 'keyboard' ? b.code : '')),
+      )
+      if (codes.has(e.code)) e.preventDefault()
+    }
+    window.addEventListener('keydown', onKeyDown, { capture: true })
+    return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
+  }, [open, settingsOpen, keybinds])
+
+  // Stream control frames over WebRTC when actions change
+  useEffect(() => {
+    if (!open || !data?.session_id || settingsOpen) return
+    if (usesWebSocketTransport(data)) return
+
+    const isWebRtcConnected = webRtcState(data.session_id) === 'connected'
+    if (!isWebRtcConnected) {
+      setTransmitting(false)
+      return
+    }
+
+    const channel = getDataChannel(data.session_id)
+    if (!channel || channel.readyState !== 'open') {
+      setTransmitting(false)
+      return
+    }
+
+    if (isTypingTarget(document.activeElement)) return
+
+    const path = controlPathRef.current
+    const actionKey = activeActions.join(',')
+    const sig = `${path}|${actionKey}`
+    if (sig === lastCtrlSigRef.current) return
+    const prevSig = lastCtrlSigRef.current
+    lastCtrlSigRef.current = sig
+
+    try {
+      sendCtrlFrame(channel, {
+        path,
+        actions: activeActions,
+        stream,
+        ts: Date.now(),
+      })
+      setCtrlError(null)
+      setTransmitting(activeActions.length > 0)
+      if (activeActions.length > 0) {
+        setLastTxNote(activeActions.join(', '))
+        addLog(`[ctrl/${path}] ${activeActions.join('+')} · ${stream || '—'}`)
+      } else {
+        setTransmitting(false)
+        if (prevSig.includes('|') && !prevSig.endsWith('|')) {
+          addLog(`[ctrl/${path}] release`)
+        }
+      }
+    } catch (e) {
+      setTransmitting(false)
+      setCtrlError(e instanceof Error ? e.message : 'Failed to send control frame')
+    }
+  }, [
+    open,
+    data,
+    settingsOpen,
+    activeActions,
+    stream,
+    controlPath,
+    getDataChannel,
+    webRtcState,
+    addLog,
+  ])
+
+  // Listen for control acks on the data channel
+  useEffect(() => {
+    if (!open || !data?.session_id || usesWebSocketTransport(data)) return
+    const channel = getDataChannel(data.session_id)
+    if (!channel) return
+
+    const onMessage = (event: MessageEvent) => {
+      const ack = parseCtrlAck(event.data)
+      if (!ack) return
+      if (ack.error) {
+        addLog(`[ctrl ack] ${ack.path}: ${ack.error}`)
+      } else if (ack.actions?.length) {
+        addLog(`[ctrl ack] ${ack.path} ok · ${ack.actions.join('+')}`)
+      }
+    }
+    channel.addEventListener('message', onMessage)
+    return () => channel.removeEventListener('message', onMessage)
+  }, [open, data, getDataChannel, webRtcState(data?.session_id ?? ''), addLog])
 
   const handleSaveSettings = useCallback(async () => {
     if (!sessionId || !data) return
@@ -423,24 +565,28 @@ export function ConnectionDetailDialog({
     <Dialog
       open={open}
       onClose={onClose}
-      maxWidth="sm"
+      maxWidth="md"
       fullWidth
       PaperProps={{
         sx: {
-          backgroundColor: '#1e293b',
-          border: '1px solid #334155',
-          borderRadius: '0.5rem',
+          backgroundColor: '#0b1220',
+          border: '1px solid #1e293b',
+          borderRadius: '2px',
+          backgroundImage:
+            'radial-gradient(ellipse at top, rgba(56,189,248,0.08), transparent 55%), linear-gradient(#0b1220, #050a12)',
         },
       }}
       BackdropProps={{
-        sx: { backgroundColor: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' },
+        sx: { backgroundColor: 'rgba(0, 0, 0, 0.7)', backdropFilter: 'blur(6px)' },
       }}
     >
       <DialogTitle
         sx={{
           color: '#ffffff',
           fontWeight: 600,
+          letterSpacing: '0.12em',
           textTransform: 'uppercase',
+          fontSize: '0.85rem',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -582,63 +728,61 @@ export function ConnectionDetailDialog({
           <>
             <Box
               sx={{
-                p: 2,
-                backgroundColor: '#0f172a',
-                border: '1px solid #334155',
-                borderRadius: '0.375rem',
+                p: 1.5,
+                backgroundColor: 'rgba(2, 6, 23, 0.7)',
+                border: '1px solid #1e293b',
+                borderRadius: '2px',
                 mb: 2,
               }}
             >
-              <Typography sx={{ fontSize: '0.875rem', mb: 1 }}>
-                <strong>Name:</strong> {editName || name || data.drone_id}
+              <Typography sx={{ fontSize: '0.8125rem', mb: 0.75, color: '#cbd5e1' }}>
+                <strong style={{ color: '#94a3b8' }}>Name:</strong> {editName || name || data.drone_id}
               </Typography>
-              <Typography sx={{ fontSize: '0.875rem', mb: 1 }}>
-                <strong>Session ID:</strong> {data.session_id}
+              <Typography sx={{ fontSize: '0.75rem', mb: 0.5, color: '#64748b', fontFamily: 'ui-monospace, monospace' }}>
+                {data.session_id}
               </Typography>
-              <Typography sx={{ fontSize: '0.875rem', mb: 1 }}>
-                <strong>Drone ID:</strong> {data.drone_id}
-              </Typography>
-              <Typography sx={{ fontSize: '0.875rem', mb: 1 }}>
-                <strong>Status:</strong> {data.status}
-              </Typography>
-              {data.relay_id && (() => {
-                const relay = relays.find((r) => r.relay_id === data.relay_id)
-                return relay ? (
-                  <Typography sx={{ fontSize: '0.875rem', mb: 1 }}>
-                    <strong>Relay:</strong> {relay.name}
-                  </Typography>
-                ) : (
-                  <Typography sx={{ fontSize: '0.875rem', mb: 1 }}>
-                    <strong>Relay ID:</strong> {data.relay_id}
-                  </Typography>
-                )
-              })()}
-              <Typography sx={{ fontSize: '0.875rem', color: '#94a3b8' }}>
-                <strong>Endpoint:</strong> {data.endpoint}
+              <Typography sx={{ fontSize: '0.8125rem', mb: 0.5 }}>
+                <strong style={{ color: '#94a3b8' }}>Status:</strong> {data.status}
+                {data.relay_id && (() => {
+                  const relay = relays.find((r) => r.relay_id === data.relay_id)
+                  return (
+                    <>
+                      {' · '}
+                      <strong style={{ color: '#94a3b8' }}>Relay:</strong>{' '}
+                      {relay?.name ?? data.relay_id}
+                    </>
+                  )
+                })()}
               </Typography>
               {(data.mavlink_host || data.mavlink_port != null) && (
-                <>
-                  <Typography sx={{ fontSize: '0.875rem', mt: 1, color: '#22c55e' }}>
-                    <strong>MAVLink target:</strong>{' '}
-                    {data.mavlink_host ?? '127.0.0.1'}:{data.mavlink_port ?? '—'}
-                  </Typography>
-                  {(data.mavlink_host === '127.0.0.1' || !data.mavlink_host) && (
-                    <Typography sx={{ fontSize: '0.75rem', mt: 0.5, color: '#94a3b8' }}>
-                      PX4 must run on the same host as the MAVLink agent (e.g. relay or edge compute). Local PX4 on your laptop
-                      will not receive commands — run PX4 SITL on that host instead.
-                    </Typography>
-                  )}
-                </>
-              )}
-              {data.carrier_ip && (
-                <Typography sx={{ fontSize: '0.875rem', mt: 0.5, color: '#94a3b8' }}>
-                  <strong>Carrier / edge IP:</strong> {data.carrier_ip}
+                <Typography sx={{ fontSize: '0.75rem', mt: 0.5, color: '#4ade80' }}>
+                  MAVLink {data.mavlink_host ?? '127.0.0.1'}:{data.mavlink_port ?? '—'}
                 </Typography>
               )}
             </Box>
 
-            <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 1 }}>
-              Test connection
+            {isWebRtc && (
+              <ConnectionControlHud
+                path={controlPath}
+                onPathChange={setControlPath}
+                stream={stream}
+                activeActions={activeActions}
+                keybinds={keybinds}
+                armed={isConnected && data.status === 'active'}
+                transmitting={transmitting}
+                lastTxNote={lastTxNote}
+                connected={isConnected}
+              />
+            )}
+            {ctrlError && (
+              <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mb: 1 }}>{ctrlError}</Typography>
+            )}
+
+            <Typography
+              variant="subtitle2"
+              sx={{ color: '#64748b', mb: 1, letterSpacing: '0.14em', textTransform: 'uppercase', fontSize: '0.65rem' }}
+            >
+              Link test
             </Typography>
             <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
               <Button
@@ -648,10 +792,11 @@ export function ConnectionDetailDialog({
                 disabled={pingRunning || (isWebRtc && isConnecting)}
                 disableRipple
                 sx={{
-                  color: '#3b82f6',
-                  borderColor: '#475569',
+                  color: '#38bdf8',
+                  borderColor: '#334155',
+                  borderRadius: '2px',
                   textTransform: 'none',
-                  '&:hover': { borderColor: '#3b82f6' },
+                  '&:hover': { borderColor: '#38bdf8' },
                 }}
               >
                 {pingRunning ? 'Pinging…' : 'Ping relay'}
@@ -663,78 +808,74 @@ export function ConnectionDetailDialog({
                 disabled={pingRunning || (isWebRtc && isConnecting) || !isWebRtc}
                 disableRipple
                 sx={{
-                  color: '#22c55e',
-                  borderColor: '#475569',
+                  color: '#fbbf24',
+                  borderColor: '#334155',
+                  borderRadius: '2px',
                   textTransform: 'none',
-                  '&:hover': { borderColor: '#22c55e' },
+                  '&:hover': { borderColor: '#fbbf24' },
                 }}
               >
                 {pingRunning ? 'Pinging…' : 'Ping radio'}
               </Button>
             </Box>
-            <Typography sx={{ color: '#64748b', fontSize: '0.75rem', mb: 1 }}>
-              Ping relay = browser ↔ Pi only. Ping radio = browser ↔ Pi ↔ radio ↔ desktop (needs radio path configured).
+            <Typography sx={{ color: '#475569', fontSize: '0.75rem', mb: 1.5 }}>
+              Ping relay = browser ↔ Pi. Ping radio = full RF path. Controls use the toggle above.
             </Typography>
             {pingError && (
               <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mb: 1 }}>{pingError}</Typography>
             )}
-            <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 1, mt: 2 }}>
-              Drone controls
-            </Typography>
-            {isWebRtc && (
-              <Typography sx={{ color: '#64748b', fontSize: '0.8125rem', mb: 1 }}>
-                MAVLink commands will be available after the data channel bridge is wired on the Pi.
-              </Typography>
-            )}
-            <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={() => sendCommand('takeoff', 2.5)}
-                disabled={isWebRtc}
-                disableRipple
-                sx={{
-                  color: '#22c55e',
-                  borderColor: '#475569',
-                  textTransform: 'none',
-                  '&:hover': { borderColor: '#22c55e' },
-                }}
-              >
-                Takeoff
-              </Button>
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={() => sendCommand('land')}
-                disabled={isWebRtc}
-                disableRipple
-                sx={{
-                  color: '#eab308',
-                  borderColor: '#475569',
-                  textTransform: 'none',
-                  '&:hover': { borderColor: '#eab308' },
-                }}
-              >
-                Land
-              </Button>
-            </Box>
-            {ctrlError && (
-              <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mb: 1 }}>{ctrlError}</Typography>
+            {!isWebRtc && (
+              <>
+                <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 1, mt: 1 }}>
+                  Legacy drone controls
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={() => sendCommand('takeoff', 2.5)}
+                    disableRipple
+                    sx={{
+                      color: '#22c55e',
+                      borderColor: '#475569',
+                      textTransform: 'none',
+                      '&:hover': { borderColor: '#22c55e' },
+                    }}
+                  >
+                    Takeoff
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={() => sendCommand('land')}
+                    disableRipple
+                    sx={{
+                      color: '#eab308',
+                      borderColor: '#475569',
+                      textTransform: 'none',
+                      '&:hover': { borderColor: '#eab308' },
+                    }}
+                  >
+                    Land
+                  </Button>
+                </Box>
+              </>
             )}
             {logLines.length > 0 && (
               <Box
                 component="pre"
                 sx={{
                   p: 1.5,
-                  backgroundColor: '#0f172a',
-                  border: '1px solid #334155',
-                  borderRadius: '0.375rem',
-                  fontSize: '0.8125rem',
-                  color: '#e2e8f0',
+                  backgroundColor: '#020617',
+                  border: '1px solid #1e293b',
+                  borderRadius: '2px',
+                  fontSize: '0.75rem',
+                  color: '#94a3b8',
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
-                  maxHeight: 200,
+                  maxHeight: 180,
                   overflow: 'auto',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
                 }}
               >
                 {logLines.join('\n')}
