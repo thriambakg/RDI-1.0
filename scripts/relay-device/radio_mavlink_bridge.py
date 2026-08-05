@@ -245,20 +245,30 @@ class RadioMavlinkBridge:
         *,
         hop_relay: str = "relay",
         target_sysid: int | None = None,
+        stack: str = "",
+        pipe: str = "",
     ) -> dict[str, Any]:
         """Fire-and-forget control frame over TUNNEL (no wait for ack)."""
         if not self.enabled:
             raise RuntimeError("mavlink bridge not started")
-        # Always use compact wire form — full JSON exceeds TUNNEL 128B on chords.
         msg = compact_ctrl_for_tunnel(
-            make_ctrl(hop_relay, actions, stream, target_sysid=target_sysid)
+            make_ctrl(
+                hop_relay,
+                actions,
+                stream,
+                target_sysid=target_sysid,
+                stack=stack,
+                pipe=pipe or "radio_mavlink",
+            )
         )
         target = int(target_sysid) if target_sysid is not None else 0
         nbytes = self._send_tunnel(msg, target_system=target)
         LOG.info(
-            "mavlink tunnel ctrl tx id=%s actions=%s bytes=%d target_sysid=%s",
+            "mavlink tunnel ctrl tx id=%s actions=%s stack=%s pipe=%s bytes=%d target_sysid=%s",
             msg.get("id"),
             ",".join(actions) or "(none)",
+            stack or "—",
+            msg.get("pp") or pipe or "—",
             nbytes,
             target_sysid if target_sysid is not None else "broadcast",
         )

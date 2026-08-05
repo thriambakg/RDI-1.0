@@ -41,6 +41,7 @@ def make_session_entry(
     mavlink_port: int | None = None,
     mavlink_host: str = "",
     link_mode: str = "",
+    vehicle_stack: str = "",
     mavlink_sysid: int | None = None,
     mavlink_compid: int | None = None,
     radio_net_id: int | None = None,
@@ -59,6 +60,8 @@ def make_session_entry(
         entry["mavlink_host"] = mavlink_host
     if link_mode:
         entry["link_mode"] = str(link_mode)
+    if vehicle_stack:
+        entry["vehicle_stack"] = str(vehicle_stack)
     if mavlink_sysid is not None:
         entry["mavlink_sysid"] = int(mavlink_sysid)
     if mavlink_compid is not None:
@@ -73,13 +76,16 @@ def make_session_entry(
 
 
 def radio_fields_from_metadata(metadata: dict | None) -> dict[str, Any]:
-    """Extract optional radio-addressing fields from session metadata dict."""
+    """Extract optional radio-addressing + stack fields from session metadata dict."""
     out: dict[str, Any] = {}
     if not isinstance(metadata, dict):
         return out
     link_mode = metadata.get("link_mode")
     if isinstance(link_mode, str) and link_mode.strip():
         out["link_mode"] = link_mode.strip().lower()
+    vehicle_stack = metadata.get("vehicle_stack")
+    if isinstance(vehicle_stack, str) and vehicle_stack.strip():
+        out["vehicle_stack"] = vehicle_stack.strip().lower()
     for key in ("mavlink_sysid", "mavlink_compid", "radio_net_id", "radio_baud"):
         if metadata.get(key) is None:
             continue

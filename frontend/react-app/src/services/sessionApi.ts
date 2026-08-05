@@ -28,6 +28,8 @@ export interface CreateSessionParams {
     mavlink_port?: number
     mavlink_host?: string
     px4_version?: string
+    /** Firmware / dialect adapter for this connection (one relay, many stacks). */
+    vehicle_stack?: 'px4' | 'ardupilot' | 'rdi_companion' | 'aux_only' | 'gazebo_px4'
     link_mode?: 'none' | 'shared_serial' | 'dedicated_serial' | 'udp_mavlink'
     mavlink_sysid?: number
     mavlink_compid?: number
@@ -256,6 +258,9 @@ export async function getSession(session_id: string): Promise<{
   webrtc?: WebRtcViewerBundle
   ttl_seconds?: number
   expires_at?: number
+  link_mode?: string
+  vehicle_stack?: string
+  mavlink_sysid?: number
 }> {
   const url = `${getApiBaseUrl()}/sessions?session_id=${encodeURIComponent(session_id)}`
   const headers = await getAuthHeaders()

@@ -7,6 +7,10 @@ export type ControlPath = 'relay' | 'radio'
 export type RdiCtrlPayload = {
   type: 'rdi_ctrl'
   path: ControlPath
+  /** Vehicle stack / firmware adapter for this connection */
+  stack?: string
+  /** Logical pipe hint for agents: webrtc_relay | radio_mavlink | radio_raw */
+  pipe?: string
   actions: string[]
   stream: string
   ts: number
@@ -15,9 +19,19 @@ export type RdiCtrlPayload = {
 export type RdiCtrlAck = {
   type: 'rdi_ctrl_ack'
   path: ControlPath
+  stack?: string
+  pipe?: string
   actions: string[]
   delivered: boolean
   error?: string
+}
+
+/** Derive a pipe label for CTRL frames from path + link mode. */
+export function pipeLabelForCtrl(path: ControlPath, linkMode?: string | null): string {
+  if (path === 'relay') return 'webrtc_relay'
+  const mode = (linkMode || '').toLowerCase()
+  if (mode === 'dedicated_serial' || mode === 'raw') return 'radio_raw'
+  return 'radio_mavlink'
 }
 
 export function encodeCtrlFrame(payload: Omit<RdiCtrlPayload, 'type'>): ArrayBuffer {

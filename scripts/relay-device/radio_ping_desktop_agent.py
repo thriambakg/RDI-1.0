@@ -19,8 +19,36 @@ import argparse
 import sys
 import time
 
-from radio_hop_protocol import decode_line, encode_line, format_hops, make_pong
+from radio_hop_protocol import (
+    decode_line,
+    encode_line,
+    format_hops,
+    make_pong,
+    normalize_ctrl_msg,
+)
 from radio_mavlink_bridge import RDI_TUNNEL_PAYLOAD_TYPE, TUNNEL_PAYLOAD_MAX, _pack_payload, _unpack_payload
+
+
+def _pipe_banner(mode: str) -> str:
+    """Human-readable pipe identity for this agent process."""
+    if mode == "raw":
+        return "radio_raw (newline JSON on serial)"
+    return "radio_mavlink (MAVLink TUNNEL over TELEM/FTDI)"
+
+
+def _format_ctrl_line(n: int, msg: dict) -> str:
+    ctrl = normalize_ctrl_msg(msg)
+    acts = [str(a) for a in (ctrl.get("actions") or [])]
+    stream = ctrl.get("stream") or "—"
+    stack = ctrl.get("stack") or "—"
+    pipe = ctrl.get("pipe") or "—"
+    sysid = ctrl.get("target_sysid")
+    if not acts:
+        return f"[{n}] CTRL release  pipe={pipe}  stack={stack}  sysid={sysid}"
+    return (
+        f"\n[{n}] CTRL hold  pipe={pipe}  stack={stack}  "
+        f"actions={'+'.join(acts)}  keys={stream}  sysid={sysid}"
+    )
 
 
 def _serial_device(port: str) -> str:
@@ -35,6 +63,7 @@ def _run_raw(port: str, baud: int, sysid: int | None) -> None:
     import serial
 
     print(f"\nOpening {port} @ {baud} raw JSON (Ctrl+C to stop)")
+    print(f"Desktop agent pipe: {_pipe_banner('raw')}")
     if sysid is not None:
         print(f"Filtering target_sysid={sysid}")
     ser = serial.Serial(port, baud, timeout=0.2)
@@ -57,15 +86,7 @@ def _run_raw(port: str, baud: int, sysid: int | None) -> None:
                         continue
                     if msg.get("type") == "ctrl":
                         n += 1
-                        acts = [str(a) for a in (msg.get("actions") or [])]
-                        stream = msg.get("stream") or "—"
-                        if not acts:
-                            print(f"[{n}] CTRL release")
-                        else:
-                            print(
-                                f"\n[{n}] CTRL hold  actions={'+'.join(acts)}  "
-                                f"keys={stream}  sysid={msg.get('target_sysid')}"
-                            )
+                        print(_format_ctrl_line(n, msg))
                         continue
                     if msg.get("type") != "ping":
                         print(f"RX non-ping: {msg}")
@@ -98,6 +119,7 @@ def _run_mavlink(port: str, baud: int, sysid: int | None) -> None:
 
     device = _serial_device(port)
     print(f"\nOpening {port} ({device}) @ {baud} MAVLink TUNNEL (Ctrl+C to stop)")
+    print(f"Desktop agent pipe: {_pipe_banner('mavlink')}")
     if sysid is not None:
         print(f"Filtering target_sysid={sysid}")
     conn = mavutil.mavlink_connection(
@@ -138,15 +160,7 @@ def _run_mavlink(port: str, baud: int, sysid: int | None) -> None:
                 continue
             if decoded.get("type") == "ctrl":
                 n += 1
-                acts = [str(a) for a in (decoded.get("actions") or [])]
-                stream = decoded.get("stream") or "—"
-                if not acts:
-                    print(f"[{n}] CTRL release")
-                else:
-                    print(
-                        f"\n[{n}] CTRL hold  actions={'+'.join(acts)}  "
-                        f"keys={stream}  sysid={decoded.get('target_sysid')}"
-                    )
+                print(_format_ctrl_line(n, decoded))
                 continue
             if decoded.get("type") != "ping":
                 print(f"RX TUNNEL non-ping: {decoded.get('type')}")

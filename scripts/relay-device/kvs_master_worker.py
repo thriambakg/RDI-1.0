@@ -173,6 +173,7 @@ async def run_master(cfg: dict) -> None:
     mavlink_host = cfg.get("mavlink_host") or "127.0.0.1"
     mavlink_port = int(cfg.get("mavlink_port") or 18570)
     link_mode = str(cfg.get("link_mode") or "shared_serial").strip().lower() or "shared_serial"
+    vehicle_stack = str(cfg.get("vehicle_stack") or "px4").strip().lower() or "px4"
     mavlink_sysid = cfg.get("mavlink_sysid")
     try:
         target_sysid = int(mavlink_sysid) if mavlink_sysid is not None else None
@@ -183,6 +184,13 @@ async def run_master(cfg: dict) -> None:
         dedicated_baud = int(cfg.get("radio_baud") or RADIO_BAUD)
     except (TypeError, ValueError):
         dedicated_baud = RADIO_BAUD
+
+    def _pipe_for_path(path: str) -> str:
+        if path != "radio":
+            return "webrtc_relay"
+        if link_mode == "dedicated_serial" and RADIO_MODE == "raw":
+            return "radio_raw"
+        return "radio_mavlink"
 
     kv = boto3.client(
         "kinesisvideo",
@@ -203,12 +211,13 @@ async def run_master(cfg: dict) -> None:
     )
 
     LOG.info(
-        "worker start session_id=%s mavlink=%s:%s channel=%s link_mode=%s sysid=%s radio=%s",
+        "worker start session_id=%s mavlink=%s:%s channel=%s link_mode=%s stack=%s sysid=%s radio=%s",
         session_id,
         mavlink_host,
         mavlink_port,
         channel_arn,
         link_mode,
+        vehicle_stack,
         target_sysid,
         "router" if RADIO_USE_ROUTER else (dedicated_device or RADIO_PORT or "off"),
     )
@@ -359,6 +368,8 @@ async def run_master(cfg: dict) -> None:
         path = str(payload.get("path") or "relay").strip().lower()
         if path not in ("relay", "radio"):
             path = "relay"
+        stack = str(payload.get("stack") or vehicle_stack or "px4").strip().lower() or vehicle_stack
+        pipe = str(payload.get("pipe") or _pipe_for_path(path)).strip() or _pipe_for_path(path)
         actions = payload.get("actions") or []
         if not isinstance(actions, list):
             actions = []
@@ -368,10 +379,12 @@ async def run_master(cfg: dict) -> None:
         err: str | None = None
 
         LOG.info(
-            "ctrl rx session_id=%s viewer=%s path=%s actions=%s stream=%s",
+            "ctrl rx session_id=%s viewer=%s path=%s pipe=%s stack=%s actions=%s stream=%s",
             session_id,
             cid,
             path,
+            pipe,
+            stack,
             ",".join(actions_s) or "(none)",
             stream or "—",
         )
@@ -395,6 +408,8 @@ async def run_master(cfg: dict) -> None:
                             stream,
                             hop_relay="relay",
                             target_sysid=target_sysid,
+                            stack=stack,
+                            pipe=pipe,
                         )
                         if asyncio.iscoroutine(result):
                             await result
@@ -406,6 +421,8 @@ async def run_master(cfg: dict) -> None:
         ack = {
             "type": "rdi_ctrl_ack",
             "path": path,
+            "stack": stack,
+            "pipe": pipe,
             "actions": actions_s,
             "delivered": delivered,
         }

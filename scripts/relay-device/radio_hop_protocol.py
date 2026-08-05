@@ -81,6 +81,8 @@ def make_ctrl(
     *,
     target_sysid: int | None = None,
     ctrl_id: str | None = None,
+    stack: str = "",
+    pipe: str = "",
 ) -> dict[str, Any]:
     """Fire-and-forget control frame for radio path (preliminary / simulation)."""
     msg: dict[str, Any] = {
@@ -94,6 +96,10 @@ def make_ctrl(
     }
     if target_sysid is not None:
         msg["target_sysid"] = int(target_sysid)
+    if stack:
+        msg["stack"] = str(stack)
+    if pipe:
+        msg["pipe"] = str(pipe)
     return msg
 
 
@@ -110,15 +116,20 @@ def compact_ctrl_for_tunnel(msg: dict[str, Any]) -> dict[str, Any]:
     }
     stream = str(msg.get("stream") or msg.get("s") or "")
     if stream:
-        # Keep physical keys if they still fit; packer may drop later.
-        out["s"] = stream[:48]
+        out["s"] = stream[:40]
+    stack = str(msg.get("stack") or msg.get("st") or "")
+    if stack:
+        out["st"] = stack[:16]
+    pipe = str(msg.get("pipe") or msg.get("pp") or "")
+    if pipe:
+        out["pp"] = pipe[:16]
     if msg.get("target_sysid") is not None:
         out["target_sysid"] = int(msg["target_sysid"])
     return out
 
 
 def normalize_ctrl_msg(msg: dict[str, Any]) -> dict[str, Any]:
-    """Expand compact CTRL fields (`a`/`s`) to `actions`/`stream`."""
+    """Expand compact CTRL fields (`a`/`s`/`st`/`pp`) to full names."""
     if msg.get("type") != "ctrl":
         return msg
     out = dict(msg)
@@ -126,10 +137,13 @@ def normalize_ctrl_msg(msg: dict[str, Any]) -> dict[str, Any]:
         raw = out.get("a") or []
         out["actions"] = expand_actions([str(x) for x in raw] if isinstance(raw, list) else [])
     elif "actions" in out and isinstance(out["actions"], list):
-        # May already be abbreviated on the wire.
         out["actions"] = expand_actions([str(x) for x in out["actions"]])
     if "stream" not in out and "s" in out:
         out["stream"] = str(out.get("s") or "")
+    if "stack" not in out and "st" in out:
+        out["stack"] = str(out.get("st") or "")
+    if "pipe" not in out and "pp" in out:
+        out["pipe"] = str(out.get("pp") or "")
     return out
 
 

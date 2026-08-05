@@ -139,6 +139,8 @@ def _worker_config(session: dict) -> dict:
         "webrtc": session["webrtc"],
         "link_mode": session.get("link_mode") or "shared_serial",
     }
+    if session.get("vehicle_stack"):
+        cfg["vehicle_stack"] = session.get("vehicle_stack")
     if session.get("mavlink_sysid") is not None:
         cfg["mavlink_sysid"] = session.get("mavlink_sysid")
     if session.get("mavlink_compid") is not None:

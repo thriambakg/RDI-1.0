@@ -15,7 +15,13 @@ import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
 import { useSessionWebRtc } from '../../contexts/SessionWebRtcContext'
 import { usesWebSocketTransport, WEBRTC_PI_READY_MS } from '../../utils/sessionTransport'
 import { pingDataChannel, type PingMode, PING_BYTES, PONG_BYTES } from '../../utils/rdiPing'
-import { parseCtrlAck, sendCtrlFrame, type ControlPath } from '../../utils/rdiControl'
+import {
+  parseCtrlAck,
+  pipeLabelForCtrl,
+  sendCtrlFrame,
+  type ControlPath,
+} from '../../utils/rdiControl'
+import { labelForVehicleStack } from '../../controls/vehicleStacks'
 import { usePressedInputs } from '../../hooks/usePressedInputs'
 import {
   DEFAULT_KEYBINDS,
@@ -100,6 +106,9 @@ export function ConnectionDetailDialog({
     webrtc?: WebRtcViewerBundle
     ttl_seconds?: number
     expires_at?: number
+    link_mode?: string
+    vehicle_stack?: string
+    mavlink_sysid?: number
   } | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -323,8 +332,12 @@ export function ConnectionDetailDialog({
       lastCtrlSigRef.current = sig
 
       try {
+        const stack = data?.vehicle_stack || 'px4'
+        const pipe = pipeLabelForCtrl(path, data?.link_mode)
         sendCtrlFrame(channel, {
           path,
+          stack,
+          pipe,
           actions,
           stream: liveStream,
           ts: Date.now(),
@@ -334,11 +347,13 @@ export function ConnectionDetailDialog({
         if (reason === 'edge') {
           if (actions.length > 0) {
             setLastTxNote(actions.join(' + '))
-            addLog(`[ctrl/${path}] ${actions.join(' + ')} · ${liveStream || '—'}`)
+            addLog(
+              `[ctrl/${pipe}|${stack}] ${actions.join(' + ')} · ${liveStream || '—'}`,
+            )
           } else {
             setTransmitting(false)
             if (prevSig.includes('|') && !prevSig.endsWith('|')) {
-              addLog(`[ctrl/${path}] release`)
+              addLog(`[ctrl/${pipe}|${stack}] release`)
             }
           }
         }
@@ -382,10 +397,12 @@ export function ConnectionDetailDialog({
     const onMessage = (event: MessageEvent) => {
       const ack = parseCtrlAck(event.data)
       if (!ack) return
+      const pipeTag = ack.pipe || ack.path
+      const stackTag = ack.stack ? `|${ack.stack}` : ''
       if (ack.error) {
-        addLog(`[ctrl ack] ${ack.path}: ${ack.error}`)
+        addLog(`[ctrl ack] ${pipeTag}${stackTag}: ${ack.error}`)
       } else if (ack.actions?.length) {
-        addLog(`[ctrl ack] ${ack.path} ok · ${ack.actions.join(' + ')}`)
+        addLog(`[ctrl ack] ${pipeTag}${stackTag} ok · ${ack.actions.join(' + ')}`)
       }
     }
     channel.addEventListener('message', onMessage)
@@ -877,9 +894,17 @@ export function ConnectionDetailDialog({
                 : null
             }
             mavlinkLabel={
-              data.mavlink_host || data.mavlink_port != null
-                ? `MAVLink ${data.mavlink_host ?? '127.0.0.1'}:${data.mavlink_port ?? '—'}`
-                : null
+              [
+                data.vehicle_stack
+                  ? `Stack: ${labelForVehicleStack(data.vehicle_stack)}`
+                  : null,
+                data.link_mode ? `Link: ${data.link_mode}` : null,
+                data.mavlink_host || data.mavlink_port != null
+                  ? `MAVLink ${data.mavlink_host ?? '127.0.0.1'}:${data.mavlink_port ?? '—'}`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(' · ') || null
             }
             editName={editName}
             onEditNameChange={setEditName}

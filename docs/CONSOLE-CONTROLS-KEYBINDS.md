@@ -18,7 +18,9 @@
 
 **Live stream:** `usePressedInputs` joins held keyboard `code`s and gamepad tokens, e.g. `KeyA+KeyW+GP0-BTN0`.
 
-**Wire format** (WebRTC `mavlink` channel): unchanged — `CTRL` + JSON; radio CTRL uses compact TUNNEL payloads.
+**Wire format** (WebRTC `mavlink` channel): unchanged — `CTRL` + JSON (`path`, `stack`, `pipe`, `actions`, `stream`); radio CTRL uses compact TUNNEL payloads (`a`/`s`/`st`/`pp`). Desktop agent prints `pipe` + `stack` on each CTRL.
+
+**Vehicle stack** is chosen at create-connection time (`px4` / `ardupilot` / `gazebo_px4` / …) and stored on session metadata; see [GAZEBO-DESKTOP-SIM.md](./GAZEBO-DESKTOP-SIM.md) for Gazebo SITL.
 
 ## Deploy
 

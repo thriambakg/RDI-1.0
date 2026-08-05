@@ -13,6 +13,10 @@ import {
 import { createSession } from '../../services/sessionApi'
 import type { CreateSessionResponse } from '../../services/sessionApi'
 import type { RelayRef } from '../../services/profileApi'
+import {
+  VEHICLE_STACK_OPTIONS,
+  type VehicleStackId,
+} from '../../controls/vehicleStacks'
 import './CreateConnectionDialog.css'
 
 const TTL_OPTIONS = [
@@ -25,14 +29,16 @@ const TTL_OPTIONS = [
 ]
 
 const MAVLINK_PORT_OPTIONS = [
-  { value: 18570, label: '18570 (PX4 v1.13+)' },
+  { value: 18570, label: '18570 (PX4 v1.13+ / Gazebo common)' },
   { value: 14540, label: '14540 (PX4 legacy)' },
+  { value: 14550, label: '14550 (ArduPilot SITL default)' },
+  { value: 14580, label: '14580 (ArduPilot alt)' },
 ]
 
 const LINK_MODE_OPTIONS = [
   { value: 'shared_serial', label: 'Shared radio (mothership TELEM1)' },
   { value: 'none', label: 'None (WebRTC only)' },
-  { value: 'udp_mavlink', label: 'UDP MAVLink (SITL / local)' },
+  { value: 'udp_mavlink', label: 'UDP MAVLink (SITL / Gazebo / local)' },
   { value: 'dedicated_serial', label: 'Dedicated serial (lab FTDI)' },
 ]
 
@@ -90,6 +96,7 @@ export function CreateConnectionDialog({
   const [relayId, setRelayId] = useState('')
   const [ttlSeconds, setTtlSeconds] = useState(14400)
   const [mavlinkPort, setMavlinkPort] = useState(18570)
+  const [vehicleStack, setVehicleStack] = useState<VehicleStackId>('px4')
   const [linkMode, setLinkMode] = useState('shared_serial')
   const [mavlinkSysid, setMavlinkSysid] = useState(1)
   const [radioNetId, setRadioNetId] = useState(25)
@@ -101,6 +108,13 @@ export function CreateConnectionDialog({
   const noRelays = relays.length === 0
   const canSubmit = !noRelays && relayId
 
+  const handleStackChange = (stack: VehicleStackId) => {
+    setVehicleStack(stack)
+    const opt = VEHICLE_STACK_OPTIONS.find((o) => o.id === stack)
+    if (opt) setMavlinkPort(opt.defaultMavlinkPort)
+    if (stack === 'gazebo_px4') setLinkMode('udp_mavlink')
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!canSubmit) return
@@ -111,6 +125,7 @@ export function CreateConnectionDialog({
         mavlink_port: mavlinkPort,
         mavlink_host: '127.0.0.1',
         px4_version: mavlinkPort === 18570 ? 'v1.13+' : 'legacy',
+        vehicle_stack: vehicleStack,
         link_mode: linkMode as 'none' | 'shared_serial' | 'dedicated_serial' | 'udp_mavlink',
       }
       if (linkMode === 'shared_serial' || linkMode === 'dedicated_serial') {
@@ -143,6 +158,7 @@ export function CreateConnectionDialog({
     setRelayId('')
     setTtlSeconds(14400)
     setMavlinkPort(18570)
+    setVehicleStack('px4')
     setLinkMode('shared_serial')
     setMavlinkSysid(1)
     setRadioNetId(25)
@@ -299,13 +315,33 @@ export function CreateConnectionDialog({
             <TextField
               fullWidth
               select
-              label="MAVLink port (PX4)"
+              label="Vehicle stack"
+              value={vehicleStack}
+              onChange={(e) => handleStackChange(e.target.value as VehicleStackId)}
+              margin="normal"
+              sx={inputSx}
+              SelectProps={{ MenuProps: menuProps }}
+              helperText={
+                VEHICLE_STACK_OPTIONS.find((o) => o.id === vehicleStack)?.helper ??
+                'Firmware / dialect this connection will speak'
+              }
+            >
+              {VEHICLE_STACK_OPTIONS.map((o) => (
+                <MenuItem key={o.id} value={o.id} disableRipple>
+                  {o.label}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              fullWidth
+              select
+              label="MAVLink port"
               value={mavlinkPort}
               onChange={(e) => setMavlinkPort(Number(e.target.value))}
               margin="normal"
               sx={inputSx}
               SelectProps={{ MenuProps: menuProps }}
-              helperText="Local UDP port on the relay (SITL / future bridge)"
+              helperText="UDP port on the relay (SITL / Gazebo / future bridge) — per connection"
             >
               {MAVLINK_PORT_OPTIONS.map((o) => (
                 <MenuItem key={o.value} value={o.value} disableRipple>

@@ -194,12 +194,16 @@ class RadioRouterServer:
             if not isinstance(actions, list):
                 actions = []
             stream = str(req.get("stream") or "")
+            stack = str(req.get("stack") or "")
+            pipe = str(req.get("pipe") or "")
             try:
                 msg = self._bridge.send_ctrl(
                     [str(a) for a in actions],
                     stream,
                     hop_relay=hop_relay,
                     target_sysid=target,
+                    stack=stack,
+                    pipe=pipe,
                 )
                 return {"ok": True, "ctrl": msg}
             except Exception as e:

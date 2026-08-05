@@ -80,6 +80,8 @@ class RadioRouterClient:
         *,
         hop_relay: str = "relay",
         target_sysid: int | None = None,
+        stack: str = "",
+        pipe: str = "",
     ) -> dict[str, Any]:
         if not self._enabled:
             raise RuntimeError("radio router client not connected")
@@ -88,6 +90,8 @@ class RadioRouterClient:
             "hop_relay": hop_relay,
             "actions": list(actions),
             "stream": stream,
+            "stack": stack,
+            "pipe": pipe,
         }
         if target_sysid is not None:
             req["target_sysid"] = int(target_sysid)

@@ -152,6 +152,7 @@ def _add_relay_active_session(
     mavlink_port: int | None = None,
     mavlink_host: str = "",
     link_mode: str = "",
+    vehicle_stack: str = "",
     mavlink_sysid: int | None = None,
     mavlink_compid: int | None = None,
     radio_net_id: int | None = None,
@@ -181,6 +182,7 @@ def _add_relay_active_session(
             mavlink_port=mavlink_port,
             mavlink_host=mavlink_host,
             link_mode=link_mode,
+            vehicle_stack=vehicle_stack,
             mavlink_sysid=mavlink_sysid,
             mavlink_compid=mavlink_compid,
             radio_net_id=radio_net_id,
@@ -681,6 +683,7 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
             mavlink_port=eff_port,
             mavlink_host=eff_host,
             link_mode=radio.get("link_mode") or "shared_serial",
+            vehicle_stack=radio.get("vehicle_stack") or "",
             mavlink_sysid=radio.get("mavlink_sysid"),
             mavlink_compid=radio.get("mavlink_compid"),
             radio_net_id=radio.get("radio_net_id"),
@@ -850,6 +853,7 @@ def _reactivate_webrtc_session(
             mavlink_port=eff_port,
             mavlink_host=eff_host,
             link_mode=radio.get("link_mode") or "shared_serial",
+            vehicle_stack=radio.get("vehicle_stack") or "",
             mavlink_sysid=radio.get("mavlink_sysid"),
             mavlink_compid=radio.get("mavlink_compid"),
             radio_net_id=radio.get("radio_net_id"),
@@ -1239,6 +1243,16 @@ def _get_session(
         else:
             out["mavlink_host"] = "127.0.0.1"
         out["mavlink_port"] = eff_port
+        if isinstance(metadata, dict):
+            if isinstance(metadata.get("link_mode"), str) and metadata["link_mode"].strip():
+                out["link_mode"] = metadata["link_mode"].strip().lower()
+            if isinstance(metadata.get("vehicle_stack"), str) and metadata["vehicle_stack"].strip():
+                out["vehicle_stack"] = metadata["vehicle_stack"].strip().lower()
+            if metadata.get("mavlink_sysid") is not None:
+                try:
+                    out["mavlink_sysid"] = int(metadata["mavlink_sysid"])
+                except (TypeError, ValueError):
+                    pass
         if WAVELENGTH_CARRIER_IP and wl_zone and (not WAVELENGTH_ZONE_ID or wl_zone == WAVELENGTH_ZONE_ID):
             out["carrier_ip"] = WAVELENGTH_CARRIER_IP
         ttl = _session_ttl_seconds(item)

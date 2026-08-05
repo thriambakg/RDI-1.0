@@ -139,20 +139,31 @@ class RadioSerialBridge:
         *,
         hop_relay: str = "relay",
         target_sysid: int | None = None,
+        stack: str = "",
+        pipe: str = "",
     ) -> dict[str, Any]:
         """Fire-and-forget control frame over raw serial JSON."""
         if not self.enabled:
             raise RuntimeError("radio bridge not started")
-        msg = make_ctrl(hop_relay, actions, stream, target_sysid=target_sysid)
+        msg = make_ctrl(
+            hop_relay,
+            actions,
+            stream,
+            target_sysid=target_sysid,
+            stack=stack,
+            pipe=pipe or "radio_raw",
+        )
         data = encode_line(msg)
         with self._lock:
             assert self._ser is not None
             self._ser.write(data)
             self._ser.flush()
         LOG.info(
-            "radio ctrl tx id=%s actions=%s bytes=%d target_sysid=%s",
+            "radio ctrl tx id=%s actions=%s stack=%s pipe=%s bytes=%d target_sysid=%s",
             msg.get("id"),
             ",".join(actions) or "(none)",
+            stack or "—",
+            pipe or "radio_raw",
             len(data),
             target_sysid if target_sysid is not None else "any",
         )
