@@ -70,6 +70,9 @@ export type ConnectionSetupPanelProps = {
   status: string
   relayLabel?: string | null
   mavlinkLabel?: string | null
+  /** Live link readout so editing settings never looks like a dropped connection. */
+  linkLabel?: string | null
+  linkOk?: boolean
   editName: string
   onEditNameChange: (v: string) => void
   editTtl: number
@@ -95,6 +98,8 @@ export function ConnectionSetupPanel({
   status,
   relayLabel,
   mavlinkLabel,
+  linkLabel,
+  linkOk = false,
   editName,
   onEditNameChange,
   editTtl,
@@ -191,6 +196,22 @@ export function ConnectionSetupPanel({
         </Typography>
         {mavlinkLabel && (
           <Typography sx={{ fontSize: '0.75rem', color: '#4ade80', mt: 0.5 }}>{mavlinkLabel}</Typography>
+        )}
+        {linkLabel && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 0.75 }}>
+            <Box
+              sx={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                backgroundColor: linkOk ? '#22c55e' : '#64748b',
+                flexShrink: 0,
+              }}
+            />
+            <Typography sx={{ fontSize: '0.75rem', color: linkOk ? '#38bdf8' : '#64748b' }}>
+              {linkLabel}
+            </Typography>
+          </Box>
         )}
       </Box>
 

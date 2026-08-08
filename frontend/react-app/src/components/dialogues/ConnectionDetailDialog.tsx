@@ -395,6 +395,35 @@ export function ConnectionDetailDialog({
     activeActions.length,
   ])
 
+  // Handing off control (settings, another window, minimize) must not leave the
+  // vehicle holding the last stick input — send an explicit release first.
+  const releaseControls = useCallback(() => {
+    const sid = data?.session_id
+    if (!sid || usesWebSocketTransport(data ?? undefined)) return
+    const prevSig = lastCtrlSigRef.current
+    if (!prevSig || prevSig.endsWith('|')) return
+    const channel = getDataChannel(sid)
+    if (!channel || channel.readyState !== 'open') return
+
+    const path = controlPathRef.current
+    lastCtrlSigRef.current = `${path}|`
+    try {
+      const stack = data?.vehicle_stack || 'px4'
+      const pipe = pipeLabelForCtrl(path, data?.link_mode)
+      sendCtrlFrame(channel, { path, stack, pipe, actions: [], stream: '', ts: Date.now() })
+      setTransmitting(false)
+      addLog(`[ctrl/${pipe}|${stack}] release (controls handed off)`)
+    } catch {
+      setTransmitting(false)
+    }
+  }, [data, getDataChannel, addLog])
+
+  useEffect(() => {
+    if (!open) return
+    if (panelView === 'controls' && focused && !minimized) return
+    releaseControls()
+  }, [open, panelView, focused, minimized, releaseControls])
+
   // Listen for control acks on the data channel
   useEffect(() => {
     if (!open || !data?.session_id || usesWebSocketTransport(data)) return
@@ -422,8 +451,9 @@ export function ConnectionDetailDialog({
   const pingRunningRef = useRef(false)
   pingRunningRef.current = pingRunning
 
+  // Runs in every panel view: editing keybinds must never look like a dropped link.
   useEffect(() => {
-    if (!open || !data?.session_id || panelView !== 'controls') return
+    if (!open || !data?.session_id) return
     if (usesWebSocketTransport(data)) return
 
     let cancelled = false
@@ -493,7 +523,7 @@ export function ConnectionDetailDialog({
       cancelled = true
       if (timer != null) window.clearTimeout(timer)
     }
-  }, [open, data, panelView, controlPath, getDataChannel, webRtcState])
+  }, [open, data, controlPath, getDataChannel, webRtcState])
 
   const handleSaveSettings = useCallback(async () => {
     if (!sessionId || !data) return
@@ -912,6 +942,14 @@ export function ConnectionDetailDialog({
               .filter(Boolean)
               .join(' · ') || null
           }
+          linkLabel={
+            isConnected
+              ? `${livePing.path === 'radio' ? 'Radio' : 'Relay'} link live${
+                  livePing.ms != null ? ` · ${livePing.ms} ms` : ''
+                } — controls resume on the deck`
+              : 'Link not connected'
+          }
+          linkOk={isConnected}
           editName={editName}
           onEditNameChange={setEditName}
           editTtl={editTtl}
