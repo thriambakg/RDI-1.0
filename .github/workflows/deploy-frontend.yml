@@ -213,9 +213,9 @@ jobs:
       - name: npm audit (SCA – dependency vulnerabilities)
         working-directory: frontend/react-app
         env:
-          # RSC CSRF — not applicable to BrowserRouter SPA. Latest react-router-dom
-          # 7.x is 7.18.1; npm's suggested downgrade to 7.11.0 reopens worse vulns.
-          NPM_AUDIT_ALLOWLIST: GHSA-qwww-vcr4-c8h2
+          # Empty: every known high/critical advisory is patched in package.json.
+          # Add a GHSA id here only when no fixed version exists yet.
+          NPM_AUDIT_ALLOWLIST: ''
         run: |
           echo "🔍 Running npm audit on frontend dependencies..."
           set +e
