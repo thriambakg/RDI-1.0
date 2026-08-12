@@ -471,6 +471,9 @@ export function ConnectionDetailDialog({
     let timer: number | undefined
     let inFlight = false
 
+    // Helper avoids TS narrowing RefObject across await (path can flip to radio mid-ping).
+    const isRadioControlPath = () => controlPathRef.current === 'radio'
+
     const schedule = (ms: number) => {
       if (cancelled) return
       timer = window.setTimeout(() => {
@@ -480,7 +483,7 @@ export function ConnectionDetailDialog({
 
     const tick = async () => {
       if (cancelled) return
-      if (controlPathRef.current === 'radio') return
+      if (isRadioControlPath()) return
       if (webRtcState(data.session_id) !== 'connected') {
         setLivePing((prev) => ({ ...prev, status: 'idle', ms: null, path: 'relay' }))
         schedule(1200)
@@ -508,10 +511,10 @@ export function ConnectionDetailDialog({
           mode: 'local',
           timeoutMs: 4000,
         })
-        if (cancelled || controlPathRef.current === 'radio') return
+        if (cancelled || isRadioControlPath()) return
         setLivePing({ ms: result.rttMs, status: 'live', path: 'relay' })
       } catch (e) {
-        if (cancelled || controlPathRef.current === 'radio') return
+        if (cancelled || isRadioControlPath()) return
         const msg = e instanceof Error ? e.message : 'ping failed'
         setLivePing((prev) => ({
           ms: prev.ms,
