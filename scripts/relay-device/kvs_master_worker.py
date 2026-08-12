@@ -226,7 +226,6 @@ async def run_master(cfg: dict) -> None:
     pending_ice: dict[str, list[dict]] = {}
     loop = asyncio.get_running_loop()
     radio: RadioSerialBridge | RadioMavlinkBridge | RadioRouterClient | None = None
-    radio_ping_lock = asyncio.Lock()
 
     if link_mode == "none":
         LOG.info("link_mode=none — radio ping disabled for session_id=%s", session_id)
@@ -323,47 +322,46 @@ async def run_master(cfg: dict) -> None:
             LOG.info("ping pong (radio unavailable) session_id=%s viewer=%s", session_id, cid)
             return
 
-        async with radio_ping_lock:
-            try:
-                pong = await radio.roundtrip_ping(hop_relay="relay", target_sysid=target_sysid)
-                hops = [{"hop": "browser", "ts": t_browser}] + list(pong.get("hops") or [])
-                summary = {
-                    "type": "rdi_pong",
-                    "scope": "radio",
-                    "id": pong.get("id"),
-                    "target_sysid": target_sysid,
-                    "hops": hops,
-                    "lines": format_hops(hops),
-                }
-                channel.send(json.dumps(summary).encode("utf-8"))
-                channel.send(PONG_BYTES)
-                LOG.info(
-                    "ping pong (radio/%s) session_id=%s viewer=%s id=%s sysid=%s hops=%s",
-                    link_mode,
-                    session_id,
-                    cid,
-                    pong.get("id"),
-                    target_sysid,
-                    ",".join(str(h.get("hop")) for h in hops),
-                )
-            except Exception as e:
-                err = str(e) or e.__class__.__name__
-                LOG.warning("radio ping failed session_id=%s: %s — local pong fallback", session_id, err)
-                channel.send(
-                    json.dumps(
-                        {
-                            "type": "rdi_pong",
-                            "scope": "radio",
-                            "error": err,
-                            "hops": [
-                                {"hop": "browser", "ts": t_browser},
-                                {"hop": "relay", "ts": time.time()},
-                            ],
-                            "lines": [f"radio ping failed: {err}", "fell back to local relay pong"],
-                        }
-                    ).encode("utf-8")
-                )
-                channel.send(PONG_BYTES)
+        try:
+            pong = await radio.roundtrip_ping(hop_relay="relay", target_sysid=target_sysid)
+            hops = [{"hop": "browser", "ts": t_browser}] + list(pong.get("hops") or [])
+            summary = {
+                "type": "rdi_pong",
+                "scope": "radio",
+                "id": pong.get("id"),
+                "target_sysid": target_sysid,
+                "hops": hops,
+                "lines": format_hops(hops),
+            }
+            channel.send(json.dumps(summary).encode("utf-8"))
+            channel.send(PONG_BYTES)
+            LOG.info(
+                "ping pong (radio/%s) session_id=%s viewer=%s id=%s sysid=%s hops=%s",
+                link_mode,
+                session_id,
+                cid,
+                pong.get("id"),
+                target_sysid,
+                ",".join(str(h.get("hop")) for h in hops),
+            )
+        except Exception as e:
+            err = str(e) or e.__class__.__name__
+            LOG.warning("radio ping failed session_id=%s: %s — local pong fallback", session_id, err)
+            channel.send(
+                json.dumps(
+                    {
+                        "type": "rdi_pong",
+                        "scope": "radio",
+                        "error": err,
+                        "hops": [
+                            {"hop": "browser", "ts": t_browser},
+                            {"hop": "relay", "ts": time.time()},
+                        ],
+                        "lines": [f"radio ping failed: {err}", "fell back to local relay pong"],
+                    }
+                ).encode("utf-8")
+            )
+            channel.send(PONG_BYTES)
 
     async def _handle_ctrl(channel, cid: str, payload: dict) -> None:
         """Preliminary control frames: relay log/ack, or fire-and-forget over radio."""

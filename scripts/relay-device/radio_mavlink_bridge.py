@@ -172,12 +172,6 @@ class RadioMavlinkBridge:
                 fut = self._pending.get(ping_id)
                 if fut and self._loop and not fut.done():
                     self._loop.call_soon_threadsafe(fut.set_result, decoded)
-                elif ping_id:
-                    LOG.info(
-                        "mavlink tunnel pong unmatched id=%s pending=%s",
-                        ping_id,
-                        list(self._pending.keys()),
-                    )
             except Exception as e:
                 if not self._stop.is_set():
                     LOG.warning("mavlink rx error: %s", e)
