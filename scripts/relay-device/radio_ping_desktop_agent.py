@@ -219,7 +219,53 @@ def _run_raw(port: str, baud: int, sysid: int | None, verbose: bool = False, qui
         ser.close()
 
 
-def _run_mavlink(port: str, baud: int, sysid: int | None, verbose: bool = False, quiet: bool = False) -> None:
+def _echo_pong_mavlink(conn, decoded: dict, *, turnaround_ms: int, n: int, diag: _Diag) -> None:
+    """Wait for half-duplex turnaround, then TX pong (optionally twice)."""
+    tgt = _target_sysid(decoded)
+    # Mothership is still finishing the ping TX on shared RF — echo immediately
+    # and the return is lost (pong overheard stays 0; Pi times out).
+    if turnaround_ms > 0:
+        time.sleep(turnaround_ms / 1000.0)
+    pong = make_pong(decoded, "desktop")
+    # Stamp desktop hop with local clock for display (ignore Pi clock skew).
+    hops = list(pong.get("hops") or [])
+    if hops:
+        t_relay = float(hops[0].get("ts") or time.time())
+        # Prefer relative display: relay=0, desktop=turnaround
+        pong = {
+            **pong,
+            "hops": [
+                {"hop": "relay", "ts": t_relay},
+                {"hop": "desktop", "ts": t_relay + (turnaround_ms / 1000.0)},
+            ],
+        }
+    try:
+        raw = _pack_payload(pong)
+    except ValueError as e:
+        print(f"[{n}] pong pack failed: {e} — skipping echo")
+        return
+    payload = raw + b"\x00" * (TUNNEL_PAYLOAD_MAX - len(raw))
+    conn.mav.tunnel_send(0, 0, RDI_TUNNEL_PAYLOAD_TYPE, len(raw), payload)
+    # Second copy improves return odds on half-duplex SiK/RFD.
+    time.sleep(0.03)
+    conn.mav.tunnel_send(0, 0, RDI_TUNNEL_PAYLOAD_TYPE, len(raw), payload)
+    diag.note("echo_ping")
+    print(
+        f"\n[{n}] echoed TUNNEL ping id={pong.get('id')} sysid={tgt} "
+        f"({len(raw)}B, turnaround={turnaround_ms}ms, x2)"
+    )
+    print(f"    1. relay: T+0ms")
+    print(f"    2. desktop: T+{turnaround_ms}ms (local turnaround; Pi clock ignored)")
+
+
+def _run_mavlink(
+    port: str,
+    baud: int,
+    sysid: int | None,
+    verbose: bool = False,
+    quiet: bool = False,
+    turnaround_ms: int = 120,
+) -> None:
     import os
 
     os.environ["MAVLINK20"] = "1"
@@ -230,7 +276,8 @@ def _run_mavlink(port: str, baud: int, sysid: int | None, verbose: bool = False,
     print(f"Desktop agent pipe: {_pipe_banner('mavlink')}")
     if sysid is not None:
         print(f"Filtering target_sysid={sysid} (ping skips always logged; CTRL skips need --verbose)")
-    print("Diag stats every 5s — watch ping rx vs echo vs skip")
+    print(f"Half-duplex turnaround before pong echo: {turnaround_ms}ms")
+    print("Diag stats every 5s — watch ping rx vs echo vs skip; pong overheard should rise")
     conn = mavutil.mavlink_connection(
         device,
         baud=baud,
@@ -292,24 +339,11 @@ def _run_mavlink(port: str, baud: int, sysid: int | None, verbose: bool = False,
             if not quiet:
                 print(
                     f"RX TUNNEL ping id={decoded.get('id')} sid={_target_sysid(decoded)} "
-                    f"(mine — echoing)"
+                    f"(mine — echoing after {turnaround_ms}ms)"
                 )
 
             n += 1
-            tgt = _target_sysid(decoded)
-            pong = make_pong(decoded, "desktop")
-            try:
-                raw = _pack_payload(pong)
-            except ValueError as e:
-                print(f"[{n}] pong pack failed: {e} — skipping echo")
-                continue
-            payload = raw + b"\x00" * (TUNNEL_PAYLOAD_MAX - len(raw))
-            conn.mav.tunnel_send(0, 0, RDI_TUNNEL_PAYLOAD_TYPE, len(raw), payload)
-            diag.note("echo_ping")
-            hops = format_hops(list(pong.get("hops") or []))
-            print(f"\n[{n}] echoed TUNNEL ping id={pong.get('id')} sysid={tgt} ({len(raw)}B)")
-            for h in hops:
-                print(f"    {h}")
+            _echo_pong_mavlink(conn, decoded, turnaround_ms=turnaround_ms, n=n, diag=diag)
     except KeyboardInterrupt:
         print("\nStopped.")
         diag.maybe_report(force=True)
@@ -346,6 +380,12 @@ def main() -> None:
         action="store_true",
         help="Suppress ping-skip / overheard-pong lines (stats still print)",
     )
+    ap.add_argument(
+        "--turnaround-ms",
+        type=int,
+        default=120,
+        help="Wait this many ms after RX ping before TX pong (half-duplex SiK/RFD, default 120)",
+    )
     args = ap.parse_args()
 
     try:
@@ -369,7 +409,14 @@ def main() -> None:
     if args.mode == "raw":
         _run_raw(args.port, args.baud, args.sysid, verbose=args.verbose, quiet=args.quiet)
     else:
-        _run_mavlink(args.port, args.baud, args.sysid, verbose=args.verbose, quiet=args.quiet)
+        _run_mavlink(
+            args.port,
+            args.baud,
+            args.sysid,
+            verbose=args.verbose,
+            quiet=args.quiet,
+            turnaround_ms=max(0, int(args.turnaround_ms)),
+        )
 
 
 if __name__ == "__main__":

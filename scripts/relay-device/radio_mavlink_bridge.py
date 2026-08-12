@@ -248,6 +248,8 @@ class RadioMavlinkBridge:
                 target_sysid if target_sysid is not None else "any",
                 already,
             )
+            # Local RFD needs a moment to leave TX before it can hear the pong.
+            await asyncio.sleep(0.05)
             pong = await asyncio.wait_for(fut, timeout=self.timeout_sec)
             hops = list(pong.get("hops") or [])
             hops.append({"hop": hop_relay, "ts": time.time()})
