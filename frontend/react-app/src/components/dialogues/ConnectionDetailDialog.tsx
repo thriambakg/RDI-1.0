@@ -445,16 +445,27 @@ export function ConnectionDetailDialog({
     return () => channel.removeEventListener('message', onMessage)
   }, [open, data, getDataChannel, webRtcState(data?.session_id ?? ''), addLog])
 
-  // Live ping meter for the Control link HUD (matches relay/radio toggle).
+  // Live ping meter for the Control link HUD.
+  // Radio is half-duplex: auto RF probes fight CTRL and drop return pongs (UI ~8s
+  // timeout while the desktop agent still echoes). Auto-probe relay only; radio RTT
+  // is manual via "Ping radio".
   const transmittingRef = useRef(false)
   transmittingRef.current = transmitting
   const pingRunningRef = useRef(false)
   pingRunningRef.current = pingRunning
 
-  // Runs in every panel view: editing keybinds must never look like a dropped link.
   useEffect(() => {
     if (!open || !data?.session_id) return
     if (usesWebSocketTransport(data)) return
+
+    if (controlPath === 'radio') {
+      setLivePing((prev) => ({
+        ms: prev.path === 'radio' ? prev.ms : null,
+        status: prev.path === 'radio' && prev.ms != null ? prev.status : 'idle',
+        path: 'radio',
+      }))
+      return
+    }
 
     let cancelled = false
     let timer: number | undefined
@@ -469,54 +480,51 @@ export function ConnectionDetailDialog({
 
     const tick = async () => {
       if (cancelled) return
+      if (controlPathRef.current === 'radio') return
       if (webRtcState(data.session_id) !== 'connected') {
-        setLivePing((prev) => ({ ...prev, status: 'idle', ms: null, path: controlPathRef.current }))
+        setLivePing((prev) => ({ ...prev, status: 'idle', ms: null, path: 'relay' }))
         schedule(1200)
         return
       }
       const channel = getDataChannel(data.session_id)
       if (!channel || channel.readyState !== 'open') {
-        setLivePing((prev) => ({ ...prev, status: 'idle', ms: null, path: controlPathRef.current }))
+        setLivePing((prev) => ({ ...prev, status: 'idle', ms: null, path: 'relay' }))
         schedule(1200)
         return
       }
-      // Don't stack on manual ping buttons or radio CTRL heartbeats.
       if (inFlight || pingRunningRef.current || transmittingRef.current) {
         schedule(800)
         return
       }
 
-      const path = controlPathRef.current
-      const mode: PingMode = path === 'radio' ? 'radio' : 'local'
       inFlight = true
       setLivePing((prev) => ({
         ...prev,
         status: prev.ms == null ? 'probing' : 'live',
-        path,
+        path: 'relay',
       }))
       try {
         const result = await pingDataChannel(channel, {
-          mode,
-          timeoutMs: mode === 'radio' ? 10000 : 4000,
+          mode: 'local',
+          timeoutMs: 4000,
         })
-        if (cancelled) return
-        setLivePing({ ms: result.rttMs, status: 'live', path })
+        if (cancelled || controlPathRef.current === 'radio') return
+        setLivePing({ ms: result.rttMs, status: 'live', path: 'relay' })
       } catch (e) {
-        if (cancelled) return
+        if (cancelled || controlPathRef.current === 'radio') return
         const msg = e instanceof Error ? e.message : 'ping failed'
         setLivePing((prev) => ({
           ms: prev.ms,
           status: /timed out/i.test(msg) ? 'timeout' : 'error',
-          path,
+          path: 'relay',
         }))
       } finally {
         inFlight = false
-        // Radio samples slower so we don't contend with CTRL on the UART/RF path.
-        schedule(path === 'radio' ? 2500 : 1400)
+        schedule(1400)
       }
     }
 
-    setLivePing({ ms: null, status: 'probing', path: controlPathRef.current })
+    setLivePing({ ms: null, status: 'probing', path: 'relay' })
     schedule(200)
 
     return () => {
@@ -615,6 +623,10 @@ export function ConnectionDetailDialog({
           if (result.lines.length > 0) {
             result.lines.forEach((line) => addLog(line))
           }
+          const radioFailed =
+            mode === 'radio' &&
+            (!!result.error ||
+              result.lines.some((l) => /radio ping failed|no TUNNEL pong|fell back/i.test(l)))
           if (result.error) {
             addLog(`Radio note: ${result.error}`)
           }
@@ -622,7 +634,20 @@ export function ConnectionDetailDialog({
           if (hopNames.length > 0) {
             addLog(`Path: ${hopNames.join(' → ')}`)
           }
-          addLog(`Round-trip ${result.rttMs}ms (${mode === 'radio' ? 'radio' : 'relay'}).`)
+          if (radioFailed) {
+            setPingError('Radio round-trip failed (pong not received). CTRL may still work one-way.')
+            addLog(
+              `Radio RTT unavailable after ${result.rttMs}ms wait — outbound RF can still carry CTRL.`,
+            )
+            setLivePing({ ms: null, status: 'timeout', path: 'radio' })
+          } else {
+            addLog(`Round-trip ${result.rttMs}ms (${mode === 'radio' ? 'radio' : 'relay'}).`)
+            if (mode === 'radio') {
+              setLivePing({ ms: result.rttMs, status: 'live', path: 'radio' })
+            } else {
+              setLivePing({ ms: result.rttMs, status: 'live', path: 'relay' })
+            }
+          }
         })
         .catch((e) => {
           const message = e instanceof Error ? e.message : 'Ping failed'
@@ -1035,7 +1060,8 @@ export function ConnectionDetailDialog({
             </Button>
           </Box>
           <Typography sx={{ color: '#475569', fontSize: '0.75rem', mb: 1.5 }}>
-            Ping relay = browser ↔ Pi. Ping radio = full RF path. Controls use the toggle above.
+            Ping relay = browser ↔ Pi. Ping radio = full RF round-trip (manual — auto radio
+            probes are off so they do not collide with CTRL on half-duplex RFD).
             {!focused ? ' Click this window to capture keyboard.' : null}
           </Typography>
           {pingError && (

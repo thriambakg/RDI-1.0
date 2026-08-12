@@ -240,6 +240,12 @@ No change required for folder refs beyond optional display badge (sysid). Full a
 
 **Exit criteria:** Two connections (sysid 1 and 2) on one relay; ping radio for each only completes for the matching endpoint (lab: two agents or one agent filtering ids).
 
+**Lab note (2026-08-11):** Dual-sysid **ping** demux works: COM7 `--sysid 2` skips sysid=1 pings and echoes sysid=2; both stacks (`px4` / `ardupilot`) stamp correctly. Remaining:
+1. Desktop agent must also filter **CTRL** by `--sysid` (was printing foreign CTRL) — fixed in `radio_ping_desktop_agent.py`.
+2. Lab agents should each pass `--sysid` (COM5 `--sysid 1`, COM7 `--sysid 2`); unfiltered agents answer every aircraft.
+3. Create UI later auto-allocates sysids so operators don’t leave both drones on `1`.
+4. Hop timestamps showing `T+-29xxms` are a separate display bug (ms vs seconds).
+
 ### Phase C — Mothership production path
 
 1. Pixhawk on CM4 baseboard; TELEM1 radio; `shared_serial` default.  

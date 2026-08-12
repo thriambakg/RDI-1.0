@@ -51,6 +51,35 @@ def _format_ctrl_line(n: int, msg: dict) -> str:
     )
 
 
+def _target_sysid(msg: dict) -> int | None:
+    """Resolve target_sysid from full or compact (`sid`) fields."""
+    ctrl = normalize_ctrl_msg(msg) if msg.get("type") == "ctrl" else msg
+    raw = ctrl.get("target_sysid", ctrl.get("sid"))
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sysid_mismatch(msg: dict, filter_sysid: int | None) -> bool:
+    """True when this agent should ignore the frame (wrong aircraft)."""
+    if filter_sysid is None:
+        return False
+    tgt = _target_sysid(msg)
+    return tgt is not None and tgt != filter_sysid
+
+
+def _skip_foreign(kind: str, msg: dict, filter_sysid: int | None, verbose: bool) -> bool:
+    """Return True if frame should be ignored. Only print when --verbose."""
+    if not _sysid_mismatch(msg, filter_sysid):
+        return False
+    if verbose:
+        print(f"RX {kind} for sysid={_target_sysid(msg)} (skip)")
+    return True
+
+
 def _serial_device(port: str) -> str:
     """pymavlink treats bare 'COM5' as a log file on Windows — use \\\\.\\COM5."""
     p = port.strip()
@@ -59,13 +88,13 @@ def _serial_device(port: str) -> str:
     return p
 
 
-def _run_raw(port: str, baud: int, sysid: int | None) -> None:
+def _run_raw(port: str, baud: int, sysid: int | None, verbose: bool = False) -> None:
     import serial
 
     print(f"\nOpening {port} @ {baud} raw JSON (Ctrl+C to stop)")
     print(f"Desktop agent pipe: {_pipe_banner('raw')}")
     if sysid is not None:
-        print(f"Filtering target_sysid={sysid}")
+        print(f"Filtering target_sysid={sysid} (foreign frames silent unless --verbose)")
     ser = serial.Serial(port, baud, timeout=0.2)
     buf = bytearray()
     n = 0
@@ -85,15 +114,15 @@ def _run_raw(port: str, baud: int, sysid: int | None) -> None:
                         print(f"RX (ignored): {line!r}")
                         continue
                     if msg.get("type") == "ctrl":
+                        if _skip_foreign("ctrl", msg, sysid, verbose):
+                            continue
                         n += 1
                         print(_format_ctrl_line(n, msg))
                         continue
                     if msg.get("type") != "ping":
                         print(f"RX non-ping: {msg}")
                         continue
-                    tgt = msg.get("target_sysid")
-                    if sysid is not None and tgt is not None and int(tgt) != sysid:
-                        print(f"RX ping id={msg.get('id')} for sysid={tgt} (skip)")
+                    if _skip_foreign("ping", msg, sysid, verbose):
                         continue
                     n += 1
                     pong = make_pong(msg, "desktop")
@@ -111,7 +140,7 @@ def _run_raw(port: str, baud: int, sysid: int | None) -> None:
         ser.close()
 
 
-def _run_mavlink(port: str, baud: int, sysid: int | None) -> None:
+def _run_mavlink(port: str, baud: int, sysid: int | None, verbose: bool = False) -> None:
     import os
 
     os.environ["MAVLINK20"] = "1"
@@ -121,7 +150,7 @@ def _run_mavlink(port: str, baud: int, sysid: int | None) -> None:
     print(f"\nOpening {port} ({device}) @ {baud} MAVLink TUNNEL (Ctrl+C to stop)")
     print(f"Desktop agent pipe: {_pipe_banner('mavlink')}")
     if sysid is not None:
-        print(f"Filtering target_sysid={sysid}")
+        print(f"Filtering target_sysid={sysid} (foreign frames silent unless --verbose)")
     conn = mavutil.mavlink_connection(
         device,
         baud=baud,
@@ -159,18 +188,19 @@ def _run_mavlink(port: str, baud: int, sysid: int | None) -> None:
                 print(f"RX TUNNEL (ignored) len={msg.payload_length}")
                 continue
             if decoded.get("type") == "ctrl":
+                if _skip_foreign("TUNNEL ctrl", decoded, sysid, verbose):
+                    continue
                 n += 1
                 print(_format_ctrl_line(n, decoded))
                 continue
             if decoded.get("type") != "ping":
                 print(f"RX TUNNEL non-ping: {decoded.get('type')}")
                 continue
-            tgt = decoded.get("target_sysid")
-            if sysid is not None and tgt is not None and int(tgt) != sysid:
-                print(f"RX TUNNEL ping id={decoded.get('id')} for sysid={tgt} (skip)")
+            if _skip_foreign("TUNNEL ping", decoded, sysid, verbose):
                 continue
 
             n += 1
+            tgt = _target_sysid(decoded)
             pong = make_pong(decoded, "desktop")
             try:
                 raw = _pack_payload(pong)
@@ -206,7 +236,12 @@ def main() -> None:
         "--sysid",
         type=int,
         default=None,
-        help="Only echo pings with this target_sysid (omit to answer all)",
+        help="Only handle ping/CTRL for this target_sysid (omit to answer all)",
+    )
+    ap.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Log skipped frames for other sysids",
     )
     args = ap.parse_args()
 
@@ -229,9 +264,9 @@ def main() -> None:
         print(f"  {p.device:12s}  {p.description}")
 
     if args.mode == "mavlink":
-        _run_mavlink(args.port, args.baud, args.sysid)
+        _run_mavlink(args.port, args.baud, args.sysid, args.verbose)
     else:
-        _run_raw(args.port, args.baud, args.sysid)
+        _run_raw(args.port, args.baud, args.sysid, args.verbose)
 
 
 if __name__ == "__main__":
