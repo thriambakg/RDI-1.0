@@ -119,8 +119,12 @@ def _get_relay_registry_item(
     return None
 
 
+RF_LINK_MODES = frozenset({"shared_serial", "dedicated_serial"})
+DEFAULT_RADIO_NET_ID = 25
+
+
 def _fetch_relay_config(dynamodb, user_id: str, relay_id: str, wavelength_zone_id: str) -> dict | None:
-    """Fetch relay from registry; return config (relay_type, mavlink_host) if user owns it."""
+    """Fetch relay from registry; return config (relay_type, mavlink_host, radio_net_id) if user owns it."""
     if not RELAY_REGISTRY_TABLE or not relay_id:
         return None
     item = _get_relay_registry_item(dynamodb, user_id, relay_id, wavelength_zone_id)
@@ -133,11 +137,129 @@ def _fetch_relay_config(dynamodb, user_id: str, relay_id: str, wavelength_zone_i
     if config_raw:
         try:
             config = json.loads(config_raw)
-            if isinstance(config, dict) and config.get("mavlink_host"):
-                out["mavlink_host"] = str(config["mavlink_host"])
+            if isinstance(config, dict):
+                if config.get("mavlink_host"):
+                    out["mavlink_host"] = str(config["mavlink_host"])
+                if config.get("radio_net_id") is not None:
+                    try:
+                        net = int(config["radio_net_id"])
+                        if 0 <= net <= 255:
+                            out["radio_net_id"] = net
+                    except (TypeError, ValueError):
+                        pass
         except (json.JSONDecodeError, TypeError):
             pass
     return out
+
+
+def _used_sysids_for_relay(dynamodb, user_id: str, relay_id: str) -> set[int]:
+    """Sysids already claimed by RF connections on this relay (active or idle rows)."""
+    used: set[int] = set()
+    if not relay_id:
+        return used
+    try:
+        paginator = dynamodb.get_paginator("query")
+        for page in paginator.paginate(
+            TableName=TABLE_NAME,
+            KeyConditionExpression="user_id = :uid",
+            ExpressionAttributeValues={":uid": {"S": user_id}},
+            ProjectionExpression="relay_id, metadata",
+        ):
+            for item in page.get("Items", []):
+                if (item.get("relay_id") or {}).get("S") != relay_id:
+                    continue
+                meta_raw = (item.get("metadata") or {}).get("S") or ""
+                if not meta_raw:
+                    continue
+                try:
+                    meta = json.loads(meta_raw)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if not isinstance(meta, dict):
+                    continue
+                link = str(meta.get("link_mode") or "").strip().lower()
+                if link not in RF_LINK_MODES:
+                    continue
+                try:
+                    sid = int(meta["mavlink_sysid"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if 1 <= sid <= 255:
+                    used.add(sid)
+    except ClientError as e:
+        _log("used_sysids query failed", relay_id=relay_id, error=str(e))
+    return used
+
+
+def _allocate_mavlink_sysid(used: set[int]) -> int | None:
+    for candidate in range(1, 256):
+        if candidate not in used:
+            return candidate
+    return None
+
+
+def _normalize_create_metadata(
+    dynamodb,
+    user_id: str,
+    relay_id: str | None,
+    wavelength_zone_id: str,
+    metadata: dict | None,
+    relay_config: dict | None,
+) -> tuple[dict | None, str | None]:
+    """
+    Auto-allocate mavlink_sysid for RF link modes; inherit radio_net_id from relay.
+    Returns (normalized_metadata, error_message).
+    """
+    if metadata is not None and not isinstance(metadata, dict):
+        return None, "metadata must be an object"
+    meta: dict = dict(metadata) if isinstance(metadata, dict) else {}
+    link = str(meta.get("link_mode") or "").strip().lower()
+    if link:
+        meta["link_mode"] = link
+
+    if link not in RF_LINK_MODES:
+        return (meta if meta else None), None
+
+    if not relay_id:
+        return None, "relay_id required for radio link modes"
+
+    # Inherit SiK net id from mothership/relay unless explicitly overridden
+    if meta.get("radio_net_id") is None:
+        inherited = (relay_config or {}).get("radio_net_id")
+        meta["radio_net_id"] = int(inherited) if inherited is not None else DEFAULT_RADIO_NET_ID
+    else:
+        try:
+            net = int(meta["radio_net_id"])
+        except (TypeError, ValueError):
+            return None, "radio_net_id must be an integer 0–255"
+        if not 0 <= net <= 255:
+            return None, "radio_net_id must be an integer 0–255"
+        meta["radio_net_id"] = net
+
+    used = _used_sysids_for_relay(dynamodb, user_id, relay_id)
+    requested = meta.get("mavlink_sysid")
+    if requested is None:
+        allocated = _allocate_mavlink_sysid(used)
+        if allocated is None:
+            return None, "No free mavlink_sysid on this relay (1–255 all in use)"
+        meta["mavlink_sysid"] = allocated
+    else:
+        try:
+            sid = int(requested)
+        except (TypeError, ValueError):
+            return None, "mavlink_sysid must be an integer 1–255"
+        if not 1 <= sid <= 255:
+            return None, "mavlink_sysid must be an integer 1–255"
+        if sid in used:
+            return None, (
+                f"mavlink_sysid {sid} already used by another connection on this relay"
+            )
+        meta["mavlink_sysid"] = sid
+
+    if meta.get("mavlink_compid") is None:
+        meta["mavlink_compid"] = 1
+
+    return meta, None
 
 
 def _add_relay_active_session(
@@ -602,11 +724,22 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     item["ttl_seconds"] = {"N": str(ttl_seconds if ttl_val > 0 else 0)}
     if relay_id:
         item["relay_id"] = {"S": relay_id}
-    if body.get("metadata") and isinstance(body["metadata"], dict):
-        item["metadata"] = {"S": json.dumps(body["metadata"])}
 
     dynamodb = boto3.client("dynamodb")
     relay_config = _fetch_relay_config(dynamodb, user_id, relay_id, wavelength_zone_id) if relay_id else None
+    metadata, meta_err = _normalize_create_metadata(
+        dynamodb,
+        user_id,
+        relay_id,
+        wavelength_zone_id,
+        body.get("metadata") if isinstance(body.get("metadata"), dict) else None,
+        relay_config,
+    )
+    if meta_err:
+        _log("create_session rejected", reason=meta_err, relay_id=relay_id)
+        return _response(400, {"error": meta_err}, headers)
+    if metadata:
+        item["metadata"] = {"S": json.dumps(metadata)}
 
     signaling_channel_arn = ""
     webrtc_viewer = None
@@ -655,6 +788,8 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
         drone_id=drone_id,
         idle_desc=idle_desc,
         wavelength_zone_id=wavelength_zone_id,
+        mavlink_sysid=(metadata or {}).get("mavlink_sysid") if metadata else None,
+        radio_net_id=(metadata or {}).get("radio_net_id") if metadata else None,
     )
     # Legacy proxy path (deprecated when DATA_PLANE=webrtc)
     if not webrtc_enabled():
@@ -662,7 +797,6 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
 
     if webrtc_enabled() and relay_id and signaling_channel_arn:
         eff_port = None
-        metadata = body.get("metadata")
         if isinstance(metadata, dict) and metadata.get("mavlink_port") is not None:
             try:
                 eff_port = int(metadata["mavlink_port"])
@@ -709,7 +843,7 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
             PROXY_ENDPOINT,
             session_id,
             relay_config,
-            session_metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else None,
+            session_metadata=metadata if isinstance(metadata, dict) else None,
         )
     if relay_id and wavelength_zone_id:
         _update_relay_status(dynamodb, user_id, relay_id, wavelength_zone_id, "online")
@@ -730,7 +864,6 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     if relay_config and relay_config.get("relay_type"):
         payload["relay_type"] = relay_config["relay_type"]
     # Effective mavlink target: host from relay, port from session metadata (per-connection)
-    metadata = body.get("metadata")
     eff_port = None
     if isinstance(metadata, dict) and metadata.get("mavlink_port") is not None:
         try:
@@ -743,6 +876,15 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     payload["mavlink_host"] = (
         (relay_config or {}).get("mavlink_host") or "127.0.0.1"
     )
+    if isinstance(metadata, dict):
+        if metadata.get("mavlink_sysid") is not None:
+            payload["mavlink_sysid"] = int(metadata["mavlink_sysid"])
+        if metadata.get("radio_net_id") is not None:
+            payload["radio_net_id"] = int(metadata["radio_net_id"])
+        if metadata.get("link_mode"):
+            payload["link_mode"] = metadata["link_mode"]
+        if metadata.get("vehicle_stack"):
+            payload["vehicle_stack"] = metadata["vehicle_stack"]
     if WAVELENGTH_CARRIER_IP and (not WAVELENGTH_ZONE_ID or wavelength_zone_id == WAVELENGTH_ZONE_ID):
         payload["carrier_ip"] = WAVELENGTH_CARRIER_IP
     _log("create_session success", session_id=session_id, drone_id=drone_id)

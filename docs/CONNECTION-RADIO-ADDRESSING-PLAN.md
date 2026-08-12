@@ -243,7 +243,7 @@ No change required for folder refs beyond optional display badge (sysid). Full a
 **Lab note (2026-08-11):** Dual-sysid **ping** demux works: COM7 `--sysid 2` skips sysid=1 pings and echoes sysid=2; both stacks (`px4` / `ardupilot`) stamp correctly. Remaining:
 1. Desktop agent must also filter **CTRL** by `--sysid` (was printing foreign CTRL) — fixed in `radio_ping_desktop_agent.py`.
 2. Lab agents should each pass `--sysid` (COM5 `--sysid 1`, COM7 `--sysid 2`); unfiltered agents answer every aircraft.
-3. Create UI later auto-allocates sysids so operators don’t leave both drones on `1`.
+3. Create UI auto-allocates sysids so operators don’t leave both drones on `1` — **done** (session-api + Field/Lab presets).
 4. Hop timestamps showing `T+-29xxms` are a separate display bug (ms vs seconds).
 
 ### Phase C — Mothership production path
@@ -290,12 +290,14 @@ No change required for folder refs beyond optional display badge (sysid). Full a
 ## 10. Open decisions
 
 1. **Default `link_mode` for new connections** once Pixhawk mothership is standard: `shared_serial` vs `none`?  
+   → **Resolved (UI):** Create presets default Field → `shared_serial`, Sim → `udp_mavlink`, Lab → `dedicated_serial`.  
 2. **Enforce unique sysid** in API (hard fail) vs warning only?  
+   → **Resolved:** hard-fail on create if `mavlink_sysid` already used on that relay (RF modes).  
 3. **Sysid ownership:** user-entered vs auto-allocated from relay pool (1..N)?  
+   → **Resolved:** auto-allocate next free 1–255 per relay when omitted; Advanced may override.  
 4. **HITL desktop agent:** single process multi-sysid vs one process per connection?  
-5. **Relay registry:** publish available radios / net id as read-only config for the create form?
-
-**Recommendation:** hard-fail duplicate sysid on same relay; default new RF connections to `shared_serial` after mothership hardware lands; auto-allocate sysid optional Phase C nicety.
+5. **Relay registry:** publish available radios / net id as read-only config for the create form?  
+   → **Partial:** relay `config.radio_net_id` stored on register/claim; create inherits it (default 25).
 
 ---
 

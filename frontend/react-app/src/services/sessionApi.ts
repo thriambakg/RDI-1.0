@@ -42,6 +42,8 @@ export interface CreateSessionParams {
 export interface RelayConfig {
   mavlink_host?: string
   mavlink_port?: number
+  radio_net_id?: number
+  relay_type?: string
 }
 
 export type SessionTransport = 'webrtc' | 'websocket'
@@ -71,6 +73,12 @@ export interface CreateSessionResponse {
   carrier_ip?: string
   mavlink_host?: string
   mavlink_port?: number
+  /** Allocated or confirmed MAVLink system id (RF link modes). */
+  mavlink_sysid?: number
+  /** Inherited from relay or set on create (SiK / RFD network id). */
+  radio_net_id?: number
+  link_mode?: string
+  vehicle_stack?: string
 }
 
 export interface SessionInfo {

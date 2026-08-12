@@ -74,6 +74,7 @@ export function RegisterRelayDialog({
   const [claimCode, setClaimCode] = useState('')
   const [relayType, setRelayType] = useState<'local' | 'sim_relay'>('sim_relay')
   const [mavlinkHost, setMavlinkHost] = useState('127.0.0.1')
+  const [radioNetId, setRadioNetId] = useState(25)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<RegisterRelayResponse | null>(null)
@@ -83,7 +84,9 @@ export function RegisterRelayDialog({
     setError(null)
     setLoading(true)
     try {
-      const config: Record<string, unknown> = {}
+      const config: Record<string, unknown> = {
+        radio_net_id: radioNetId,
+      }
       if (relayType === 'local') {
         config.mavlink_host = mavlinkHost.trim() || '127.0.0.1'
       }
@@ -94,13 +97,13 @@ export function RegisterRelayDialog({
               wavelength_zone_id: wavelengthZoneId,
               name: name.trim() || 'relay',
               relay_type: relayType,
-              config: Object.keys(config).length > 0 ? config : undefined,
+              config,
             })
           : await registerRelay({
               wavelength_zone_id: wavelengthZoneId,
               name: name.trim() || 'relay',
               relay_type: relayType,
-              config: Object.keys(config).length > 0 ? config : undefined,
+              config,
             })
       setResult(res)
       onSuccess?.(res)
@@ -117,6 +120,7 @@ export function RegisterRelayDialog({
     setClaimCode('')
     setRelayType('sim_relay')
     setMavlinkHost('127.0.0.1')
+    setRadioNetId(25)
     setError(null)
     setResult(null)
     onClose()
@@ -186,6 +190,9 @@ export function RegisterRelayDialog({
             </Typography>
             <Typography sx={{ color: '#f8fafc', fontSize: '0.875rem', mb: 1 }}>
               <strong>Name:</strong> {result.name}
+            </Typography>
+            <Typography sx={{ color: '#f8fafc', fontSize: '0.875rem', mb: 1 }}>
+              <strong>Radio Net ID:</strong> {radioNetId}
             </Typography>
             {relayType === 'local' && mavlinkHost && (
               <Typography sx={{ color: '#f8fafc', fontSize: '0.875rem', mb: 1 }}>
@@ -278,6 +285,17 @@ export function RegisterRelayDialog({
                 </MenuItem>
               ))}
             </TextField>
+            <TextField
+              fullWidth
+              type="number"
+              label="Radio Net ID"
+              value={radioNetId}
+              onChange={(e) => setRadioNetId(Math.max(0, Math.min(255, Number(e.target.value) || 0)))}
+              margin="normal"
+              sx={inputSx}
+              inputProps={{ min: 0, max: 255 }}
+              helperText="SiK / RFD network ID for this mothership (connections inherit it)"
+            />
             {relayType === 'local' && (
               <Box sx={{ mt: 1, p: 1.5, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '0.375rem' }}>
                 <Typography sx={{ color: '#94a3b8', fontSize: '0.75rem', mb: 1.5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>

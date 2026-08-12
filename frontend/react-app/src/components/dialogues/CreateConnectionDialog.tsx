@@ -9,6 +9,9 @@ import {
   MenuItem,
   Box,
   Typography,
+  ToggleButton,
+  ToggleButtonGroup,
+  Collapse,
 } from '@mui/material'
 import { createSession } from '../../services/sessionApi'
 import type { CreateSessionResponse } from '../../services/sessionApi'
@@ -41,6 +44,17 @@ const LINK_MODE_OPTIONS = [
   { value: 'udp_mavlink', label: 'UDP MAVLink (SITL / Gazebo / local)' },
   { value: 'dedicated_serial', label: 'Dedicated serial (lab FTDI)' },
 ]
+
+type ConnectionPreset = 'field' | 'sim' | 'lab'
+
+const PRESET_DEFAULTS: Record<
+  ConnectionPreset,
+  { vehicleStack: VehicleStackId; linkMode: string; mavlinkPort: number }
+> = {
+  field: { vehicleStack: 'px4', linkMode: 'shared_serial', mavlinkPort: 18570 },
+  sim: { vehicleStack: 'gazebo_px4', linkMode: 'udp_mavlink', mavlinkPort: 18570 },
+  lab: { vehicleStack: 'px4', linkMode: 'dedicated_serial', mavlinkPort: 18570 },
+}
 
 const inputSx = {
   '& .MuiOutlinedInput-root': {
@@ -94,11 +108,15 @@ export function CreateConnectionDialog({
 }: CreateConnectionDialogProps) {
   const [droneName, setDroneName] = useState('')
   const [relayId, setRelayId] = useState('')
+  const [preset, setPreset] = useState<ConnectionPreset>('field')
   const [ttlSeconds, setTtlSeconds] = useState(14400)
-  const [mavlinkPort, setMavlinkPort] = useState(18570)
-  const [vehicleStack, setVehicleStack] = useState<VehicleStackId>('px4')
-  const [linkMode, setLinkMode] = useState('shared_serial')
+  const [mavlinkPort, setMavlinkPort] = useState(PRESET_DEFAULTS.field.mavlinkPort)
+  const [vehicleStack, setVehicleStack] = useState<VehicleStackId>(PRESET_DEFAULTS.field.vehicleStack)
+  const [linkMode, setLinkMode] = useState(PRESET_DEFAULTS.field.linkMode)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [overrideSysid, setOverrideSysid] = useState(false)
   const [mavlinkSysid, setMavlinkSysid] = useState(1)
+  const [overrideNetId, setOverrideNetId] = useState(false)
   const [radioNetId, setRadioNetId] = useState(25)
   const [radioDevice, setRadioDevice] = useState('')
   const [loading, setLoading] = useState(false)
@@ -107,6 +125,15 @@ export function CreateConnectionDialog({
 
   const noRelays = relays.length === 0
   const canSubmit = !noRelays && relayId
+  const isRfLink = linkMode === 'shared_serial' || linkMode === 'dedicated_serial'
+
+  const applyPreset = (next: ConnectionPreset) => {
+    setPreset(next)
+    const d = PRESET_DEFAULTS[next]
+    setVehicleStack(d.vehicleStack)
+    setLinkMode(d.linkMode)
+    setMavlinkPort(d.mavlinkPort)
+  }
 
   const handleStackChange = (stack: VehicleStackId) => {
     setVehicleStack(stack)
@@ -128,9 +155,10 @@ export function CreateConnectionDialog({
         vehicle_stack: vehicleStack,
         link_mode: linkMode as 'none' | 'shared_serial' | 'dedicated_serial' | 'udp_mavlink',
       }
-      if (linkMode === 'shared_serial' || linkMode === 'dedicated_serial') {
-        metadata.mavlink_sysid = mavlinkSysid
-        metadata.radio_net_id = radioNetId
+      // Sysid / net id: omit so API auto-allocates / inherits from relay (unless Advanced override).
+      if (isRfLink) {
+        if (overrideSysid) metadata.mavlink_sysid = mavlinkSysid
+        if (overrideNetId) metadata.radio_net_id = radioNetId
       }
       if (linkMode === 'dedicated_serial' && radioDevice.trim()) {
         metadata.radio_device = radioDevice.trim()
@@ -156,11 +184,15 @@ export function CreateConnectionDialog({
   const handleClose = () => {
     setDroneName('')
     setRelayId('')
+    setPreset('field')
     setTtlSeconds(14400)
-    setMavlinkPort(18570)
-    setVehicleStack('px4')
-    setLinkMode('shared_serial')
+    setMavlinkPort(PRESET_DEFAULTS.field.mavlinkPort)
+    setVehicleStack(PRESET_DEFAULTS.field.vehicleStack)
+    setLinkMode(PRESET_DEFAULTS.field.linkMode)
+    setShowAdvanced(false)
+    setOverrideSysid(false)
     setMavlinkSysid(1)
+    setOverrideNetId(false)
     setRadioNetId(25)
     setRadioDevice('')
     setError(null)
@@ -225,8 +257,25 @@ export function CreateConnectionDialog({
               <strong>Drone ID:</strong> {result.drone_id}
             </Typography>
             <Typography sx={{ color: '#f8fafc', fontSize: '0.875rem', mb: 1 }}>
-              <strong>Transport:</strong> {result.transport === 'webrtc' ? 'WebRTC (KVS signaling)' : 'WebSocket proxy'}
+              <strong>Transport:</strong>{' '}
+              {result.transport === 'webrtc' ? 'WebRTC (KVS signaling)' : 'WebSocket proxy'}
             </Typography>
+            {result.mavlink_sysid != null && (
+              <Typography sx={{ color: '#f8fafc', fontSize: '0.875rem', mb: 1 }}>
+                <strong>MAVLink sysid:</strong> {result.mavlink_sysid} — set FC{' '}
+                <code>MAV_SYS_ID</code> to match
+              </Typography>
+            )}
+            {result.radio_net_id != null && (
+              <Typography sx={{ color: '#f8fafc', fontSize: '0.875rem', mb: 1 }}>
+                <strong>Radio Net ID:</strong> {result.radio_net_id} — match SiK / RFD on air + ground
+              </Typography>
+            )}
+            {result.link_mode && (
+              <Typography sx={{ color: '#f8fafc', fontSize: '0.875rem', mb: 1 }}>
+                <strong>Link mode:</strong> {result.link_mode}
+              </Typography>
+            )}
             {result.transport !== 'webrtc' && (
               <Typography sx={{ color: '#f8fafc', fontSize: '0.875rem', mb: 1 }}>
                 <strong>Endpoint:</strong> {result.endpoint}
@@ -248,7 +297,15 @@ export function CreateConnectionDialog({
         <form onSubmit={handleSubmit}>
           <DialogContent sx={{ pt: 0, backgroundColor: '#1e293b', color: '#f8fafc' }}>
             {noRelays ? (
-              <Box sx={{ mb: 2, p: 2, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '0.375rem' }}>
+              <Box
+                sx={{
+                  mb: 2,
+                  p: 2,
+                  backgroundColor: '#0f172a',
+                  border: '1px solid #334155',
+                  borderRadius: '0.375rem',
+                }}
+              >
                 <Typography sx={{ color: '#f8fafc', fontSize: '0.875rem', mb: 1 }}>
                   No relays registered for this zone. Register a relay first to create connections.
                 </Typography>
@@ -266,14 +323,14 @@ export function CreateConnectionDialog({
               <TextField
                 fullWidth
                 select
-                label="Relay"
+                label="Mothership / Relay"
                 value={relayId}
                 onChange={(e) => setRelayId(e.target.value)}
                 required
                 margin="normal"
                 sx={inputSx}
                 SelectProps={{ MenuProps: menuProps }}
-                helperText="Select which relay this connection will route through"
+                helperText="Radio Net ID is inherited from this relay"
               >
                 <MenuItem value="" disabled>
                   Select a relay
@@ -296,6 +353,43 @@ export function CreateConnectionDialog({
               margin="normal"
               sx={inputSx}
             />
+            <Typography sx={{ color: '#94a3b8', fontSize: '0.75rem', mt: 1.5, mb: 0.5 }}>
+              Preset
+            </Typography>
+            <ToggleButtonGroup
+              value={preset}
+              exclusive
+              onChange={(_, v: ConnectionPreset | null) => v && applyPreset(v)}
+              fullWidth
+              sx={{
+                mb: 1,
+                '& .MuiToggleButton-root': { color: '#94a3b8', borderColor: '#334155', fontSize: '0.8rem' },
+              }}
+            >
+              <ToggleButton
+                value="field"
+                sx={{ '&.Mui-selected': { color: '#f8fafc', backgroundColor: '#0f172a' } }}
+              >
+                Field
+              </ToggleButton>
+              <ToggleButton
+                value="sim"
+                sx={{ '&.Mui-selected': { color: '#f8fafc', backgroundColor: '#0f172a' } }}
+              >
+                Sim
+              </ToggleButton>
+              <ToggleButton
+                value="lab"
+                sx={{ '&.Mui-selected': { color: '#f8fafc', backgroundColor: '#0f172a' } }}
+              >
+                Lab
+              </ToggleButton>
+            </ToggleButtonGroup>
+            <Typography sx={{ color: '#64748b', fontSize: '0.75rem', mb: 1 }}>
+              {preset === 'field' && 'Shared mothership radio — sysid auto-allocated.'}
+              {preset === 'sim' && 'UDP MAVLink to Gazebo / SITL on the relay.'}
+              {preset === 'lab' && 'Dedicated serial (FTDI) — sysid auto-allocated.'}
+            </Typography>
             <TextField
               fullWidth
               select
@@ -312,86 +406,6 @@ export function CreateConnectionDialog({
                 </MenuItem>
               ))}
             </TextField>
-            <TextField
-              fullWidth
-              select
-              label="Vehicle stack"
-              value={vehicleStack}
-              onChange={(e) => handleStackChange(e.target.value as VehicleStackId)}
-              margin="normal"
-              sx={inputSx}
-              SelectProps={{ MenuProps: menuProps }}
-              helperText={
-                VEHICLE_STACK_OPTIONS.find((o) => o.id === vehicleStack)?.helper ??
-                'Firmware / dialect this connection will speak'
-              }
-            >
-              {VEHICLE_STACK_OPTIONS.map((o) => (
-                <MenuItem key={o.id} value={o.id} disableRipple>
-                  {o.label}
-                </MenuItem>
-              ))}
-            </TextField>
-            <TextField
-              fullWidth
-              select
-              label="MAVLink port"
-              value={mavlinkPort}
-              onChange={(e) => setMavlinkPort(Number(e.target.value))}
-              margin="normal"
-              sx={inputSx}
-              SelectProps={{ MenuProps: menuProps }}
-              helperText="UDP port on the relay (SITL / Gazebo / future bridge) — per connection"
-            >
-              {MAVLINK_PORT_OPTIONS.map((o) => (
-                <MenuItem key={o.value} value={o.value} disableRipple>
-                  {o.label}
-                </MenuItem>
-              ))}
-            </TextField>
-            <TextField
-              fullWidth
-              select
-              label="Radio link mode"
-              value={linkMode}
-              onChange={(e) => setLinkMode(e.target.value)}
-              margin="normal"
-              sx={inputSx}
-              SelectProps={{ MenuProps: menuProps }}
-              helperText="Shared radio = one mothership RFD900, address by MAVLink sysid"
-            >
-              {LINK_MODE_OPTIONS.map((o) => (
-                <MenuItem key={o.value} value={o.value} disableRipple>
-                  {o.label}
-                </MenuItem>
-              ))}
-            </TextField>
-            {(linkMode === 'shared_serial' || linkMode === 'dedicated_serial') && (
-              <>
-                <TextField
-                  fullWidth
-                  type="number"
-                  label="MAVLink system ID"
-                  value={mavlinkSysid}
-                  onChange={(e) => setMavlinkSysid(Math.max(1, Math.min(255, Number(e.target.value) || 1)))}
-                  margin="normal"
-                  sx={inputSx}
-                  inputProps={{ min: 1, max: 255 }}
-                  helperText="Must match the drone FC MAV_SYS_ID (unique per aircraft on this relay)"
-                />
-                <TextField
-                  fullWidth
-                  type="number"
-                  label="Radio Net ID"
-                  value={radioNetId}
-                  onChange={(e) => setRadioNetId(Math.max(0, Math.min(255, Number(e.target.value) || 0)))}
-                  margin="normal"
-                  sx={inputSx}
-                  inputProps={{ min: 0, max: 255 }}
-                  helperText="SiK / RFD network ID (same for mothership + this drone)"
-                />
-              </>
-            )}
             {linkMode === 'dedicated_serial' && (
               <TextField
                 fullWidth
@@ -401,9 +415,115 @@ export function CreateConnectionDialog({
                 onChange={(e) => setRadioDevice(e.target.value)}
                 margin="normal"
                 sx={inputSx}
-                helperText="Lab-only: this connection owns that UART"
+                helperText="Lab: UART this connection owns"
               />
             )}
+            <Button
+              onClick={() => setShowAdvanced((v) => !v)}
+              sx={{ color: '#3b82f6', textTransform: 'none', mt: 1, px: 0 }}
+              disableRipple
+            >
+              {showAdvanced ? 'Hide advanced' : 'Advanced'}
+            </Button>
+            <Collapse in={showAdvanced}>
+              <Box sx={{ mt: 0.5 }}>
+                <TextField
+                  fullWidth
+                  select
+                  label="Vehicle stack"
+                  value={vehicleStack}
+                  onChange={(e) => handleStackChange(e.target.value as VehicleStackId)}
+                  margin="normal"
+                  sx={inputSx}
+                  SelectProps={{ MenuProps: menuProps }}
+                  helperText={
+                    VEHICLE_STACK_OPTIONS.find((o) => o.id === vehicleStack)?.helper ??
+                    'Firmware / dialect this connection will speak'
+                  }
+                >
+                  {VEHICLE_STACK_OPTIONS.map((o) => (
+                    <MenuItem key={o.id} value={o.id} disableRipple>
+                      {o.label}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  fullWidth
+                  select
+                  label="MAVLink port"
+                  value={mavlinkPort}
+                  onChange={(e) => setMavlinkPort(Number(e.target.value))}
+                  margin="normal"
+                  sx={inputSx}
+                  SelectProps={{ MenuProps: menuProps }}
+                  helperText="UDP port on the relay (SITL / Gazebo / bridge)"
+                >
+                  {MAVLINK_PORT_OPTIONS.map((o) => (
+                    <MenuItem key={o.value} value={o.value} disableRipple>
+                      {o.label}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  fullWidth
+                  select
+                  label="Radio link mode"
+                  value={linkMode}
+                  onChange={(e) => setLinkMode(e.target.value)}
+                  margin="normal"
+                  sx={inputSx}
+                  SelectProps={{ MenuProps: menuProps }}
+                >
+                  {LINK_MODE_OPTIONS.map((o) => (
+                    <MenuItem key={o.value} value={o.value} disableRipple>
+                      {o.label}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                {isRfLink && (
+                  <>
+                    <TextField
+                      fullWidth
+                      type="number"
+                      label="Override MAVLink sysid"
+                      value={mavlinkSysid}
+                      onChange={(e) => {
+                        setOverrideSysid(true)
+                        setMavlinkSysid(Math.max(1, Math.min(255, Number(e.target.value) || 1)))
+                      }}
+                      margin="normal"
+                      sx={inputSx}
+                      inputProps={{ min: 1, max: 255 }}
+                      helperText={
+                        overrideSysid
+                          ? 'Sent to API (must be unique on this relay)'
+                          : 'Leave untouched to auto-allocate'
+                      }
+                      onFocus={() => setOverrideSysid(true)}
+                    />
+                    <TextField
+                      fullWidth
+                      type="number"
+                      label="Override Radio Net ID"
+                      value={radioNetId}
+                      onChange={(e) => {
+                        setOverrideNetId(true)
+                        setRadioNetId(Math.max(0, Math.min(255, Number(e.target.value) || 0)))
+                      }}
+                      margin="normal"
+                      sx={inputSx}
+                      inputProps={{ min: 0, max: 255 }}
+                      helperText={
+                        overrideNetId
+                          ? 'Overrides relay-inherited SiK net id'
+                          : 'Leave untouched to inherit from relay (default 25)'
+                      }
+                      onFocus={() => setOverrideNetId(true)}
+                    />
+                  </>
+                )}
+              </Box>
+            </Collapse>
             {error && (
               <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mt: 1 }}>
                 {error}
