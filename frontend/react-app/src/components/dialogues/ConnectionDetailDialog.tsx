@@ -489,6 +489,8 @@ export function ConnectionDetailDialog({
 
       const path = controlPathRef.current
       const mode: PingMode = path === 'radio' ? 'radio' : 'local'
+      const sysidTag =
+        data.mavlink_sysid != null ? ` sysid=${data.mavlink_sysid}` : ''
       inFlight = true
       setLivePing((prev) => ({
         ...prev,
@@ -501,10 +503,25 @@ export function ConnectionDetailDialog({
           timeoutMs: mode === 'radio' ? 10000 : 4000,
         })
         if (cancelled) return
-        setLivePing({ ms: result.rttMs, status: 'live', path })
+        if (mode === 'radio' && result.error) {
+          addLog(`[live ping${sysidTag}] radio fail ${result.rttMs}ms: ${result.error}`)
+          setLivePing({
+            ms: null,
+            status: /timed out|no TUNNEL/i.test(result.error) ? 'timeout' : 'error',
+            path,
+          })
+        } else {
+          if (mode === 'radio') {
+            addLog(`[live ping${sysidTag}] radio ok ${result.rttMs}ms`)
+          }
+          setLivePing({ ms: result.rttMs, status: 'live', path })
+        }
       } catch (e) {
         if (cancelled) return
         const msg = e instanceof Error ? e.message : 'ping failed'
+        if (mode === 'radio') {
+          addLog(`[live ping${sysidTag}] ${msg}`)
+        }
         setLivePing((prev) => ({
           ms: prev.ms,
           status: /timed out/i.test(msg) ? 'timeout' : 'error',
@@ -524,7 +541,7 @@ export function ConnectionDetailDialog({
       cancelled = true
       if (timer != null) window.clearTimeout(timer)
     }
-  }, [open, data, controlPath, getDataChannel, webRtcState])
+  }, [open, data, controlPath, getDataChannel, webRtcState, addLog])
 
   const handleSaveSettings = useCallback(async () => {
     if (!sessionId || !data) return
@@ -610,7 +627,12 @@ export function ConnectionDetailDialog({
 
       setPingRunning(true)
       setPingError(null)
-      addLog(mode === 'radio' ? 'Pinging full radio path…' : 'Pinging relay (WebRTC only)…')
+      const sysidTag = data.mavlink_sysid != null ? ` (sysid=${data.mavlink_sysid})` : ''
+      addLog(
+        mode === 'radio'
+          ? `Pinging full radio path…${sysidTag}`
+          : `Pinging relay (WebRTC only)…${sysidTag}`,
+      )
       pingDataChannel(channel, { mode })
         .then((result) => {
           if (result.lines.length > 0) {
@@ -623,17 +645,29 @@ export function ConnectionDetailDialog({
           if (hopNames.length > 0) {
             addLog(`Path: ${hopNames.join(' → ')}`)
           }
-          addLog(`Round-trip ${result.rttMs}ms (${mode === 'radio' ? 'radio' : 'relay'}).`)
-          if (mode === 'radio') {
-            setLivePing({ ms: result.rttMs, status: 'live', path: 'radio' })
+          const radioFailed =
+            mode === 'radio' &&
+            (!!result.error ||
+              result.lines.some((l) => /radio ping failed|no TUNNEL pong|fell back/i.test(l)))
+          if (radioFailed) {
+            setPingError(`Radio RTT failed${sysidTag}`)
+            addLog(
+              `Radio RTT unavailable after ${result.rttMs}ms${sysidTag} — check Pi journal + desktop agent diag`,
+            )
+            setLivePing({ ms: null, status: 'timeout', path: 'radio' })
           } else {
-            setLivePing({ ms: result.rttMs, status: 'live', path: 'relay' })
+            addLog(`Round-trip ${result.rttMs}ms (${mode === 'radio' ? 'radio' : 'relay'})${sysidTag}.`)
+            if (mode === 'radio') {
+              setLivePing({ ms: result.rttMs, status: 'live', path: 'radio' })
+            } else {
+              setLivePing({ ms: result.rttMs, status: 'live', path: 'relay' })
+            }
           }
         })
         .catch((e) => {
           const message = e instanceof Error ? e.message : 'Ping failed'
           setPingError(message)
-          addLog(`Ping failed: ${message}`)
+          addLog(`Ping failed${sysidTag}: ${message}`)
         })
         .finally(() => setPingRunning(false))
       return

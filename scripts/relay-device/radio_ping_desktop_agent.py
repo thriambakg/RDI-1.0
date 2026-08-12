@@ -3,12 +3,12 @@
 Desktop radio ping echo agent — run on the PC with the ground RFD900 (FTDI COM port).
 
 Modes:
-  raw      — newline JSON on the serial port (USB↔USB / second-FTDI lab path)
   mavlink  — MAVLink TUNNEL wrapping (TELEM1 radio path through PX4)
+  raw      — newline JSON on the serial port (USB↔USB / second-FTDI lab path)
 
 Usage (Windows PowerShell):
   py -3.12 -m pip install pyserial pymavlink
-  py -3.12 -u radio_ping_desktop_agent.py --port COM5 --baud 57600 --mode mavlink
+  py -3.12 -u radio_ping_desktop_agent.py --port COM5 --baud 57600 --mode mavlink --sysid 1
 
 Find COM port in Device Manager → Ports (COM & LPT).
 """
@@ -71,12 +71,78 @@ def _sysid_mismatch(msg: dict, filter_sysid: int | None) -> bool:
     return tgt is not None and tgt != filter_sysid
 
 
-def _skip_foreign(kind: str, msg: dict, filter_sysid: int | None, verbose: bool) -> bool:
-    """Return True if frame should be ignored. Only print when --verbose."""
+class _Diag:
+    """Rolling counters for dual-sysid / half-duplex diagnosis."""
+
+    def __init__(self, filter_sysid: int | None, quiet: bool) -> None:
+        self.filter_sysid = filter_sysid
+        self.quiet = quiet
+        self.t0 = time.time()
+        self.last_report = self.t0
+        self.rx_ping = 0
+        self.echo_ping = 0
+        self.skip_ping = 0
+        self.rx_ctrl = 0
+        self.skip_ctrl = 0
+        self.rx_pong = 0
+        self.rx_other = 0
+        self.rx_bad = 0
+
+    def note(self, kind: str) -> None:
+        if kind == "rx_ping":
+            self.rx_ping += 1
+        elif kind == "echo_ping":
+            self.echo_ping += 1
+        elif kind == "skip_ping":
+            self.skip_ping += 1
+        elif kind == "rx_ctrl":
+            self.rx_ctrl += 1
+        elif kind == "skip_ctrl":
+            self.skip_ctrl += 1
+        elif kind == "rx_pong":
+            self.rx_pong += 1
+        elif kind == "rx_other":
+            self.rx_other += 1
+        elif kind == "rx_bad":
+            self.rx_bad += 1
+
+    def maybe_report(self, force: bool = False) -> None:
+        now = time.time()
+        if not force and now - self.last_report < 5.0:
+            return
+        self.last_report = now
+        filt = self.filter_sysid if self.filter_sysid is not None else "any"
+        print(
+            f"[diag filter={filt}] "
+            f"ping rx={self.rx_ping} echo={self.echo_ping} skip={self.skip_ping} | "
+            f"ctrl rx={self.rx_ctrl} skip={self.skip_ctrl} | "
+            f"pong overheard={self.rx_pong} other={self.rx_other} bad={self.rx_bad} "
+            f"(uptime {int(now - self.t0)}s)"
+        )
+
+
+def _skip_foreign(
+    kind: str,
+    msg: dict,
+    filter_sysid: int | None,
+    *,
+    verbose: bool,
+    quiet: bool,
+    diag: _Diag,
+) -> bool:
+    """Return True if frame should be ignored."""
     if not _sysid_mismatch(msg, filter_sysid):
         return False
-    if verbose:
-        print(f"RX {kind} for sysid={_target_sysid(msg)} (skip)")
+    tgt = _target_sysid(msg)
+    if kind.endswith("ping"):
+        diag.note("skip_ping")
+        # Pings are rare — always log skips unless --quiet (dual-sysid diagnosis).
+        if not quiet:
+            print(f"RX {kind} id={msg.get('id')} sid={tgt} (skip filter={filter_sysid})")
+    else:
+        diag.note("skip_ctrl")
+        if verbose and not quiet:
+            print(f"RX {kind} for sysid={tgt} (skip filter={filter_sysid})")
     return True
 
 
@@ -88,18 +154,21 @@ def _serial_device(port: str) -> str:
     return p
 
 
-def _run_raw(port: str, baud: int, sysid: int | None, verbose: bool = False) -> None:
+def _run_raw(port: str, baud: int, sysid: int | None, verbose: bool = False, quiet: bool = False) -> None:
     import serial
 
     print(f"\nOpening {port} @ {baud} raw JSON (Ctrl+C to stop)")
     print(f"Desktop agent pipe: {_pipe_banner('raw')}")
     if sysid is not None:
-        print(f"Filtering target_sysid={sysid} (foreign frames silent unless --verbose)")
+        print(f"Filtering target_sysid={sysid} (ping skips always logged; CTRL skips need --verbose)")
+    print("Diag stats every 5s")
+    diag = _Diag(sysid, quiet)
     ser = serial.Serial(port, baud, timeout=0.2)
     buf = bytearray()
     n = 0
     try:
         while True:
+            diag.maybe_report()
             chunk = ser.read(256)
             if chunk:
                 buf.extend(chunk)
@@ -111,36 +180,46 @@ def _run_raw(port: str, baud: int, sysid: int | None, verbose: bool = False) -> 
                     del buf[: nl + 1]
                     msg = decode_line(line)
                     if not msg:
+                        diag.note("rx_bad")
                         print(f"RX (ignored): {line!r}")
                         continue
                     if msg.get("type") == "ctrl":
-                        if _skip_foreign("ctrl", msg, sysid, verbose):
+                        diag.note("rx_ctrl")
+                        if _skip_foreign("ctrl", msg, sysid, verbose=verbose, quiet=quiet, diag=diag):
                             continue
                         n += 1
                         print(_format_ctrl_line(n, msg))
                         continue
-                    if msg.get("type") != "ping":
-                        print(f"RX non-ping: {msg}")
+                    if msg.get("type") == "pong":
+                        diag.note("rx_pong")
+                        if not quiet:
+                            print(f"RX pong id={msg.get('id')} (overheard)")
                         continue
-                    if _skip_foreign("ping", msg, sysid, verbose):
+                    if msg.get("type") != "ping":
+                        diag.note("rx_other")
+                        print(f"RX non-ping: {msg.get('type')}")
+                        continue
+                    diag.note("rx_ping")
+                    if _skip_foreign("ping", msg, sysid, verbose=verbose, quiet=quiet, diag=diag):
                         continue
                     n += 1
+                    diag.note("echo_ping")
                     pong = make_pong(msg, "desktop")
                     ser.write(encode_line(pong))
-                    ser.flush()
                     hops = format_hops(list(pong.get("hops") or []))
-                    print(f"\n[{n}] echoed ping id={pong.get('id')}")
+                    print(f"\n[{n}] echoed ping id={pong.get('id')} sysid={_target_sysid(msg)}")
                     for h in hops:
                         print(f"    {h}")
             else:
-                time.sleep(0.02)
+                time.sleep(0.01)
     except KeyboardInterrupt:
         print("\nStopped.")
+        diag.maybe_report(force=True)
     finally:
         ser.close()
 
 
-def _run_mavlink(port: str, baud: int, sysid: int | None, verbose: bool = False) -> None:
+def _run_mavlink(port: str, baud: int, sysid: int | None, verbose: bool = False, quiet: bool = False) -> None:
     import os
 
     os.environ["MAVLINK20"] = "1"
@@ -150,7 +229,8 @@ def _run_mavlink(port: str, baud: int, sysid: int | None, verbose: bool = False)
     print(f"\nOpening {port} ({device}) @ {baud} MAVLink TUNNEL (Ctrl+C to stop)")
     print(f"Desktop agent pipe: {_pipe_banner('mavlink')}")
     if sysid is not None:
-        print(f"Filtering target_sysid={sysid} (foreign frames silent unless --verbose)")
+        print(f"Filtering target_sysid={sysid} (ping skips always logged; CTRL skips need --verbose)")
+    print("Diag stats every 5s — watch ping rx vs echo vs skip")
     conn = mavutil.mavlink_connection(
         device,
         baud=baud,
@@ -163,10 +243,12 @@ def _run_mavlink(port: str, baud: int, sysid: int | None, verbose: bool = False)
             "pymavlink lacks tunnel_send — set MAVLINK20=1 before import "
             f"(dialect={getattr(conn.mav, '__module__', '?')})"
         )
+    diag = _Diag(sysid, quiet)
     n = 0
     last_hb = 0.0
     try:
         while True:
+            diag.maybe_report()
             now = time.time()
             if now - last_hb >= 1.0:
                 conn.mav.heartbeat_send(
@@ -185,19 +267,33 @@ def _run_mavlink(port: str, baud: int, sysid: int | None, verbose: bool = False)
                 continue
             decoded = _unpack_payload(bytes(msg.payload), int(msg.payload_length))
             if not decoded:
+                diag.note("rx_bad")
                 print(f"RX TUNNEL (ignored) len={msg.payload_length}")
                 continue
             if decoded.get("type") == "ctrl":
-                if _skip_foreign("TUNNEL ctrl", decoded, sysid, verbose):
+                diag.note("rx_ctrl")
+                if _skip_foreign("TUNNEL ctrl", decoded, sysid, verbose=verbose, quiet=quiet, diag=diag):
                     continue
                 n += 1
                 print(_format_ctrl_line(n, decoded))
                 continue
+            if decoded.get("type") == "pong":
+                diag.note("rx_pong")
+                if not quiet:
+                    print(f"RX TUNNEL pong id={decoded.get('id')} (overheard — return path on air)")
+                continue
             if decoded.get("type") != "ping":
+                diag.note("rx_other")
                 print(f"RX TUNNEL non-ping: {decoded.get('type')}")
                 continue
-            if _skip_foreign("TUNNEL ping", decoded, sysid, verbose):
+            diag.note("rx_ping")
+            if _skip_foreign("TUNNEL ping", decoded, sysid, verbose=verbose, quiet=quiet, diag=diag):
                 continue
+            if not quiet:
+                print(
+                    f"RX TUNNEL ping id={decoded.get('id')} sid={_target_sysid(decoded)} "
+                    f"(mine — echoing)"
+                )
 
             n += 1
             tgt = _target_sysid(decoded)
@@ -205,16 +301,18 @@ def _run_mavlink(port: str, baud: int, sysid: int | None, verbose: bool = False)
             try:
                 raw = _pack_payload(pong)
             except ValueError as e:
-                print(f"[{n}] CTRL/pong pack failed: {e} — skipping echo")
+                print(f"[{n}] pong pack failed: {e} — skipping echo")
                 continue
             payload = raw + b"\x00" * (TUNNEL_PAYLOAD_MAX - len(raw))
             conn.mav.tunnel_send(0, 0, RDI_TUNNEL_PAYLOAD_TYPE, len(raw), payload)
+            diag.note("echo_ping")
             hops = format_hops(list(pong.get("hops") or []))
             print(f"\n[{n}] echoed TUNNEL ping id={pong.get('id')} sysid={tgt} ({len(raw)}B)")
             for h in hops:
                 print(f"    {h}")
     except KeyboardInterrupt:
         print("\nStopped.")
+        diag.maybe_report(force=True)
     finally:
         try:
             conn.close()
@@ -241,7 +339,12 @@ def main() -> None:
     ap.add_argument(
         "--verbose",
         action="store_true",
-        help="Log skipped frames for other sysids",
+        help="Also log skipped CTRL frames for other sysids",
+    )
+    ap.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress ping-skip / overheard-pong lines (stats still print)",
     )
     args = ap.parse_args()
 
@@ -263,10 +366,10 @@ def main() -> None:
     for p in list_ports.comports():
         print(f"  {p.device:12s}  {p.description}")
 
-    if args.mode == "mavlink":
-        _run_mavlink(args.port, args.baud, args.sysid, args.verbose)
+    if args.mode == "raw":
+        _run_raw(args.port, args.baud, args.sysid, verbose=args.verbose, quiet=args.quiet)
     else:
-        _run_raw(args.port, args.baud, args.sysid, args.verbose)
+        _run_mavlink(args.port, args.baud, args.sysid, verbose=args.verbose, quiet=args.quiet)
 
 
 if __name__ == "__main__":

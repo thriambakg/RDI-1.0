@@ -173,13 +173,27 @@ class RadioRouterServer:
                 target = int(target_sysid) if target_sysid is not None else None
             except (TypeError, ValueError):
                 target = None
+            t0 = time.time()
+            LOG.info("router ping START sysid=%s hop=%s", target, hop_relay)
             try:
                 pong = await self._bridge.roundtrip_ping(
                     hop_relay=hop_relay,
                     target_sysid=target,
                 )
+                LOG.info(
+                    "router ping OK sysid=%s id=%s ms=%.0f",
+                    target,
+                    (pong or {}).get("id"),
+                    (time.time() - t0) * 1000.0,
+                )
                 return {"ok": True, "pong": pong}
             except Exception as e:
+                LOG.warning(
+                    "router ping FAIL sysid=%s ms=%.0f err=%s",
+                    target,
+                    (time.time() - t0) * 1000.0,
+                    e,
+                )
                 return {"ok": False, "error": str(e) or e.__class__.__name__}
         if cmd == "ctrl":
             if self._bridge is None or not self._bridge.enabled:

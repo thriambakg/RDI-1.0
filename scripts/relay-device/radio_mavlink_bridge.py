@@ -166,12 +166,37 @@ class RadioMavlinkBridge:
                 if int(getattr(msg, "payload_type", -1)) != RDI_TUNNEL_PAYLOAD_TYPE:
                     continue
                 decoded = _unpack_payload(bytes(msg.payload), int(msg.payload_length))
-                if not decoded or decoded.get("type") != "pong":
+                if not decoded:
+                    continue
+                msg_type = decoded.get("type")
+                if msg_type != "pong":
+                    # Non-pong TUNNEL (ping/ctrl loopback) — useful when diagnosing
+                    # whether return path or only outbound is alive.
+                    if msg_type in ("ping", "ctrl"):
+                        LOG.debug(
+                            "mavlink tunnel rx type=%s id=%s sid=%s pending=%s",
+                            msg_type,
+                            decoded.get("id"),
+                            decoded.get("target_sysid", decoded.get("sid")),
+                            list(self._pending.keys()),
+                        )
                     continue
                 ping_id = str(decoded.get("id") or "")
                 fut = self._pending.get(ping_id)
                 if fut and self._loop and not fut.done():
+                    LOG.info(
+                        "mavlink tunnel pong MATCH id=%s pending_left=%s",
+                        ping_id,
+                        [k for k in self._pending if k != ping_id],
+                    )
                     self._loop.call_soon_threadsafe(fut.set_result, decoded)
+                else:
+                    LOG.warning(
+                        "mavlink tunnel pong UNMATCHED id=%s pending=%s "
+                        "(late/duplicate/collision — Pi timed out or wrong id)",
+                        ping_id,
+                        list(self._pending.keys()),
+                    )
             except Exception as e:
                 if not self._stop.is_set():
                     LOG.warning("mavlink rx error: %s", e)
@@ -211,25 +236,43 @@ class RadioMavlinkBridge:
         msg = make_ping(hop_relay, target_sysid=target_sysid)
         ping_id = str(msg["id"])
         fut: asyncio.Future = self._loop.create_future()
+        already = list(self._pending.keys())
         self._pending[ping_id] = fut
+        t0 = time.time()
         try:
             nbytes = self._send_tunnel(msg)
             LOG.info(
-                "mavlink tunnel ping tx id=%s bytes=%d target_sysid=%s",
+                "mavlink tunnel ping tx id=%s bytes=%d target_sysid=%s concurrent_pending=%s",
                 ping_id,
                 nbytes,
                 target_sysid if target_sysid is not None else "any",
+                already,
             )
             pong = await asyncio.wait_for(fut, timeout=self.timeout_sec)
             hops = list(pong.get("hops") or [])
             hops.append({"hop": hop_relay, "ts": time.time()})
             pong = {**pong, "hops": hops}
-            LOG.info("mavlink tunnel pong rx id=%s hops=%d", ping_id, len(hops))
+            LOG.info(
+                "mavlink tunnel pong rx id=%s hops=%d rtt_ms=%.0f target_sysid=%s",
+                ping_id,
+                len(hops),
+                (time.time() - t0) * 1000.0,
+                target_sysid if target_sysid is not None else "any",
+            )
             return pong
         except asyncio.TimeoutError as e:
+            LOG.warning(
+                "mavlink tunnel ping TIMEOUT id=%s target_sysid=%s waited=%.1fs "
+                "still_pending=%s (desktop may have echoed — check return path)",
+                ping_id,
+                target_sysid if target_sysid is not None else "any",
+                time.time() - t0,
+                list(self._pending.keys()),
+            )
             raise TimeoutError(
                 f"no TUNNEL pong within {self.timeout_sec}s "
-                f"(check PX4 MAV_0/1_FORWARD, SER_TEL* baud, radio link)"
+                f"(id={ping_id} sysid={target_sysid}; "
+                f"check PX4 MAV_0/1_FORWARD, SER_TEL* baud, radio link)"
             ) from e
         finally:
             self._pending.pop(ping_id, None)

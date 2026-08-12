@@ -281,6 +281,15 @@ async def run_master(cfg: dict) -> None:
             LOG.info("ping pong (local) session_id=%s viewer=%s", session_id, cid)
             return
 
+        LOG.info(
+            "radio ping BEGIN session_id=%s viewer=%s sysid=%s link_mode=%s radio=%s",
+            session_id,
+            cid,
+            target_sysid,
+            link_mode,
+            "yes" if radio is not None and radio.enabled else "no",
+        )
+
         if link_mode == "none":
             err = "link_mode=none (radio not configured for this connection)"
             hops = [
@@ -299,6 +308,7 @@ async def run_master(cfg: dict) -> None:
                 ).encode("utf-8")
             )
             channel.send(PONG_BYTES)
+            LOG.warning("radio ping abort session_id=%s: %s", session_id, err)
             return
 
         if radio is None or not radio.enabled:
@@ -336,23 +346,31 @@ async def run_master(cfg: dict) -> None:
             channel.send(json.dumps(summary).encode("utf-8"))
             channel.send(PONG_BYTES)
             LOG.info(
-                "ping pong (radio/%s) session_id=%s viewer=%s id=%s sysid=%s hops=%s",
+                "ping pong (radio/%s) session_id=%s viewer=%s id=%s sysid=%s hops=%s ms=%.0f",
                 link_mode,
                 session_id,
                 cid,
                 pong.get("id"),
                 target_sysid,
                 ",".join(str(h.get("hop")) for h in hops),
+                (time.time() - t_browser) * 1000.0,
             )
         except Exception as e:
             err = str(e) or e.__class__.__name__
-            LOG.warning("radio ping failed session_id=%s: %s — local pong fallback", session_id, err)
+            LOG.warning(
+                "radio ping failed session_id=%s sysid=%s ms=%.0f: %s — local pong fallback",
+                session_id,
+                target_sysid,
+                (time.time() - t_browser) * 1000.0,
+                err,
+            )
             channel.send(
                 json.dumps(
                     {
                         "type": "rdi_pong",
                         "scope": "radio",
                         "error": err,
+                        "target_sysid": target_sysid,
                         "hops": [
                             {"hop": "browser", "ts": t_browser},
                             {"hop": "relay", "ts": time.time()},
@@ -508,9 +526,21 @@ async def run_master(cfg: dict) -> None:
                                     def on_message(message, channel=ch) -> None:
                                         if isinstance(message, bytes):
                                             if message == PING_BYTES:
+                                                LOG.info(
+                                                    "dc PING (local) session_id=%s viewer=%s sysid=%s",
+                                                    session_id,
+                                                    cid,
+                                                    target_sysid,
+                                                )
                                                 loop.create_task(_handle_ping(channel, cid, radio_path=False))
                                                 return
                                             if message == PING_RADIO_BYTES:
+                                                LOG.info(
+                                                    "dc PINGR (radio) session_id=%s viewer=%s sysid=%s",
+                                                    session_id,
+                                                    cid,
+                                                    target_sysid,
+                                                )
                                                 loop.create_task(_handle_ping(channel, cid, radio_path=True))
                                                 return
                                             if message.startswith(CTRL_PREFIX) and len(message) > len(CTRL_PREFIX):
