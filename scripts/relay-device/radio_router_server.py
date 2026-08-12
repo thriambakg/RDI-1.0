@@ -48,6 +48,9 @@ class RadioRouterServer:
         self._ready = threading.Event()
         self._stop = threading.Event()
         self._start_error: str | None = None
+        # Set in _run once the router event loop exists — serializes ping+ctrl so
+        # multi-session workers cannot collide on half-duplex RF.
+        self._rf_lock: asyncio.Lock | None = None
 
     @property
     def enabled(self) -> bool:
@@ -86,6 +89,7 @@ class RadioRouterServer:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self._loop = loop
+        self._rf_lock = asyncio.Lock()
         try:
             if self.mode == "raw":
                 self._bridge = RadioSerialBridge(self.serial_port, self.baud, self.timeout_sec)
@@ -174,10 +178,17 @@ class RadioRouterServer:
             except (TypeError, ValueError):
                 target = None
             try:
-                pong = await self._bridge.roundtrip_ping(
-                    hop_relay=hop_relay,
-                    target_sysid=target,
-                )
+                if self._rf_lock is not None:
+                    async with self._rf_lock:
+                        pong = await self._bridge.roundtrip_ping(
+                            hop_relay=hop_relay,
+                            target_sysid=target,
+                        )
+                else:
+                    pong = await self._bridge.roundtrip_ping(
+                        hop_relay=hop_relay,
+                        target_sysid=target,
+                    )
                 return {"ok": True, "pong": pong}
             except Exception as e:
                 return {"ok": False, "error": str(e) or e.__class__.__name__}
@@ -197,14 +208,25 @@ class RadioRouterServer:
             stack = str(req.get("stack") or "")
             pipe = str(req.get("pipe") or "")
             try:
-                msg = self._bridge.send_ctrl(
-                    [str(a) for a in actions],
-                    stream,
-                    hop_relay=hop_relay,
-                    target_sysid=target,
-                    stack=stack,
-                    pipe=pipe,
-                )
+                if self._rf_lock is not None:
+                    async with self._rf_lock:
+                        msg = self._bridge.send_ctrl(
+                            [str(a) for a in actions],
+                            stream,
+                            hop_relay=hop_relay,
+                            target_sysid=target,
+                            stack=stack,
+                            pipe=pipe,
+                        )
+                else:
+                    msg = self._bridge.send_ctrl(
+                        [str(a) for a in actions],
+                        stream,
+                        hop_relay=hop_relay,
+                        target_sysid=target,
+                        stack=stack,
+                        pipe=pipe,
+                    )
                 return {"ok": True, "ctrl": msg}
             except Exception as e:
                 return {"ok": False, "error": str(e) or e.__class__.__name__}

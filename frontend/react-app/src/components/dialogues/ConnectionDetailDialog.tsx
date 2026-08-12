@@ -502,7 +502,18 @@ export function ConnectionDetailDialog({
       }
 
       const wantRadio = isRadioControlPath()
-      // Idle radio probe only — skip while sticks are hot (checked above via transmittingRef).
+      // Dual-window lab: only the focused connection may auto-probe RF. Unfocused
+      // radio windows stay idle so they don't starve the focused session's pong.
+      if (wantRadio && !focused) {
+        setLivePing((prev) => ({
+          ...prev,
+          status: prev.ms != null ? prev.status : 'idle',
+          path: 'radio',
+        }))
+        schedule(2000)
+        return
+      }
+
       const mode: PingMode = wantRadio ? 'radio' : 'local'
       inFlight = true
       setLivePing((prev) => ({
@@ -552,8 +563,8 @@ export function ConnectionDetailDialog({
         }))
       } finally {
         inFlight = false
-        // Radio samples slower so we don't contend with CTRL on the UART/RF path.
-        schedule(wantRadio ? 3500 : 1400)
+        // Radio samples slowly so dual-sysid + CTRL do not collide on half-duplex RF.
+        schedule(wantRadio ? 5500 : 1400)
       }
     }
 
@@ -568,7 +579,7 @@ export function ConnectionDetailDialog({
       cancelled = true
       if (timer != null) window.clearTimeout(timer)
     }
-  }, [open, data, controlPath, getDataChannel, webRtcState])
+  }, [open, data, controlPath, focused, getDataChannel, webRtcState])
 
   const handleSaveSettings = useCallback(async () => {
     if (!sessionId || !data) return

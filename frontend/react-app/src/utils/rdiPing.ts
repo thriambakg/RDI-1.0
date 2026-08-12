@@ -169,8 +169,9 @@ export function pingDataChannel(
 
     channel.addEventListener('message', onMessage)
     sendPing()
-    // Unreliable DC: retransmit. Worker serializes radio roundtrips so overlaps wait.
-    const retryEveryMs = mode === 'radio' ? 1200 : 900
+    // Unreliable DC: retransmit slowly. Fast retries pile up on the shared radio
+    // router and kill half-duplex return pongs (desktop echoes, Pi times out).
+    const retryEveryMs = mode === 'radio' ? 2800 : 1200
     retryTimer = window.setInterval(sendPing, retryEveryMs)
   })
 }
