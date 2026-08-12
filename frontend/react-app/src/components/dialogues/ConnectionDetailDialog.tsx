@@ -529,13 +529,20 @@ export function ConnectionDetailDialog({
         }))
       } finally {
         inFlight = false
-        // Radio samples slower so we don't contend with CTRL on the UART/RF path.
-        schedule(path === 'radio' ? 2500 : 1400)
+        // Stagger dual-sysid live radio probes so they don't sync-collide on
+        // half-duplex RF. CTRL is unaffected (router serializes ping only).
+        if (path === 'radio') {
+          const sid = typeof data.mavlink_sysid === 'number' ? data.mavlink_sysid : 1
+          schedule(3500 + ((sid - 1) % 4) * 900)
+        } else {
+          schedule(1400)
+        }
       }
     }
 
     setLivePing({ ms: null, status: 'probing', path: controlPathRef.current })
-    schedule(200)
+    const sid0 = typeof data.mavlink_sysid === 'number' ? data.mavlink_sysid : 1
+    schedule(controlPath === 'radio' ? 200 + ((sid0 - 1) % 4) * 700 : 200)
 
     return () => {
       cancelled = true

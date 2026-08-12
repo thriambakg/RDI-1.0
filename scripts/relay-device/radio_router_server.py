@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import threading
+import time
 from typing import Any
 
 from radio_mavlink_bridge import RadioMavlinkBridge
@@ -20,6 +21,9 @@ LOG = logging.getLogger("rdi.radio_router")
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = int(os.environ.get("RDI_RADIO_ROUTER_PORT", "18771"))
+# After a ping round-trip, keep the air quiet briefly so half-duplex RFD can
+# finish the return before the next session's ping TX.
+PING_AIR_QUIET_SEC = float(os.environ.get("RDI_RADIO_PING_QUIET_SEC", "0.25"))
 
 
 class RadioRouterServer:
@@ -48,6 +52,10 @@ class RadioRouterServer:
         self._ready = threading.Event()
         self._stop = threading.Event()
         self._start_error: str | None = None
+        # Ping-only lock: multi-session CTRL stays concurrent (required for
+        # simultaneous multi-drone). Concurrent pings on half-duplex RF destroy
+        # return pongs (desktop echoes, Pi times out) — serialize round-trips.
+        self._ping_lock: asyncio.Lock | None = None
 
     @property
     def enabled(self) -> bool:
@@ -86,6 +94,7 @@ class RadioRouterServer:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self._loop = loop
+        self._ping_lock = asyncio.Lock()
         try:
             if self.mode == "raw":
                 self._bridge = RadioSerialBridge(self.serial_port, self.baud, self.timeout_sec)
@@ -176,10 +185,19 @@ class RadioRouterServer:
             t0 = time.time()
             LOG.info("router ping START sysid=%s hop=%s", target, hop_relay)
             try:
-                pong = await self._bridge.roundtrip_ping(
-                    hop_relay=hop_relay,
-                    target_sysid=target,
-                )
+                if self._ping_lock is not None:
+                    async with self._ping_lock:
+                        pong = await self._bridge.roundtrip_ping(
+                            hop_relay=hop_relay,
+                            target_sysid=target,
+                        )
+                        # Let half-duplex air settle before next session's ping.
+                        await asyncio.sleep(PING_AIR_QUIET_SEC)
+                else:
+                    pong = await self._bridge.roundtrip_ping(
+                        hop_relay=hop_relay,
+                        target_sysid=target,
+                    )
                 LOG.info(
                     "router ping OK sysid=%s id=%s ms=%.0f",
                     target,

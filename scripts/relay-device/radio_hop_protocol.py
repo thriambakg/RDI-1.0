@@ -230,13 +230,34 @@ def decode_line(line: bytes | str) -> dict[str, Any] | None:
 
 
 def format_hops(hops: list[dict[str, Any]]) -> list[str]:
-    """Human-readable hop lines with delta ms from first hop."""
+    """Human-readable hop lines with delta ms from first hop.
+
+    Hop timestamps may be epoch seconds or milliseconds (and Pi vs desktop
+    clocks can disagree). Normalize each ts to seconds, then report deltas so
+    we never show nonsense like T+-1100ms from unit mismatch.
+    """
     if not hops:
         return []
-    t0 = float(hops[0].get("ts") or 0)
+
+    def _as_seconds(ts: Any) -> float:
+        try:
+            t = float(ts or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        # Epoch ms are ~1e12; epoch seconds ~1e9.
+        if t > 1e11:
+            return t / 1000.0
+        return t
+
+    t0 = _as_seconds(hops[0].get("ts"))
     lines: list[str] = []
     for i, h in enumerate(hops):
         name = str(h.get("hop") or f"hop{i}")
-        ts = float(h.get("ts") or t0)
-        lines.append(f"{i + 1}. {name}: T+{int(round((ts - t0) * 1000))}ms")
+        ts = _as_seconds(h.get("ts"))
+        delta_ms = int(round((ts - t0) * 1000))
+        # Clamp absurd deltas from residual clock skew for display only.
+        if abs(delta_ms) > 60_000:
+            lines.append(f"{i + 1}. {name}: T+? (clock skew)")
+        else:
+            lines.append(f"{i + 1}. {name}: T+{delta_ms}ms")
     return lines
