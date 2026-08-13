@@ -23,7 +23,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = int(os.environ.get("RDI_RADIO_ROUTER_PORT", "18771"))
 # After a ping round-trip, keep the air quiet briefly so half-duplex RFD can
 # finish the return before the next session's ping TX.
-PING_AIR_QUIET_SEC = float(os.environ.get("RDI_RADIO_PING_QUIET_SEC", "0.25"))
+PING_AIR_QUIET_SEC = float(os.environ.get("RDI_RADIO_PING_QUIET_SEC", "0.05"))
 
 
 class RadioRouterServer:

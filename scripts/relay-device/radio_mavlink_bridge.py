@@ -248,17 +248,32 @@ class RadioMavlinkBridge:
                 target_sysid if target_sysid is not None else "any",
                 already,
             )
-            # Local RFD needs a moment to leave TX before it can hear the pong.
-            await asyncio.sleep(0.05)
+            # Brief TX→RX settle on local RFD (RX thread still runs during sleep).
+            settle_ms = 15.0
+            await asyncio.sleep(settle_ms / 1000.0)
             pong = await asyncio.wait_for(fut, timeout=self.timeout_sec)
             hops = list(pong.get("hops") or [])
             hops.append({"hop": hop_relay, "ts": time.time()})
-            pong = {**pong, "hops": hops}
+            # Wall from TX; air excludes intentional desktop turnaround (+ settle sleep).
+            wall_ms = (time.time() - t0) * 1000.0
+            try:
+                ta = int(pong.get("turnaround_ms") or 0)
+            except (TypeError, ValueError):
+                ta = 0
+            air_ms = max(0.0, wall_ms - ta - settle_ms)
+            pong = {
+                **pong,
+                "hops": hops,
+                "rtt_ms": round(wall_ms, 1),
+                "air_rtt_ms": round(air_ms, 1),
+                "turnaround_ms": ta,
+            }
             LOG.info(
-                "mavlink tunnel pong rx id=%s hops=%d rtt_ms=%.0f target_sysid=%s",
+                "mavlink tunnel pong rx id=%s wall_ms=%.0f air_ms=%.0f ta=%d target_sysid=%s",
                 ping_id,
-                len(hops),
-                (time.time() - t0) * 1000.0,
+                wall_ms,
+                air_ms,
+                ta,
                 target_sysid if target_sysid is not None else "any",
             )
             return pong

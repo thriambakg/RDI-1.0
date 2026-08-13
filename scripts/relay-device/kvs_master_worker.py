@@ -335,6 +335,9 @@ async def run_master(cfg: dict) -> None:
         try:
             pong = await radio.roundtrip_ping(hop_relay="relay", target_sysid=target_sysid)
             hops = [{"hop": "browser", "ts": t_browser}] + list(pong.get("hops") or [])
+            air_rtt = pong.get("air_rtt_ms")
+            wall_rtt = pong.get("rtt_ms")
+            ta = pong.get("turnaround_ms")
             summary = {
                 "type": "rdi_pong",
                 "scope": "radio",
@@ -343,17 +346,28 @@ async def run_master(cfg: dict) -> None:
                 "hops": hops,
                 "lines": format_hops(hops),
             }
+            if air_rtt is not None:
+                summary["air_rtt_ms"] = air_rtt
+            if wall_rtt is not None:
+                summary["rtt_ms"] = wall_rtt
+            if ta is not None:
+                summary["turnaround_ms"] = ta
+                summary["lines"] = list(summary["lines"]) + [
+                    f"air RTT {air_rtt}ms (excl. {ta}ms half-duplex turnaround)"
+                ]
             channel.send(json.dumps(summary).encode("utf-8"))
             channel.send(PONG_BYTES)
             LOG.info(
-                "ping pong (radio/%s) session_id=%s viewer=%s id=%s sysid=%s hops=%s ms=%.0f",
+                "ping pong (radio/%s) session_id=%s viewer=%s id=%s sysid=%s "
+                "air_ms=%s wall_ms=%s ta=%s",
                 link_mode,
                 session_id,
                 cid,
                 pong.get("id"),
                 target_sysid,
-                ",".join(str(h.get("hop")) for h in hops),
-                (time.time() - t_browser) * 1000.0,
+                air_rtt,
+                wall_rtt,
+                ta,
             )
         except Exception as e:
             err = str(e) or e.__class__.__name__

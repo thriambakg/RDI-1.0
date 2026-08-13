@@ -512,7 +512,12 @@ export function ConnectionDetailDialog({
           })
         } else {
           if (mode === 'radio') {
-            addLog(`[live ping${sysidTag}] radio ok ${result.rttMs}ms`)
+            addLog(`[live ping${sysidTag}] radio ok ${result.rttMs}ms` +
+              (result.airRttMs != null
+                ? ` air=${result.airRttMs}ms` +
+                  (result.turnaroundMs != null ? ` (ta=${result.turnaroundMs}ms)` : '')
+                : '') +
+              (result.wallRttMs != null ? ` wall=${result.wallRttMs}ms` : ''))
           }
           setLivePing({ ms: result.rttMs, status: 'live', path })
         }
@@ -533,7 +538,7 @@ export function ConnectionDetailDialog({
         // half-duplex RF. CTRL is unaffected (router serializes ping only).
         if (path === 'radio') {
           const sid = typeof data.mavlink_sysid === 'number' ? data.mavlink_sysid : 1
-          schedule(3500 + ((sid - 1) % 4) * 900)
+          schedule(2000 + ((sid - 1) % 4) * 500)
         } else {
           schedule(1400)
         }
@@ -663,7 +668,15 @@ export function ConnectionDetailDialog({
             )
             setLivePing({ ms: null, status: 'timeout', path: 'radio' })
           } else {
-            addLog(`Round-trip ${result.rttMs}ms (${mode === 'radio' ? 'radio' : 'relay'})${sysidTag}.`)
+            const detail =
+              mode === 'radio' && result.airRttMs != null
+                ? ` air=${result.airRttMs}ms` +
+                  (result.turnaroundMs != null ? ` ta=${result.turnaroundMs}ms` : '') +
+                  (result.wallRttMs != null ? ` wall=${result.wallRttMs}ms` : '')
+                : ''
+            addLog(
+              `Round-trip ${result.rttMs}ms (${mode === 'radio' ? 'radio' : 'relay'})${sysidTag}${detail}.`,
+            )
             if (mode === 'radio') {
               setLivePing({ ms: result.rttMs, status: 'live', path: 'radio' })
             } else {

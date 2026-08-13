@@ -219,26 +219,20 @@ def _run_raw(port: str, baud: int, sysid: int | None, verbose: bool = False, qui
         ser.close()
 
 
-def _echo_pong_mavlink(conn, decoded: dict, *, turnaround_ms: int, n: int, diag: _Diag) -> None:
-    """Wait for half-duplex turnaround, then TX pong (optionally twice)."""
+def _echo_pong_mavlink(
+    conn,
+    decoded: dict,
+    *,
+    turnaround_ms: int,
+    n: int,
+    diag: _Diag,
+    double_pong: bool = False,
+) -> None:
+    """Wait briefly for half-duplex turnaround, then TX one pong (optional 2nd copy)."""
     tgt = _target_sysid(decoded)
-    # Mothership is still finishing the ping TX on shared RF — echo immediately
-    # and the return is lost (pong overheard stays 0; Pi times out).
     if turnaround_ms > 0:
         time.sleep(turnaround_ms / 1000.0)
-    pong = make_pong(decoded, "desktop")
-    # Stamp desktop hop with local clock for display (ignore Pi clock skew).
-    hops = list(pong.get("hops") or [])
-    if hops:
-        t_relay = float(hops[0].get("ts") or time.time())
-        # Prefer relative display: relay=0, desktop=turnaround
-        pong = {
-            **pong,
-            "hops": [
-                {"hop": "relay", "ts": t_relay},
-                {"hop": "desktop", "ts": t_relay + (turnaround_ms / 1000.0)},
-            ],
-        }
+    pong = make_pong(decoded, "desktop", turnaround_ms=turnaround_ms or None)
     try:
         raw = _pack_payload(pong)
     except ValueError as e:
@@ -246,16 +240,16 @@ def _echo_pong_mavlink(conn, decoded: dict, *, turnaround_ms: int, n: int, diag:
         return
     payload = raw + b"\x00" * (TUNNEL_PAYLOAD_MAX - len(raw))
     conn.mav.tunnel_send(0, 0, RDI_TUNNEL_PAYLOAD_TYPE, len(raw), payload)
-    # Second copy improves return odds on half-duplex SiK/RFD.
-    time.sleep(0.03)
-    conn.mav.tunnel_send(0, 0, RDI_TUNNEL_PAYLOAD_TYPE, len(raw), payload)
+    if double_pong:
+        time.sleep(0.02)
+        conn.mav.tunnel_send(0, 0, RDI_TUNNEL_PAYLOAD_TYPE, len(raw), payload)
     diag.note("echo_ping")
+    extra = ", x2" if double_pong else ""
     print(
         f"\n[{n}] echoed TUNNEL ping id={pong.get('id')} sysid={tgt} "
-        f"({len(raw)}B, turnaround={turnaround_ms}ms, x2)"
+        f"({len(raw)}B, turnaround={turnaround_ms}ms{extra})"
     )
-    print(f"    1. relay: T+0ms")
-    print(f"    2. desktop: T+{turnaround_ms}ms (local turnaround; Pi clock ignored)")
+    print(f"    air path (excl. turnaround): measure on Pi/UI — ta={turnaround_ms}ms stamped in pong")
 
 
 def _run_mavlink(
@@ -264,7 +258,8 @@ def _run_mavlink(
     sysid: int | None,
     verbose: bool = False,
     quiet: bool = False,
-    turnaround_ms: int = 120,
+    turnaround_ms: int = 40,
+    double_pong: bool = False,
 ) -> None:
     import os
 
@@ -276,7 +271,8 @@ def _run_mavlink(
     print(f"Desktop agent pipe: {_pipe_banner('mavlink')}")
     if sysid is not None:
         print(f"Filtering target_sysid={sysid} (ping skips always logged; CTRL skips need --verbose)")
-    print(f"Half-duplex turnaround before pong echo: {turnaround_ms}ms")
+    print(f"Half-duplex turnaround before pong echo: {turnaround_ms}ms"
+          f"{' (double TX)' if double_pong else ''}")
     print("Diag stats every 5s — watch ping rx vs echo vs skip; pong overheard should rise")
     conn = mavutil.mavlink_connection(
         device,
@@ -343,7 +339,14 @@ def _run_mavlink(
                 )
 
             n += 1
-            _echo_pong_mavlink(conn, decoded, turnaround_ms=turnaround_ms, n=n, diag=diag)
+            _echo_pong_mavlink(
+                conn,
+                decoded,
+                turnaround_ms=turnaround_ms,
+                n=n,
+                diag=diag,
+                double_pong=double_pong,
+            )
     except KeyboardInterrupt:
         print("\nStopped.")
         diag.maybe_report(force=True)
@@ -383,8 +386,13 @@ def main() -> None:
     ap.add_argument(
         "--turnaround-ms",
         type=int,
-        default=120,
-        help="Wait this many ms after RX ping before TX pong (half-duplex SiK/RFD, default 120)",
+        default=40,
+        help="Wait this many ms after RX ping before TX pong (half-duplex, default 40)",
+    )
+    ap.add_argument(
+        "--double-pong",
+        action="store_true",
+        help="Send pong twice (slower, more reliable on lossy RF)",
     )
     args = ap.parse_args()
 
@@ -416,6 +424,7 @@ def main() -> None:
             verbose=args.verbose,
             quiet=args.quiet,
             turnaround_ms=max(0, int(args.turnaround_ms)),
+            double_pong=bool(args.double_pong),
         )
 
 

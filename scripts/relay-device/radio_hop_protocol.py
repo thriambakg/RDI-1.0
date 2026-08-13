@@ -60,7 +60,12 @@ def make_ping(
     return msg
 
 
-def make_pong(ping_msg: dict[str, Any], hop: str) -> dict[str, Any]:
+def make_pong(
+    ping_msg: dict[str, Any],
+    hop: str,
+    *,
+    turnaround_ms: int | None = None,
+) -> dict[str, Any]:
     hops = list(ping_msg.get("hops") or [])
     hops.append({"hop": hop, "ts": time.time()})
     msg: dict[str, Any] = {
@@ -69,7 +74,9 @@ def make_pong(ping_msg: dict[str, Any], hop: str) -> dict[str, Any]:
         "id": str(ping_msg.get("id") or new_ping_id()),
         "hops": hops,
     }
-    # Do not echo target_sysid on pong — Pi matches by id; saves TUNNEL bytes.
+    # Intentional half-duplex wait — Pi/UI subtract this for true air RTT.
+    if turnaround_ms is not None and turnaround_ms > 0:
+        msg["turnaround_ms"] = int(turnaround_ms)
     return msg
 
 
@@ -107,17 +114,29 @@ def compact_hop_msg_for_tunnel(msg: dict[str, Any]) -> dict[str, Any]:
                 out["sid"] = int(sid)
             except (TypeError, ValueError):
                 pass
+    if out["type"] == "pong":
+        ta = msg.get("turnaround_ms", msg.get("ta"))
+        if ta is not None:
+            try:
+                out["ta"] = int(ta)
+            except (TypeError, ValueError):
+                pass
     return out
 
 
 def expand_hop_msg(msg: dict[str, Any]) -> dict[str, Any]:
-    """Expand compact hop fields (`h`/`t`/`sid`) to full names."""
+    """Expand compact hop fields (`h`/`t`/`sid`/`ta`) to full names."""
     if msg.get("type") not in ("ping", "pong"):
         return msg
     out = dict(msg)
     if "target_sysid" not in out and out.get("sid") is not None:
         try:
             out["target_sysid"] = int(out["sid"])
+        except (TypeError, ValueError):
+            pass
+    if "turnaround_ms" not in out and out.get("ta") is not None:
+        try:
+            out["turnaround_ms"] = int(out["ta"])
         except (TypeError, ValueError):
             pass
     hops: list[dict[str, Any]] = []
