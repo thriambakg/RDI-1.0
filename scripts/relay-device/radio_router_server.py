@@ -183,16 +183,34 @@ class RadioRouterServer:
             except (TypeError, ValueError):
                 target = None
             t0 = time.time()
-            LOG.info("router ping START sysid=%s hop=%s", target, hop_relay)
+            waiting = self._ping_lock is not None and self._ping_lock.locked()
+            LOG.info(
+                "router ping START sysid=%s hop=%s lock_busy=%s",
+                target,
+                hop_relay,
+                waiting,
+            )
             try:
                 if self._ping_lock is not None:
-                    async with self._ping_lock:
+                    try:
+                        await asyncio.wait_for(self._ping_lock.acquire(), timeout=12.0)
+                    except asyncio.TimeoutError:
+                        LOG.warning("router ping BUSY sysid=%s (lock wait >12s)", target)
+                        return {
+                            "ok": False,
+                            "error": (
+                                "radio ping busy (another session holds the RF ping lock); "
+                                "retry in a few seconds — stop auto probes / other Ping radio"
+                            ),
+                        }
+                    try:
                         pong = await self._bridge.roundtrip_ping(
                             hop_relay=hop_relay,
                             target_sysid=target,
                         )
-                        # Let half-duplex air settle before next session's ping.
                         await asyncio.sleep(PING_AIR_QUIET_SEC)
+                    finally:
+                        self._ping_lock.release()
                 else:
                     pong = await self._bridge.roundtrip_ping(
                         hop_relay=hop_relay,
@@ -206,13 +224,14 @@ class RadioRouterServer:
                 )
                 return {"ok": True, "pong": pong}
             except Exception as e:
+                err = str(e).strip() or e.__class__.__name__
                 LOG.warning(
                     "router ping FAIL sysid=%s ms=%.0f err=%s",
                     target,
                     (time.time() - t0) * 1000.0,
-                    e,
+                    err,
                 )
-                return {"ok": False, "error": str(e) or e.__class__.__name__}
+                return {"ok": False, "error": err}
         if cmd == "ctrl":
             if self._bridge is None or not self._bridge.enabled:
                 return {"ok": False, "error": "radio bridge not ready"}

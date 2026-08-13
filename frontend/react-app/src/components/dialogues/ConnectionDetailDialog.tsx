@@ -445,8 +445,9 @@ export function ConnectionDetailDialog({
     return () => channel.removeEventListener('message', onMessage)
   }, [open, data, getDataChannel, webRtcState(data?.session_id ?? ''), addLog])
 
-  // Live ping meter for the Control link HUD (matches relay/radio toggle).
-  // Restored dual-connection behavior: both windows may probe; skip while transmitting.
+  // Live ping meter: auto-probe relay (WebRTC) only.
+  // Radio RTT is manual via "Ping radio" — dual-window auto RF probes stampede the
+  // shared half-duplex radio (lock queue → bare TimeoutError, no TUNNEL on air).
   const transmittingRef = useRef(false)
   transmittingRef.current = transmitting
   const pingRunningRef = useRef(false)
@@ -460,6 +461,7 @@ export function ConnectionDetailDialog({
     let cancelled = false
     let timer: number | undefined
     let inFlight = false
+    const isRadioPath = () => controlPathRef.current === 'radio'
 
     const schedule = (ms: number) => {
       if (cancelled) return
@@ -471,78 +473,79 @@ export function ConnectionDetailDialog({
     const tick = async () => {
       if (cancelled) return
       if (webRtcState(data.session_id) !== 'connected') {
-        setLivePing((prev) => ({ ...prev, status: 'idle', ms: null, path: controlPathRef.current }))
+        setLivePing((prev) => ({
+          ...prev,
+          status: 'idle',
+          ms: null,
+          path: isRadioPath() ? 'radio' : 'relay',
+        }))
         schedule(1200)
         return
       }
       const channel = getDataChannel(data.session_id)
       if (!channel || channel.readyState !== 'open') {
-        setLivePing((prev) => ({ ...prev, status: 'idle', ms: null, path: controlPathRef.current }))
+        setLivePing((prev) => ({
+          ...prev,
+          status: 'idle',
+          ms: null,
+          path: isRadioPath() ? 'radio' : 'relay',
+        }))
         schedule(1200)
         return
       }
-      // Don't stack on manual ping buttons or radio CTRL heartbeats.
+
+      // On radio control path: keep last radio RTT if any; do not auto PINGR.
+      if (isRadioPath()) {
+        setLivePing((prev) => ({
+          ms: prev.path === 'radio' ? prev.ms : null,
+          status:
+            prev.path === 'radio' && prev.ms != null
+              ? prev.status
+              : 'idle',
+          path: 'radio',
+        }))
+        schedule(1500)
+        return
+      }
+
       if (inFlight || pingRunningRef.current || transmittingRef.current) {
         schedule(800)
         return
       }
 
-      const path = controlPathRef.current
-      const mode: PingMode = path === 'radio' ? 'radio' : 'local'
-      const sysidTag =
-        data.mavlink_sysid != null ? ` sysid=${data.mavlink_sysid}` : ''
       inFlight = true
       setLivePing((prev) => ({
         ...prev,
         status: prev.ms == null ? 'probing' : 'live',
-        path,
+        path: 'relay',
       }))
       try {
         const result = await pingDataChannel(channel, {
-          mode,
-          timeoutMs: mode === 'radio' ? 10000 : 4000,
+          mode: 'local',
+          timeoutMs: 4000,
         })
-        if (cancelled) return
-        if (mode === 'radio' && result.error) {
-          addLog(`[live ping${sysidTag}] radio fail ${result.rttMs}ms: ${result.error}`)
-          setLivePing({
-            ms: null,
-            status: /timed out|no TUNNEL/i.test(result.error) ? 'timeout' : 'error',
-            path,
-          })
-        } else {
-          if (mode === 'radio') {
-            addLog(`[live ping${sysidTag}] radio ok ${result.rttMs}ms`)
-          }
-          setLivePing({ ms: result.rttMs, status: 'live', path })
-        }
+        if (cancelled || isRadioPath()) return
+        setLivePing({ ms: result.rttMs, status: 'live', path: 'relay' })
       } catch (e) {
-        if (cancelled) return
+        if (cancelled || isRadioPath()) return
         const msg = e instanceof Error ? e.message : 'ping failed'
-        if (mode === 'radio') {
-          addLog(`[live ping${sysidTag}] ${msg}`)
-        }
         setLivePing((prev) => ({
           ms: prev.ms,
           status: /timed out/i.test(msg) ? 'timeout' : 'error',
-          path,
+          path: 'relay',
         }))
       } finally {
         inFlight = false
-        // Stagger dual-sysid live radio probes so they don't sync-collide on
-        // half-duplex RF. CTRL is unaffected (router serializes ping only).
-        if (path === 'radio') {
-          const sid = typeof data.mavlink_sysid === 'number' ? data.mavlink_sysid : 1
-          schedule(3500 + ((sid - 1) % 4) * 900)
-        } else {
-          schedule(1400)
-        }
+        schedule(1400)
       }
     }
 
-    setLivePing({ ms: null, status: 'probing', path: controlPathRef.current })
-    const sid0 = typeof data.mavlink_sysid === 'number' ? data.mavlink_sysid : 1
-    schedule(controlPath === 'radio' ? 200 + ((sid0 - 1) % 4) * 700 : 200)
+    setLivePing({
+      ms: null,
+      status: controlPath === 'radio' ? 'idle' : 'probing',
+      path: controlPath === 'radio' ? 'radio' : 'relay',
+    })
+    schedule(200)
 
     return () => {
       cancelled = true
@@ -1082,7 +1085,8 @@ export function ConnectionDetailDialog({
             </Button>
           </Box>
           <Typography sx={{ color: '#475569', fontSize: '0.75rem', mb: 1.5 }}>
-            Ping relay = browser ↔ Pi. Ping radio = full RF path. Controls use the toggle above.
+            Ping relay = browser ↔ Pi (auto). Ping radio = full RF round-trip (manual only —
+            auto RF probes are off so dual connections do not stampede the shared radio).
             {!focused ? ' Click this window to capture keyboard.' : null}
           </Typography>
           {pingError && (
