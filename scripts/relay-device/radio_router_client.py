@@ -65,19 +65,9 @@ class RadioRouterClient:
         req: dict[str, Any] = {"cmd": "ping", "hop_relay": hop_relay}
         if target_sysid is not None:
             req["target_sysid"] = int(target_sysid)
-        # Allow queue wait behind another session's ping (lock) + RF RTT + quiet.
-        # Old timeout_sec+2 caused bare TimeoutError under dual-connection load.
-        rpc_timeout = max(self.timeout_sec * 3.0 + 5.0, 30.0)
-        try:
-            resp = await self._request(req, timeout=rpc_timeout)
-        except asyncio.TimeoutError as e:
-            raise TimeoutError(
-                f"radio router RPC timed out after {rpc_timeout:.0f}s "
-                f"(sysid={target_sysid}; router busy or hung — check journalctl)"
-            ) from e
+        resp = await self._request(req, timeout=self.timeout_sec + 2.0)
         if not resp.get("ok"):
-            err = str(resp.get("error") or "").strip() or "radio router ping failed"
-            raise TimeoutError(err)
+            raise TimeoutError(str(resp.get("error") or "radio router ping failed"))
         pong = resp.get("pong")
         if not isinstance(pong, dict):
             raise RuntimeError("radio router returned no pong payload")
@@ -105,10 +95,7 @@ class RadioRouterClient:
         }
         if target_sysid is not None:
             req["target_sysid"] = int(target_sysid)
-        try:
-            resp = await self._request(req, timeout=3.0)
-        except asyncio.TimeoutError as e:
-            raise RuntimeError("radio router CTRL RPC timed out (3s)") from e
+        resp = await self._request(req, timeout=3.0)
         if not resp.get("ok"):
             raise RuntimeError(str(resp.get("error") or "radio router ctrl failed"))
         ctrl = resp.get("ctrl")
