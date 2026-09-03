@@ -49,8 +49,8 @@ function prettyStream(stream: string): string {
 }
 
 function pingTone(path: ControlPath, ms: number | null, status: LivePingState['status']): string {
-  if (status === 'probing' && ms == null) return 'is-wait'
   if (status === 'timeout' || status === 'error') return 'is-bad'
+  if (status === 'probing' && ms == null) return 'is-wait'
   if (ms == null) return ''
   if (path === 'radio') {
     if (ms < 200) return 'is-good'
@@ -114,16 +114,22 @@ export function ConnectionControlHud({
 
   const tone = pingTone(livePing.path, livePing.ms, livePing.status)
   const pingLabel = livePing.path === 'radio' ? 'Radio RTT' : 'Relay ping'
+  // Keep last good sample on timeout/error — status tone carries the failure.
   const pingText =
+    livePing.ms != null
+      ? String(livePing.ms)
+      : livePing.status === 'probing'
+        ? '···'
+        : livePing.status === 'error'
+          ? 'ERR'
+          : '—'
+  const showUnit = livePing.ms != null
+  const pingTitle =
     livePing.status === 'timeout'
-      ? '—'
+      ? `${pingLabel} timed out (showing last sample)`
       : livePing.status === 'error'
-        ? 'ERR'
-        : livePing.ms != null
-          ? String(livePing.ms)
-          : livePing.status === 'probing'
-            ? '···'
-            : '—'
+        ? `${pingLabel} error (showing last sample)`
+        : `Live ${livePing.path} round-trip`
 
   return (
     <section className="rdi-hud" aria-label="Flight control HUD">
@@ -137,13 +143,11 @@ export function ConnectionControlHud({
             <span className="dot" />
             {armed ? 'Armed' : 'Standby'}
           </div>
-          <div className="rdi-hud-ping" title={`Live ${livePing.path} round-trip`}>
+          <div className="rdi-hud-ping" title={pingTitle}>
             <span className="rdi-hud-ping-label">{pingLabel}</span>
             <span className={`rdi-hud-ping-value ${tone}`}>
               {pingText}
-              {livePing.ms != null && livePing.status !== 'timeout' && livePing.status !== 'error' ? (
-                <span className="rdi-hud-ping-unit">ms</span>
-              ) : null}
+              {showUnit ? <span className="rdi-hud-ping-unit">ms</span> : null}
             </span>
           </div>
         </div>

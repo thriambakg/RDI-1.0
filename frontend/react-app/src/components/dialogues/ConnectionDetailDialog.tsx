@@ -429,7 +429,18 @@ export function ConnectionDetailDialog({
   // Delivery acks (local) + RF link RTT from desktop ctrl_ack (Option B).
   const linkRttEwmaRef = useRef<number | null>(null)
   const lastRadioRttAtRef = useRef(0)
+  /** Deadline for an expected rdi_link_rtt after idle/initial hb (0 = none). */
+  const radioHbExpectByRef = useRef(0)
   const [radioLinkArmed, setRadioLinkArmed] = useState(false)
+
+  // Idle radio probe cadence (must stay well below any "stale → disarm" window).
+  const RADIO_IDLE_HB_MS = 12_000
+  const RADIO_HB_ACK_WAIT_MS = 3_500
+  const radioHbIntervalMs = useMemo(() => {
+    const sid = typeof data?.mavlink_sysid === 'number' ? data.mavlink_sysid : 1
+    return RADIO_IDLE_HB_MS + ((sid - 1) % 4) * 1_500
+  }, [data?.mavlink_sysid])
+
   useEffect(() => {
     if (!open || !data?.session_id || usesWebSocketTransport(data)) return
     const channel = getDataChannel(data.session_id)
@@ -449,7 +460,9 @@ export function ConnectionDetailDialog({
           const ewma = prev == null ? sample : Math.round(0.35 * sample + 0.65 * prev)
           linkRttEwmaRef.current = ewma
           lastRadioRttAtRef.current = Date.now()
+          radioHbExpectByRef.current = 0
           setRadioLinkArmed(true)
+          setPingError(null)
           if (controlPathRef.current === 'radio') {
             setLivePing({ ms: ewma, status: 'live', path: 'radio' })
           }
@@ -471,7 +484,7 @@ export function ConnectionDetailDialog({
     return () => channel.removeEventListener('message', onMessage)
   }, [open, data, getDataChannel, webRtcState(data?.session_id ?? ''), addLog])
 
-  // Link meter: relay keeps PING; radio uses CTRL-ACK RTT (+ idle heartbeat).
+  // Link meter: relay keeps PING; radio arms on first RF RTT, then silent idle hb.
   const transmittingRef = useRef(false)
   transmittingRef.current = transmitting
   const pingRunningRef = useRef(false)
@@ -483,26 +496,41 @@ export function ConnectionDetailDialog({
 
     let cancelled = false
     let timer: number | undefined
-    let staleTimer: number | undefined
+    let watchTimer: number | undefined
     let inFlight = false
 
     const schedule = (ms: number) => {
       if (cancelled) return
       timer = window.setTimeout(() => {
         void tick()
-      }, ms)
+      }, Math.max(50, ms))
     }
 
-    const checkStale = () => {
+    const failRadioProbe = (why: 'timeout' | 'error', detail: string) => {
+      radioHbExpectByRef.current = 0
+      // Back off a full idle interval before the next arm/hb attempt.
+      lastRadioRttAtRef.current = Date.now()
+      setRadioLinkArmed(false)
+      setPingError(detail)
+      setLivePing((prev) => ({
+        ms: prev.ms, // keep last sample on the HUD
+        status: why,
+        path: 'radio',
+      }))
+    }
+
+    const checkHbExpect = () => {
       if (cancelled) return
       if (controlPathRef.current !== 'radio') return
-      if (lastRadioRttAtRef.current === 0) return
-      if (Date.now() - lastRadioRttAtRef.current > 8000) {
-        setRadioLinkArmed(false)
-        setLivePing((prev) =>
-          prev.path === 'radio' ? { ...prev, status: 'timeout' } : prev,
-        )
-      }
+      const by = radioHbExpectByRef.current
+      if (!by || Date.now() < by) return
+      const hadSample = linkRttEwmaRef.current != null
+      failRadioProbe(
+        'timeout',
+        hadSample
+          ? 'Radio RTT heartbeat timed out — link may be down'
+          : 'Radio arming RTT timed out — check Pi + desktop agent',
+      )
     }
 
     const tick = async () => {
@@ -510,25 +538,43 @@ export function ConnectionDetailDialog({
       const path = controlPathRef.current
 
       if (webRtcState(data.session_id) !== 'connected') {
-        setLivePing((prev) => ({ ...prev, status: 'idle', ms: null, path }))
-        if (path === 'radio') setRadioLinkArmed(false)
+        setLivePing((prev) => ({ ...prev, status: 'idle', path }))
+        if (path === 'radio') {
+          setRadioLinkArmed(false)
+          radioHbExpectByRef.current = 0
+        }
         schedule(1200)
         return
       }
       const channel = getDataChannel(data.session_id)
       if (!channel || channel.readyState !== 'open') {
-        setLivePing((prev) => ({ ...prev, status: 'idle', ms: null, path }))
+        setLivePing((prev) => ({ ...prev, status: 'idle', path }))
         schedule(1200)
         return
       }
 
-      // Radio: idle heartbeat CTRL only — RTT comes from rdi_link_rtt messages.
+      // Radio: initial arm + idle heartbeat CTRL; RTT from rdi_link_rtt only.
       if (path === 'radio') {
-        checkStale()
+        checkHbExpect()
         if (inFlight || pingRunningRef.current || transmittingRef.current) {
-          schedule(1500)
+          schedule(800)
           return
         }
+        // Stick CTRLs already refresh RTT — only probe when idle long enough.
+        const last = lastRadioRttAtRef.current
+        if (last > 0) {
+          const dueIn = last + radioHbIntervalMs - Date.now()
+          if (dueIn > 0) {
+            schedule(dueIn)
+            return
+          }
+        }
+        // Already waiting on a probe ACK — don't stack heartbeats.
+        if (radioHbExpectByRef.current > Date.now()) {
+          schedule(radioHbExpectByRef.current - Date.now() + 50)
+          return
+        }
+
         inFlight = true
         try {
           const stack = data?.vehicle_stack || 'px4'
@@ -541,19 +587,16 @@ export function ConnectionDetailDialog({
             stream: 'hb',
             ts: Date.now(),
           })
+          radioHbExpectByRef.current = Date.now() + RADIO_HB_ACK_WAIT_MS
+          // First arm only: show probing. Once armed, stay live with last ms.
           if (linkRttEwmaRef.current == null) {
-            setLivePing((prev) => ({
-              ms: prev.ms,
-              status: prev.ms == null ? 'probing' : 'live',
-              path: 'radio',
-            }))
+            setLivePing({ ms: null, status: 'probing', path: 'radio' })
           }
         } catch {
-          setLivePing((prev) => ({ ...prev, status: 'error', path: 'radio' }))
+          failRadioProbe('error', 'Radio heartbeat failed to send')
         } finally {
           inFlight = false
-          const sid = typeof data.mavlink_sysid === 'number' ? data.mavlink_sysid : 1
-          schedule(12000 + ((sid - 1) % 4) * 1500)
+          schedule(RADIO_HB_ACK_WAIT_MS + 100)
         }
         return
       }
@@ -589,22 +632,25 @@ export function ConnectionDetailDialog({
 
     linkRttEwmaRef.current = null
     lastRadioRttAtRef.current = 0
+    radioHbExpectByRef.current = 0
     setRadioLinkArmed(false)
+    setPingError(null)
     setLivePing({
       ms: null,
       status: 'probing',
       path: controlPathRef.current,
     })
+    // Arm ASAP on radio; relay meter starts quickly.
     const sid0 = typeof data.mavlink_sysid === 'number' ? data.mavlink_sysid : 1
-    schedule(controlPath === 'radio' ? 500 + ((sid0 - 1) % 4) * 400 : 200)
-    staleTimer = window.setInterval(checkStale, 2000)
+    schedule(controlPath === 'radio' ? 300 + ((sid0 - 1) % 4) * 350 : 200)
+    watchTimer = window.setInterval(checkHbExpect, 500)
 
     return () => {
       cancelled = true
       if (timer != null) window.clearTimeout(timer)
-      if (staleTimer != null) window.clearInterval(staleTimer)
+      if (watchTimer != null) window.clearInterval(watchTimer)
     }
-  }, [open, data, controlPath, getDataChannel, webRtcState, addLog])
+  }, [open, data, controlPath, getDataChannel, webRtcState, radioHbIntervalMs])
 
   const handleSaveSettings = useCallback(async () => {
     if (!sessionId || !data) return
