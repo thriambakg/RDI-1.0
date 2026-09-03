@@ -9,6 +9,7 @@ import { usesWebSocketTransport, WEBRTC_PI_READY_MS } from '../../utils/sessionT
 import { pingDataChannel, type PingMode, PING_BYTES, PONG_BYTES } from '../../utils/rdiPing'
 import {
   parseCtrlAck,
+  parseLinkRtt,
   pipeLabelForCtrl,
   sendCtrlFrame,
   type ControlPath,
@@ -312,7 +313,8 @@ export function ConnectionDetailDialog({
     if (isTypingTarget(document.activeElement)) return
 
     const CHORD_MS = 40
-    const HEARTBEAT_MS = 200
+    // Radio path: slower heartbeats — each frame gets a desktop ACK (airtime).
+    const HEARTBEAT_MS = controlPathRef.current === 'radio' ? 500 : 200
     let chordTimer: number | undefined
     let beatTimer: number | undefined
 
@@ -424,13 +426,37 @@ export function ConnectionDetailDialog({
     releaseControls()
   }, [open, panelView, focused, minimized, releaseControls])
 
-  // Listen for control acks on the data channel
+  // Delivery acks (local) + RF link RTT from desktop ctrl_ack (Option B).
+  const linkRttEwmaRef = useRef<number | null>(null)
+  const lastRadioRttAtRef = useRef(0)
+  const [radioLinkArmed, setRadioLinkArmed] = useState(false)
   useEffect(() => {
     if (!open || !data?.session_id || usesWebSocketTransport(data)) return
     const channel = getDataChannel(data.session_id)
     if (!channel) return
 
     const onMessage = (event: MessageEvent) => {
+      const link = parseLinkRtt(event.data)
+      if (link && link.path === 'radio') {
+        const sample =
+          typeof link.rtt_ms === 'number' && Number.isFinite(link.rtt_ms)
+            ? Math.round(link.rtt_ms)
+            : typeof link.air_rtt_ms === 'number' && Number.isFinite(link.air_rtt_ms)
+              ? Math.round(link.air_rtt_ms)
+              : null
+        if (sample != null) {
+          const prev = linkRttEwmaRef.current
+          const ewma = prev == null ? sample : Math.round(0.35 * sample + 0.65 * prev)
+          linkRttEwmaRef.current = ewma
+          lastRadioRttAtRef.current = Date.now()
+          setRadioLinkArmed(true)
+          if (controlPathRef.current === 'radio') {
+            setLivePing({ ms: ewma, status: 'live', path: 'radio' })
+          }
+        }
+        return
+      }
+
       const ack = parseCtrlAck(event.data)
       if (!ack) return
       const pipeTag = ack.pipe || ack.path
@@ -445,20 +471,19 @@ export function ConnectionDetailDialog({
     return () => channel.removeEventListener('message', onMessage)
   }, [open, data, getDataChannel, webRtcState(data?.session_id ?? ''), addLog])
 
-  // Live ping meter for the Control link HUD (matches relay/radio toggle).
-  // Restored dual-connection behavior: both windows may probe; skip while transmitting.
+  // Link meter: relay keeps PING; radio uses CTRL-ACK RTT (+ idle heartbeat).
   const transmittingRef = useRef(false)
   transmittingRef.current = transmitting
   const pingRunningRef = useRef(false)
   pingRunningRef.current = pingRunning
 
-  // Runs in every panel view: editing keybinds must never look like a dropped link.
   useEffect(() => {
     if (!open || !data?.session_id) return
     if (usesWebSocketTransport(data)) return
 
     let cancelled = false
     let timer: number | undefined
+    let staleTimer: number | undefined
     let inFlight = false
 
     const schedule = (ms: number) => {
@@ -468,90 +493,116 @@ export function ConnectionDetailDialog({
       }, ms)
     }
 
+    const checkStale = () => {
+      if (cancelled) return
+      if (controlPathRef.current !== 'radio') return
+      if (lastRadioRttAtRef.current === 0) return
+      if (Date.now() - lastRadioRttAtRef.current > 8000) {
+        setRadioLinkArmed(false)
+        setLivePing((prev) =>
+          prev.path === 'radio' ? { ...prev, status: 'timeout' } : prev,
+        )
+      }
+    }
+
     const tick = async () => {
       if (cancelled) return
+      const path = controlPathRef.current
+
       if (webRtcState(data.session_id) !== 'connected') {
-        setLivePing((prev) => ({ ...prev, status: 'idle', ms: null, path: controlPathRef.current }))
+        setLivePing((prev) => ({ ...prev, status: 'idle', ms: null, path }))
+        if (path === 'radio') setRadioLinkArmed(false)
         schedule(1200)
         return
       }
       const channel = getDataChannel(data.session_id)
       if (!channel || channel.readyState !== 'open') {
-        setLivePing((prev) => ({ ...prev, status: 'idle', ms: null, path: controlPathRef.current }))
+        setLivePing((prev) => ({ ...prev, status: 'idle', ms: null, path }))
         schedule(1200)
         return
       }
-      // Don't stack on manual ping buttons or radio CTRL heartbeats.
-      if (inFlight || pingRunningRef.current || transmittingRef.current) {
-        schedule(800)
+
+      // Radio: idle heartbeat CTRL only — RTT comes from rdi_link_rtt messages.
+      if (path === 'radio') {
+        checkStale()
+        if (inFlight || pingRunningRef.current || transmittingRef.current) {
+          schedule(1500)
+          return
+        }
+        inFlight = true
+        try {
+          const stack = data?.vehicle_stack || 'px4'
+          const pipe = pipeLabelForCtrl('radio', data?.link_mode)
+          sendCtrlFrame(channel, {
+            path: 'radio',
+            stack,
+            pipe,
+            actions: [],
+            stream: 'hb',
+            ts: Date.now(),
+          })
+          if (linkRttEwmaRef.current == null) {
+            setLivePing((prev) => ({
+              ms: prev.ms,
+              status: prev.ms == null ? 'probing' : 'live',
+              path: 'radio',
+            }))
+          }
+        } catch {
+          setLivePing((prev) => ({ ...prev, status: 'error', path: 'radio' }))
+        } finally {
+          inFlight = false
+          const sid = typeof data.mavlink_sysid === 'number' ? data.mavlink_sysid : 1
+          schedule(12000 + ((sid - 1) % 4) * 1500)
+        }
         return
       }
 
-      const path = controlPathRef.current
-      const mode: PingMode = path === 'radio' ? 'radio' : 'local'
-      const sysidTag =
-        data.mavlink_sysid != null ? ` sysid=${data.mavlink_sysid}` : ''
+      // Relay: classic local PING.
+      if (inFlight || pingRunningRef.current) {
+        schedule(800)
+        return
+      }
       inFlight = true
       setLivePing((prev) => ({
         ...prev,
         status: prev.ms == null ? 'probing' : 'live',
-        path,
+        path: 'relay',
       }))
       try {
-        const result = await pingDataChannel(channel, {
-          mode,
-          timeoutMs: mode === 'radio' ? 10000 : 4000,
-        })
+        const result = await pingDataChannel(channel, { mode: 'local', timeoutMs: 4000 })
         if (cancelled) return
-        if (mode === 'radio' && result.error) {
-          addLog(`[live ping${sysidTag}] radio fail ${result.rttMs}ms: ${result.error}`)
-          setLivePing({
-            ms: null,
-            status: /timed out|no TUNNEL/i.test(result.error) ? 'timeout' : 'error',
-            path,
-          })
-        } else {
-          if (mode === 'radio') {
-            addLog(`[live ping${sysidTag}] radio ok ${result.rttMs}ms` +
-              (result.airRttMs != null
-                ? ` air=${result.airRttMs}ms` +
-                  (result.turnaroundMs != null ? ` (ta=${result.turnaroundMs}ms)` : '')
-                : '') +
-              (result.wallRttMs != null ? ` wall=${result.wallRttMs}ms` : ''))
-          }
-          setLivePing({ ms: result.rttMs, status: 'live', path })
-        }
+        setLivePing({ ms: result.rttMs, status: 'live', path: 'relay' })
       } catch (e) {
         if (cancelled) return
         const msg = e instanceof Error ? e.message : 'ping failed'
-        if (mode === 'radio') {
-          addLog(`[live ping${sysidTag}] ${msg}`)
-        }
         setLivePing((prev) => ({
           ms: prev.ms,
           status: /timed out/i.test(msg) ? 'timeout' : 'error',
-          path,
+          path: 'relay',
         }))
       } finally {
         inFlight = false
-        // Stagger dual-sysid live radio probes so they don't sync-collide on
-        // half-duplex RF. CTRL is unaffected (router serializes ping only).
-        if (path === 'radio') {
-          const sid = typeof data.mavlink_sysid === 'number' ? data.mavlink_sysid : 1
-          schedule(2000 + ((sid - 1) % 4) * 500)
-        } else {
-          schedule(1400)
-        }
+        schedule(1400)
       }
     }
 
-    setLivePing({ ms: null, status: 'probing', path: controlPathRef.current })
+    linkRttEwmaRef.current = null
+    lastRadioRttAtRef.current = 0
+    setRadioLinkArmed(false)
+    setLivePing({
+      ms: null,
+      status: 'probing',
+      path: controlPathRef.current,
+    })
     const sid0 = typeof data.mavlink_sysid === 'number' ? data.mavlink_sysid : 1
-    schedule(controlPath === 'radio' ? 200 + ((sid0 - 1) % 4) * 700 : 200)
+    schedule(controlPath === 'radio' ? 500 + ((sid0 - 1) % 4) * 400 : 200)
+    staleTimer = window.setInterval(checkStale, 2000)
 
     return () => {
       cancelled = true
       if (timer != null) window.clearTimeout(timer)
+      if (staleTimer != null) window.clearInterval(staleTimer)
     }
   }, [open, data, controlPath, getDataChannel, webRtcState, addLog])
 
@@ -1037,7 +1088,11 @@ export function ConnectionDetailDialog({
               stream={stream}
               activeActions={activeActions}
               keybinds={keybinds}
-              armed={isConnected && data.status === 'active'}
+              armed={
+                isConnected &&
+                data.status === 'active' &&
+                (controlPath !== 'radio' || radioLinkArmed)
+              }
               transmitting={transmitting}
               lastTxNote={lastTxNote}
               connected={isConnected}

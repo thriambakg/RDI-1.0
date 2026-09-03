@@ -101,6 +101,24 @@ class RadioRouterClient:
         ctrl = resp.get("ctrl")
         return ctrl if isinstance(ctrl, dict) else {}
 
+    async def wait_ctrl_ack(self, ctrl_id: str, timeout_sec: float = 2.0) -> dict[str, Any]:
+        if not self._enabled:
+            raise RuntimeError("radio router client not connected")
+        resp = await self._request(
+            {
+                "cmd": "await_ctrl_ack",
+                "id": str(ctrl_id),
+                "timeout_sec": float(timeout_sec),
+            },
+            timeout=float(timeout_sec) + 1.5,
+        )
+        if not resp.get("ok"):
+            raise TimeoutError(str(resp.get("error") or "ctrl_ack wait failed"))
+        ack = resp.get("ack")
+        if not isinstance(ack, dict):
+            raise RuntimeError("radio router returned no ctrl_ack payload")
+        return ack
+
     async def _request(self, req: dict[str, Any], timeout: float) -> dict[str, Any]:
         async def _once() -> dict[str, Any]:
             reader, writer = await asyncio.open_connection(self.host, self.port)

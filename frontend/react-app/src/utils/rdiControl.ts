@@ -24,6 +24,20 @@ export type RdiCtrlAck = {
   actions: string[]
   delivered: boolean
   error?: string
+  id?: string
+}
+
+/** True RF round-trip derived from desktop CTRL-ACK (Option B link metric). */
+export type RdiLinkRtt = {
+  type: 'rdi_link_rtt'
+  path: ControlPath
+  id?: string
+  armed?: boolean
+  rtt_ms?: number
+  wall_rtt_ms?: number
+  air_rtt_ms?: number
+  turnaround_ms?: number
+  target_sysid?: number
 }
 
 /** Derive a pipe label for CTRL frames from path + link mode. */
@@ -43,7 +57,7 @@ export function encodeCtrlFrame(payload: Omit<RdiCtrlPayload, 'type'>): ArrayBuf
   return full.buffer
 }
 
-export function parseCtrlAck(data: ArrayBuffer | ArrayBufferView | string): RdiCtrlAck | null {
+function decodeJsonMessage(data: ArrayBuffer | ArrayBufferView | string): unknown | null {
   try {
     const text =
       typeof data === 'string'
@@ -53,12 +67,22 @@ export function parseCtrlAck(data: ArrayBuffer | ArrayBufferView | string): RdiC
               ? new Uint8Array(data)
               : new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
           )
-    const obj = JSON.parse(text) as RdiCtrlAck
-    if (obj?.type !== 'rdi_ctrl_ack') return null
-    return obj
+    return JSON.parse(text)
   } catch {
     return null
   }
+}
+
+export function parseCtrlAck(data: ArrayBuffer | ArrayBufferView | string): RdiCtrlAck | null {
+  const obj = decodeJsonMessage(data) as RdiCtrlAck | null
+  if (!obj || obj.type !== 'rdi_ctrl_ack') return null
+  return obj
+}
+
+export function parseLinkRtt(data: ArrayBuffer | ArrayBufferView | string): RdiLinkRtt | null {
+  const obj = decodeJsonMessage(data) as RdiLinkRtt | null
+  if (!obj || obj.type !== 'rdi_link_rtt') return null
+  return obj
 }
 
 export function sendCtrlFrame(

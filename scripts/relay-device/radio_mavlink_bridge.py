@@ -17,6 +17,7 @@ from typing import Any
 os.environ["MAVLINK20"] = "1"
 
 from radio_hop_protocol import (
+    compact_ctrl_ack_for_tunnel,
     compact_ctrl_for_tunnel,
     compact_hop_msg_for_tunnel,
     decode_line,
@@ -47,6 +48,13 @@ def _pack_payload(msg: dict[str, Any]) -> bytes:
         if len(raw) > TUNNEL_PAYLOAD_MAX:
             raise ValueError(f"ctrl payload too large for TUNNEL ({len(raw)} > {TUNNEL_PAYLOAD_MAX})")
         LOG.debug("ctrl tunnel compacted to %d bytes actions=%s", len(raw), compact.get("a"))
+        return raw
+
+    if msg.get("type") == "ctrl_ack":
+        compact = compact_ctrl_ack_for_tunnel(msg)
+        raw = encode_line(compact).rstrip(b"\n")
+        if len(raw) > TUNNEL_PAYLOAD_MAX:
+            raise ValueError(f"ctrl_ack too large for TUNNEL ({len(raw)} > {TUNNEL_PAYLOAD_MAX})")
         return raw
 
     if msg.get("type") in ("ping", "pong"):
@@ -91,6 +99,8 @@ class RadioMavlinkBridge:
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._pending: dict[str, asyncio.Future] = {}
+        self._pending_ctrl: dict[str, asyncio.Future] = {}
+        self._ctrl_t0: dict[str, float] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
 
     @property
@@ -133,6 +143,11 @@ class RadioMavlinkBridge:
             if not fut.done():
                 fut.set_exception(TimeoutError("mavlink bridge stopped"))
         self._pending.clear()
+        for fut in list(self._pending_ctrl.values()):
+            if not fut.done():
+                fut.set_exception(TimeoutError("mavlink bridge stopped"))
+        self._pending_ctrl.clear()
+        self._ctrl_t0.clear()
         LOG.info("mavlink bridge closed")
 
     def _heartbeat(self) -> None:
@@ -169,6 +184,23 @@ class RadioMavlinkBridge:
                 if not decoded:
                     continue
                 msg_type = decoded.get("type")
+                if msg_type == "ctrl_ack":
+                    ack_id = str(decoded.get("id") or "")
+                    fut = self._pending_ctrl.get(ack_id)
+                    if fut and self._loop and not fut.done():
+                        LOG.info(
+                            "mavlink tunnel ctrl_ack MATCH id=%s pending_ctrl=%s",
+                            ack_id,
+                            [k for k in self._pending_ctrl if k != ack_id],
+                        )
+                        self._loop.call_soon_threadsafe(fut.set_result, decoded)
+                    else:
+                        LOG.debug(
+                            "mavlink tunnel ctrl_ack UNMATCHED id=%s pending_ctrl=%s",
+                            ack_id,
+                            list(self._pending_ctrl.keys()),
+                        )
+                    continue
                 if msg_type != "pong":
                     # Non-pong TUNNEL (ping/ctrl loopback) — useful when diagnosing
                     # whether return path or only outbound is alive.
@@ -254,26 +286,32 @@ class RadioMavlinkBridge:
             pong = await asyncio.wait_for(fut, timeout=self.timeout_sec)
             hops = list(pong.get("hops") or [])
             hops.append({"hop": hop_relay, "ts": time.time()})
-            # Wall from TX; air excludes intentional desktop turnaround (+ settle sleep).
+            # Wall from TX; air excludes intentional desktop turnaround (+ settle + retry gap).
             wall_ms = (time.time() - t0) * 1000.0
             try:
                 ta = int(pong.get("turnaround_ms") or 0)
             except (TypeError, ValueError):
                 ta = 0
-            air_ms = max(0.0, wall_ms - ta - settle_ms)
+            try:
+                retry_ms = int(pong.get("retry_ms") or 0)
+            except (TypeError, ValueError):
+                retry_ms = 0
+            air_ms = max(0.0, wall_ms - ta - settle_ms - retry_ms)
             pong = {
                 **pong,
                 "hops": hops,
                 "rtt_ms": round(wall_ms, 1),
                 "air_rtt_ms": round(air_ms, 1),
                 "turnaround_ms": ta,
+                "retry_ms": retry_ms,
             }
             LOG.info(
-                "mavlink tunnel pong rx id=%s wall_ms=%.0f air_ms=%.0f ta=%d target_sysid=%s",
+                "mavlink tunnel pong rx id=%s wall_ms=%.0f air_ms=%.0f ta=%d rr=%d target_sysid=%s",
                 ping_id,
                 wall_ms,
                 air_ms,
                 ta,
+                retry_ms,
                 target_sysid if target_sysid is not None else "any",
             )
             return pong
@@ -304,7 +342,7 @@ class RadioMavlinkBridge:
         stack: str = "",
         pipe: str = "",
     ) -> dict[str, Any]:
-        """Fire-and-forget control frame over TUNNEL (no wait for ack)."""
+        """TX CTRL over TUNNEL and register a waiter for desktop ctrl_ack (RTT)."""
         if not self.enabled:
             raise RuntimeError("mavlink bridge not started")
         msg = compact_ctrl_for_tunnel(
@@ -317,6 +355,18 @@ class RadioMavlinkBridge:
                 pipe=pipe or "radio_mavlink",
             )
         )
+        ctrl_id = str(msg.get("id") or "")
+        if self._loop is not None and ctrl_id:
+            # Cap pending waiters so a dead agent cannot grow memory forever.
+            while len(self._pending_ctrl) >= 24:
+                old_id, old_fut = next(iter(self._pending_ctrl.items()))
+                self._pending_ctrl.pop(old_id, None)
+                self._ctrl_t0.pop(old_id, None)
+                if old_fut and not old_fut.done():
+                    old_fut.set_exception(TimeoutError("ctrl_ack waiter evicted"))
+            fut: asyncio.Future = self._loop.create_future()
+            self._pending_ctrl[ctrl_id] = fut
+            self._ctrl_t0[ctrl_id] = time.time()
         nbytes = self._send_tunnel(msg)
         LOG.info(
             "mavlink tunnel ctrl tx id=%s actions=%s stack=%s pipe=%s bytes=%d target_sysid=%s",
@@ -328,3 +378,30 @@ class RadioMavlinkBridge:
             target_sysid if target_sysid is not None else "any",
         )
         return msg
+
+    async def wait_ctrl_ack(self, ctrl_id: str, timeout_sec: float = 2.0) -> dict[str, Any]:
+        """Wait for desktop ctrl_ack matching ctrl_id; returns ack + rtt_ms."""
+        cid = str(ctrl_id or "")
+        fut = self._pending_ctrl.get(cid)
+        if fut is None:
+            raise TimeoutError(f"no ctrl_ack waiter for id={cid}")
+        t0 = self._ctrl_t0.get(cid, time.time())
+        try:
+            ack = await asyncio.wait_for(fut, timeout=timeout_sec)
+            wall_ms = (time.time() - t0) * 1000.0
+            try:
+                ta = int(ack.get("turnaround_ms") or ack.get("ta") or 0)
+            except (TypeError, ValueError):
+                ta = 0
+            air_ms = max(0.0, wall_ms - ta)
+            return {
+                **ack,
+                "rtt_ms": round(wall_ms, 1),
+                "air_rtt_ms": round(air_ms, 1),
+                "turnaround_ms": ta,
+            }
+        except asyncio.TimeoutError as e:
+            raise TimeoutError(f"no ctrl_ack within {timeout_sec}s (id={cid})") from e
+        finally:
+            self._pending_ctrl.pop(cid, None)
+            self._ctrl_t0.pop(cid, None)

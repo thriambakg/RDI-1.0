@@ -65,6 +65,7 @@ def make_pong(
     hop: str,
     *,
     turnaround_ms: int | None = None,
+    retry_ms: int | None = None,
 ) -> dict[str, Any]:
     hops = list(ping_msg.get("hops") or [])
     hops.append({"hop": hop, "ts": time.time()})
@@ -77,6 +78,9 @@ def make_pong(
     # Intentional half-duplex wait — Pi/UI subtract this for true air RTT.
     if turnaround_ms is not None and turnaround_ms > 0:
         msg["turnaround_ms"] = int(turnaround_ms)
+    # Second TX copy only — Pi subtracts this gap when rr=1 arrives first.
+    if retry_ms is not None and retry_ms > 0:
+        msg["retry_ms"] = int(retry_ms)
     return msg
 
 
@@ -121,11 +125,17 @@ def compact_hop_msg_for_tunnel(msg: dict[str, Any]) -> dict[str, Any]:
                 out["ta"] = int(ta)
             except (TypeError, ValueError):
                 pass
+        rr = msg.get("retry_ms", msg.get("rr"))
+        if rr is not None:
+            try:
+                out["rr"] = int(rr)
+            except (TypeError, ValueError):
+                pass
     return out
 
 
 def expand_hop_msg(msg: dict[str, Any]) -> dict[str, Any]:
-    """Expand compact hop fields (`h`/`t`/`sid`/`ta`) to full names."""
+    """Expand compact hop fields (`h`/`t`/`sid`/`ta`/`rr`) to full names."""
     if msg.get("type") not in ("ping", "pong"):
         return msg
     out = dict(msg)
@@ -137,6 +147,11 @@ def expand_hop_msg(msg: dict[str, Any]) -> dict[str, Any]:
     if "turnaround_ms" not in out and out.get("ta") is not None:
         try:
             out["turnaround_ms"] = int(out["ta"])
+        except (TypeError, ValueError):
+            pass
+    if "retry_ms" not in out and out.get("rr") is not None:
+        try:
+            out["retry_ms"] = int(out["rr"])
         except (TypeError, ValueError):
             pass
     hops: list[dict[str, Any]] = []
@@ -180,6 +195,28 @@ def make_ctrl(
     return msg
 
 
+def make_ctrl_ack(
+    ctrl_msg: dict[str, Any],
+    *,
+    turnaround_ms: int | None = None,
+) -> dict[str, Any]:
+    """Desktop → Pi ACK for a CTRL frame (same id for RTT correlation)."""
+    msg: dict[str, Any] = {
+        "v": PROTOCOL_VERSION,
+        "type": "ctrl_ack",
+        "id": str(ctrl_msg.get("id") or new_ping_id())[:12],
+    }
+    sid = ctrl_msg.get("target_sysid", ctrl_msg.get("sid"))
+    if sid is not None:
+        try:
+            msg["sid"] = int(sid)
+        except (TypeError, ValueError):
+            pass
+    if turnaround_ms is not None and turnaround_ms > 0:
+        msg["ta"] = int(turnaround_ms)
+    return msg
+
+
 def compact_ctrl_for_tunnel(msg: dict[str, Any]) -> dict[str, Any]:
     """Minimal CTRL wire format that fits MAVLink TUNNEL (128 bytes)."""
     actions = msg.get("actions") or msg.get("a") or []
@@ -205,6 +242,28 @@ def compact_ctrl_for_tunnel(msg: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def compact_ctrl_ack_for_tunnel(msg: dict[str, Any]) -> dict[str, Any]:
+    """Minimal CTRL-ACK for TUNNEL (keep tiny — high rate under stick heartbeats)."""
+    out: dict[str, Any] = {
+        "v": PROTOCOL_VERSION,
+        "type": "ctrl_ack",
+        "id": str(msg.get("id") or new_ping_id())[:12],
+    }
+    sid = msg.get("target_sysid", msg.get("sid"))
+    if sid is not None:
+        try:
+            out["sid"] = int(sid)
+        except (TypeError, ValueError):
+            pass
+    ta = msg.get("turnaround_ms", msg.get("ta"))
+    if ta is not None:
+        try:
+            out["ta"] = int(ta)
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
 def normalize_ctrl_msg(msg: dict[str, Any]) -> dict[str, Any]:
     """Expand compact CTRL fields (`a`/`s`/`st`/`pp`) to full names."""
     if msg.get("type") != "ctrl":
@@ -221,6 +280,23 @@ def normalize_ctrl_msg(msg: dict[str, Any]) -> dict[str, Any]:
         out["stack"] = str(out.get("st") or "")
     if "pipe" not in out and "pp" in out:
         out["pipe"] = str(out.get("pp") or "")
+    return out
+
+
+def expand_ctrl_ack(msg: dict[str, Any]) -> dict[str, Any]:
+    if msg.get("type") != "ctrl_ack":
+        return msg
+    out = dict(msg)
+    if "target_sysid" not in out and out.get("sid") is not None:
+        try:
+            out["target_sysid"] = int(out["sid"])
+        except (TypeError, ValueError):
+            pass
+    if "turnaround_ms" not in out and out.get("ta") is not None:
+        try:
+            out["turnaround_ms"] = int(out["ta"])
+        except (TypeError, ValueError):
+            pass
     return out
 
 
@@ -241,10 +317,12 @@ def decode_line(line: bytes | str) -> dict[str, Any] | None:
         return None
     if not isinstance(msg, dict) or msg.get("v") != PROTOCOL_VERSION:
         return None
-    if msg.get("type") not in ("ping", "pong", "ctrl"):
+    if msg.get("type") not in ("ping", "pong", "ctrl", "ctrl_ack"):
         return None
     if msg.get("type") == "ctrl":
         return normalize_ctrl_msg(msg)
+    if msg.get("type") == "ctrl_ack":
+        return expand_ctrl_ack(msg)
     return expand_hop_msg(msg)
 
 

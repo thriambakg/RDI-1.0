@@ -23,6 +23,7 @@ from radio_hop_protocol import (
     decode_line,
     encode_line,
     format_hops,
+    make_ctrl_ack,
     make_pong,
     normalize_ctrl_msg,
 )
@@ -219,6 +220,27 @@ def _run_raw(port: str, baud: int, sysid: int | None, verbose: bool = False, qui
         ser.close()
 
 
+def _echo_ctrl_ack_mavlink(
+    conn,
+    decoded: dict,
+    *,
+    turnaround_ms: int = 10,
+    n: int,
+) -> None:
+    """ACK CTRL so Pi can measure true RF RTT (Option B link metric)."""
+    if turnaround_ms > 0:
+        time.sleep(turnaround_ms / 1000.0)
+    ack = make_ctrl_ack(decoded, turnaround_ms=turnaround_ms or None)
+    try:
+        raw = _pack_payload(ack)
+    except ValueError as e:
+        print(f"[{n}] ctrl_ack pack failed: {e}")
+        return
+    payload = raw + b"\x00" * (TUNNEL_PAYLOAD_MAX - len(raw))
+    conn.mav.tunnel_send(0, 0, RDI_TUNNEL_PAYLOAD_TYPE, len(raw), payload)
+    print(f"    └─ ctrl_ack id={ack.get('id')} ({len(raw)}B, ta={turnaround_ms}ms)")
+
+
 def _echo_pong_mavlink(
     conn,
     decoded: dict,
@@ -227,8 +249,9 @@ def _echo_pong_mavlink(
     n: int,
     diag: _Diag,
     double_pong: bool = False,
+    retry_gap_ms: int = 5,
 ) -> None:
-    """Wait briefly for half-duplex turnaround, then TX one pong (optional 2nd copy)."""
+    """Wait for half-duplex turnaround, TX pong (optional 2nd copy with retry stamp)."""
     tgt = _target_sysid(decoded)
     if turnaround_ms > 0:
         time.sleep(turnaround_ms / 1000.0)
@@ -241,15 +264,36 @@ def _echo_pong_mavlink(
     payload = raw + b"\x00" * (TUNNEL_PAYLOAD_MAX - len(raw))
     conn.mav.tunnel_send(0, 0, RDI_TUNNEL_PAYLOAD_TYPE, len(raw), payload)
     if double_pong:
-        time.sleep(0.02)
-        conn.mav.tunnel_send(0, 0, RDI_TUNNEL_PAYLOAD_TYPE, len(raw), payload)
+        gap = max(1, int(retry_gap_ms))
+        time.sleep(gap / 1000.0)
+        pong2 = make_pong(
+            decoded,
+            "desktop",
+            turnaround_ms=turnaround_ms or None,
+            retry_ms=gap,
+        )
+        try:
+            raw2 = _pack_payload(pong2)
+        except ValueError:
+            raw2 = raw
+        payload2 = raw2 + b"\x00" * (TUNNEL_PAYLOAD_MAX - len(raw2))
+        conn.mav.tunnel_send(0, 0, RDI_TUNNEL_PAYLOAD_TYPE, len(raw2), payload2)
     diag.note("echo_ping")
-    extra = ", x2" if double_pong else ""
+    extra = f", x2 gap={retry_gap_ms}ms" if double_pong else ""
     print(
         f"\n[{n}] echoed TUNNEL ping id={pong.get('id')} sysid={tgt} "
         f"({len(raw)}B, turnaround={turnaround_ms}ms{extra})"
     )
     print(f"    air path (excl. turnaround): measure on Pi/UI — ta={turnaround_ms}ms stamped in pong")
+
+
+def _effective_turnaround_ms(base_ms: int, sysid: int | None, *, skew: bool) -> int:
+    """Base wait + optional sysid stagger so dual agents do not TX pong together."""
+    base = max(0, int(base_ms))
+    if not skew or sysid is None:
+        return base
+    # sysid1 → base; sysid2 → base+40; sysid3 → base+80, …
+    return base + max(0, int(sysid) - 1) * 40
 
 
 def _run_mavlink(
@@ -258,21 +302,28 @@ def _run_mavlink(
     sysid: int | None,
     verbose: bool = False,
     quiet: bool = False,
-    turnaround_ms: int = 40,
-    double_pong: bool = False,
+    turnaround_ms: int = 80,
+    double_pong: bool = True,
+    skew_turnaround: bool = True,
+    retry_gap_ms: int = 5,
 ) -> None:
     import os
 
     os.environ["MAVLINK20"] = "1"
     from pymavlink import mavutil
 
+    effective_ta = _effective_turnaround_ms(turnaround_ms, sysid, skew=skew_turnaround)
     device = _serial_device(port)
     print(f"\nOpening {port} ({device}) @ {baud} MAVLink TUNNEL (Ctrl+C to stop)")
     print(f"Desktop agent pipe: {_pipe_banner('mavlink')}")
     if sysid is not None:
         print(f"Filtering target_sysid={sysid} (ping skips always logged; CTRL skips need --verbose)")
-    print(f"Half-duplex turnaround before pong echo: {turnaround_ms}ms"
-          f"{' (double TX)' if double_pong else ''}")
+    print(
+        f"Half-duplex turnaround before pong echo: {effective_ta}ms"
+        f" (base={turnaround_ms}ms"
+        f"{', sysid-skew' if skew_turnaround and sysid is not None else ''}"
+        f"{', double TX' if double_pong else ''})"
+    )
     print("Diag stats every 5s — watch ping rx vs echo vs skip; pong overheard should rise")
     conn = mavutil.mavlink_connection(
         device,
@@ -319,6 +370,10 @@ def _run_mavlink(
                     continue
                 n += 1
                 print(_format_ctrl_line(n, decoded))
+                _echo_ctrl_ack_mavlink(conn, decoded, turnaround_ms=10, n=n)
+                continue
+            if decoded.get("type") == "ctrl_ack":
+                # Peer agent's ACK overheard on shared RF — ignore.
                 continue
             if decoded.get("type") == "pong":
                 diag.note("rx_pong")
@@ -335,17 +390,18 @@ def _run_mavlink(
             if not quiet:
                 print(
                     f"RX TUNNEL ping id={decoded.get('id')} sid={_target_sysid(decoded)} "
-                    f"(mine — echoing after {turnaround_ms}ms)"
+                    f"(mine — echoing after {effective_ta}ms)"
                 )
 
             n += 1
             _echo_pong_mavlink(
                 conn,
                 decoded,
-                turnaround_ms=turnaround_ms,
+                turnaround_ms=effective_ta,
                 n=n,
                 diag=diag,
                 double_pong=double_pong,
+                retry_gap_ms=retry_gap_ms,
             )
     except KeyboardInterrupt:
         print("\nStopped.")
@@ -386,13 +442,25 @@ def main() -> None:
     ap.add_argument(
         "--turnaround-ms",
         type=int,
-        default=40,
-        help="Wait this many ms after RX ping before TX pong (half-duplex, default 40)",
+        default=80,
+        help="Base wait after RX ping before TX pong (default 80; sysid skew adds more)",
+    )
+    ap.add_argument(
+        "--no-sysid-skew",
+        action="store_true",
+        help="Disable sysid-based turnaround stagger (sysid2 would use same wait as sysid1)",
     )
     ap.add_argument(
         "--double-pong",
-        action="store_true",
-        help="Send pong twice (slower, more reliable on lossy RF)",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Send pong twice with short gap (default on; use --no-double-pong to disable)",
+    )
+    ap.add_argument(
+        "--retry-gap-ms",
+        type=int,
+        default=5,
+        help="Gap between first and second pong when double-pong is on (default 5)",
     )
     args = ap.parse_args()
 
@@ -425,6 +493,8 @@ def main() -> None:
             quiet=args.quiet,
             turnaround_ms=max(0, int(args.turnaround_ms)),
             double_pong=bool(args.double_pong),
+            skew_turnaround=not bool(args.no_sysid_skew),
+            retry_gap_ms=max(1, int(args.retry_gap_ms)),
         )
 
 

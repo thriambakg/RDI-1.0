@@ -113,6 +113,7 @@ export function ConnectionControlHud({
   }, [activeSet])
 
   const tone = pingTone(livePing.path, livePing.ms, livePing.status)
+  const pingLabel = livePing.path === 'radio' ? 'Radio RTT' : 'Relay ping'
   const pingText =
     livePing.status === 'timeout'
       ? '—'
@@ -137,7 +138,7 @@ export function ConnectionControlHud({
             {armed ? 'Armed' : 'Standby'}
           </div>
           <div className="rdi-hud-ping" title={`Live ${livePing.path} round-trip`}>
-            <span className="rdi-hud-ping-label">{livePing.path === 'radio' ? 'Radio ping' : 'Relay ping'}</span>
+            <span className="rdi-hud-ping-label">{pingLabel}</span>
             <span className={`rdi-hud-ping-value ${tone}`}>
               {pingText}
               {livePing.ms != null && livePing.status !== 'timeout' && livePing.status !== 'error' ? (

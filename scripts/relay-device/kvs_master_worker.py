@@ -396,7 +396,7 @@ async def run_master(cfg: dict) -> None:
             channel.send(PONG_BYTES)
 
     async def _handle_ctrl(channel, cid: str, payload: dict) -> None:
-        """Preliminary control frames: relay log/ack, or fire-and-forget over radio."""
+        """Relay log/ack, or radio TX + async RF ctrl_ack → rdi_link_rtt."""
         path = str(payload.get("path") or "relay").strip().lower()
         if path not in ("relay", "radio"):
             path = "relay"
@@ -409,6 +409,7 @@ async def run_master(cfg: dict) -> None:
         stream = str(payload.get("stream") or "")
         delivered = True
         err: str | None = None
+        ctrl_id: str | None = None
 
         LOG.info(
             "ctrl rx session_id=%s viewer=%s path=%s pipe=%s stack=%s actions=%s stream=%s",
@@ -444,7 +445,9 @@ async def run_master(cfg: dict) -> None:
                             pipe=pipe,
                         )
                         if asyncio.iscoroutine(result):
-                            await result
+                            result = await result
+                        if isinstance(result, dict):
+                            ctrl_id = str(result.get("id") or "") or None
                 except Exception as e:
                     delivered = False
                     err = str(e) or e.__class__.__name__
@@ -458,12 +461,60 @@ async def run_master(cfg: dict) -> None:
             "actions": actions_s,
             "delivered": delivered,
         }
+        if ctrl_id:
+            ack["id"] = ctrl_id
         if err:
             ack["error"] = err
         try:
             channel.send(json.dumps(ack).encode("utf-8"))
         except Exception as e:
             LOG.warning("ctrl ack send failed session_id=%s: %s", session_id, e)
+
+        # True RF RTT: wait for desktop ctrl_ack in the background (does not block sticks).
+        if path == "radio" and delivered and ctrl_id and radio is not None:
+            wait = getattr(radio, "wait_ctrl_ack", None)
+            if wait is not None:
+                asyncio.create_task(
+                    _emit_link_rtt(channel, cid, wait, ctrl_id, target_sysid),
+                    name=f"ctrl-rtt-{ctrl_id}",
+                )
+
+    async def _emit_link_rtt(channel, cid: str, wait, ctrl_id: str, sysid) -> None:
+        try:
+            info = wait(ctrl_id, timeout_sec=2.0)
+            if asyncio.iscoroutine(info):
+                info = await info
+            if not isinstance(info, dict):
+                return
+            rtt = info.get("air_rtt_ms", info.get("rtt_ms"))
+            payload = {
+                "type": "rdi_link_rtt",
+                "path": "radio",
+                "id": ctrl_id,
+                "armed": True,
+                "rtt_ms": rtt,
+                "wall_rtt_ms": info.get("rtt_ms"),
+                "air_rtt_ms": info.get("air_rtt_ms"),
+                "turnaround_ms": info.get("turnaround_ms"),
+                "target_sysid": sysid,
+            }
+            channel.send(json.dumps(payload).encode("utf-8"))
+            LOG.info(
+                "link rtt session_id=%s viewer=%s id=%s air=%s wall=%s sysid=%s",
+                session_id,
+                cid,
+                ctrl_id,
+                info.get("air_rtt_ms"),
+                info.get("rtt_ms"),
+                sysid,
+            )
+        except Exception as e:
+            LOG.debug(
+                "link rtt miss session_id=%s id=%s: %s",
+                session_id,
+                ctrl_id,
+                e,
+            )
 
     async def _apply_ice(pc: RTCPeerConnection, payload: dict) -> None:
         candidate = candidate_from_sdp(payload["candidate"])
