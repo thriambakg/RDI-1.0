@@ -434,12 +434,18 @@ export function ConnectionDetailDialog({
   /** Consecutive idle-hb RTT misses before disarm (half-duplex often drops one ACK). */
   const radioHbMissesRef = useRef(0)
   const [radioLinkArmed, setRadioLinkArmed] = useState(false)
+  const focusedRef = useRef(focused)
+  focusedRef.current = focused
+  const minimizedRef = useRef(minimized)
+  minimizedRef.current = minimized
+  const panelViewRef = useRef(panelView)
+  panelViewRef.current = panelView
 
   // Idle radio probe cadence. Stagger sysids far apart so ACKs don't collide on shared RF.
   const RADIO_IDLE_HB_MS = 12_000
   const RADIO_HB_ACK_WAIT_MS = 5_000
   const RADIO_HB_SOFT_RETRY_MS = 2_500
-  const RADIO_HB_MISS_LIMIT = 3
+  const RADIO_HB_MISS_LIMIT = 5
   const radioHbIntervalMs = useMemo(() => {
     const sid = typeof data?.mavlink_sysid === 'number' ? data.mavlink_sysid : 1
     return RADIO_IDLE_HB_MS + ((sid - 1) % 4) * 4_000
@@ -511,6 +517,9 @@ export function ConnectionDetailDialog({
       }, Math.max(50, ms))
     }
 
+    const radioProbeAllowed = () =>
+      focusedRef.current && !minimizedRef.current && panelViewRef.current === 'controls'
+
     const failRadioProbe = (why: 'timeout' | 'error', detail: string) => {
       radioHbExpectByRef.current = 0
       // Back off a full idle interval before the next arm/hb attempt.
@@ -529,6 +538,12 @@ export function ConnectionDetailDialog({
       if (controlPathRef.current !== 'radio') return
       const by = radioHbExpectByRef.current
       if (!by || Date.now() < by) return
+
+      // Blur / handoff: abandon in-flight probe — do not count as link-down.
+      if (!radioProbeAllowed()) {
+        radioHbExpectByRef.current = 0
+        return
+      }
 
       radioHbExpectByRef.current = 0
       radioHbMissesRef.current += 1
@@ -573,6 +588,13 @@ export function ConnectionDetailDialog({
       // Radio: initial arm + idle heartbeat CTRL; RTT from rdi_link_rtt only.
       if (path === 'radio') {
         checkHbExpect()
+        // Unfocused window: freeze Armed + last RTT. Idle hb would lose to the
+        // focused vehicle on shared half-duplex (sysid2 / longer TA especially).
+        if (!radioProbeAllowed()) {
+          radioHbExpectByRef.current = 0
+          schedule(1000)
+          return
+        }
         if (inFlight || pingRunningRef.current || transmittingRef.current) {
           schedule(800)
           return
