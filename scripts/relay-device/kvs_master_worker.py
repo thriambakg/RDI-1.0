@@ -481,7 +481,8 @@ async def run_master(cfg: dict) -> None:
 
     async def _emit_link_rtt(channel, cid: str, wait, ctrl_id: str, sysid) -> None:
         try:
-            info = wait(ctrl_id, timeout_sec=2.0)
+            # Sysid>1 uses longer desktop turnaround; dual-link half-duplex often >2s.
+            info = wait(ctrl_id, timeout_sec=4.0)
             if asyncio.iscoroutine(info):
                 info = await info
             if not isinstance(info, dict):

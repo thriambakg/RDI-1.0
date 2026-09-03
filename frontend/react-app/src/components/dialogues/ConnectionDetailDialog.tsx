@@ -431,14 +431,18 @@ export function ConnectionDetailDialog({
   const lastRadioRttAtRef = useRef(0)
   /** Deadline for an expected rdi_link_rtt after idle/initial hb (0 = none). */
   const radioHbExpectByRef = useRef(0)
+  /** Consecutive idle-hb RTT misses before disarm (half-duplex often drops one ACK). */
+  const radioHbMissesRef = useRef(0)
   const [radioLinkArmed, setRadioLinkArmed] = useState(false)
 
-  // Idle radio probe cadence (must stay well below any "stale → disarm" window).
+  // Idle radio probe cadence. Stagger sysids far apart so ACKs don't collide on shared RF.
   const RADIO_IDLE_HB_MS = 12_000
-  const RADIO_HB_ACK_WAIT_MS = 3_500
+  const RADIO_HB_ACK_WAIT_MS = 5_000
+  const RADIO_HB_SOFT_RETRY_MS = 2_500
+  const RADIO_HB_MISS_LIMIT = 3
   const radioHbIntervalMs = useMemo(() => {
     const sid = typeof data?.mavlink_sysid === 'number' ? data.mavlink_sysid : 1
-    return RADIO_IDLE_HB_MS + ((sid - 1) % 4) * 1_500
+    return RADIO_IDLE_HB_MS + ((sid - 1) % 4) * 4_000
   }, [data?.mavlink_sysid])
 
   useEffect(() => {
@@ -461,6 +465,7 @@ export function ConnectionDetailDialog({
           linkRttEwmaRef.current = ewma
           lastRadioRttAtRef.current = Date.now()
           radioHbExpectByRef.current = 0
+          radioHbMissesRef.current = 0
           setRadioLinkArmed(true)
           setPingError(null)
           if (controlPathRef.current === 'radio') {
@@ -524,7 +529,18 @@ export function ConnectionDetailDialog({
       if (controlPathRef.current !== 'radio') return
       const by = radioHbExpectByRef.current
       if (!by || Date.now() < by) return
+
+      radioHbExpectByRef.current = 0
+      radioHbMissesRef.current += 1
+      const misses = radioHbMissesRef.current
       const hadSample = linkRttEwmaRef.current != null
+
+      // One lost half-duplex ACK is common (esp. higher sysid turnaround) — soft-retry.
+      if (misses < RADIO_HB_MISS_LIMIT) {
+        lastRadioRttAtRef.current = Date.now() - radioHbIntervalMs + RADIO_HB_SOFT_RETRY_MS
+        return
+      }
+
       failRadioProbe(
         'timeout',
         hadSample
@@ -542,6 +558,7 @@ export function ConnectionDetailDialog({
         if (path === 'radio') {
           setRadioLinkArmed(false)
           radioHbExpectByRef.current = 0
+          radioHbMissesRef.current = 0
         }
         schedule(1200)
         return
@@ -633,6 +650,7 @@ export function ConnectionDetailDialog({
     linkRttEwmaRef.current = null
     lastRadioRttAtRef.current = 0
     radioHbExpectByRef.current = 0
+    radioHbMissesRef.current = 0
     setRadioLinkArmed(false)
     setPingError(null)
     setLivePing({
@@ -642,7 +660,7 @@ export function ConnectionDetailDialog({
     })
     // Arm ASAP on radio; relay meter starts quickly.
     const sid0 = typeof data.mavlink_sysid === 'number' ? data.mavlink_sysid : 1
-    schedule(controlPath === 'radio' ? 300 + ((sid0 - 1) % 4) * 350 : 200)
+    schedule(controlPath === 'radio' ? 300 + ((sid0 - 1) % 4) * 800 : 200)
     watchTimer = window.setInterval(checkHbExpect, 500)
 
     return () => {
