@@ -289,11 +289,7 @@ export function ConnectionDetailDialog({
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return
       // Block page scroll / shortcuts for held flight binds
-      const codes = new Set(
-        Object.values(keybinds)
-          .filter((b) => b.device === 'keyboard')
-          .map((b) => (b.device === 'keyboard' ? b.code : '')),
-      )
+      const codes = new Set(Object.values(keybinds).map((b) => b.keyboard.code))
       if (codes.has(e.code)) e.preventDefault()
     }
     window.addEventListener('keydown', onKeyDown, { capture: true })

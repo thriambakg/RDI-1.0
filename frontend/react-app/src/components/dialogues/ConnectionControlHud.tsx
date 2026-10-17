@@ -21,17 +21,22 @@ const PAD_ACTIONS: { action: ControlActionId; row: number; col: number }[] = [
 
 const EXTRA_ACTIONS: ControlActionId[] = ['move_up', 'move_down', 'brake', 'rtl']
 
-function shortBindLabel(keybinds: ControlKeybinds, action: ControlActionId): string {
-  const b = keybinds[action]
-  if (!b) return '—'
-  const full = formatBinding(b)
-  if (full.length <= 10) return full
-  if (b.device === 'gamepad' && b.control.startsWith('axis:')) {
+function shortOne(b: import('../../controls/defaultKeybinds').ControlBinding): string {
+  if (b.device === 'keyboard') {
+    const full = formatBinding(b)
+    return full.length <= 8 ? full : full.slice(0, 7)
+  }
+  if (b.control.startsWith('axis:')) {
     const parts = b.control.split(':')
     return `A${parts[1]}${parts[2]}`
   }
-  if (b.device === 'gamepad') return `B${b.control}`
-  return full.slice(0, 8)
+  return `B${b.control}`
+}
+
+function shortBindLabel(keybinds: ControlKeybinds, action: ControlActionId): string {
+  const slots = keybinds[action]
+  if (!slots) return '—'
+  return `${shortOne(slots.keyboard)}/${shortOne(slots.gamepad)}`
 }
 
 export type LivePingState = {
@@ -95,11 +100,6 @@ export function ConnectionControlHud({
   gamepads = [],
 }: ConnectionControlHudProps) {
   const activeSet = useMemo(() => new Set(activeActions), [activeActions])
-  const usesGamepad = useMemo(
-    () => Object.values(keybinds).some((b) => b.device === 'gamepad'),
-    [keybinds],
-  )
-
   const padCells = useMemo(() => {
     const cells: ({ kind: 'empty' } | { kind: 'key'; label: string; lit: boolean })[] = []
     for (let row = 0; row < 3; row++) {
@@ -150,10 +150,8 @@ export function ConnectionControlHud({
           <span>
             {connected
               ? gamepads.length > 0
-                ? `Channel live · ${gamepads.map((g) => formatGamepadId(g.id)).join(', ')}`
-                : usesGamepad
-                  ? 'Channel live — press a button on your controller to wake it'
-                  : 'Channel live — hold binds (chords OK)'
+                ? `Channel live · keyboard + ${gamepads.map((g) => formatGamepadId(g.id)).join(', ')}`
+                : 'Channel live — keyboard ready; press a controller button to wake gamepad'
               : 'Waiting for WebRTC channel…'}
           </span>
         </div>
@@ -234,7 +232,7 @@ export function ConnectionControlHud({
               : 'Browser → Pi only (relay logs + ack).'}{' '}
             Binds: gear → setup
             {keybinds.move_forward
-              ? ` — e.g. ${formatBinding(keybinds.move_forward)} = forward.`
+              ? ` — e.g. ${formatBinding(keybinds.move_forward.keyboard)} / ${formatBinding(keybinds.move_forward.gamepad)} = forward.`
               : '.'}
           </p>
         </div>

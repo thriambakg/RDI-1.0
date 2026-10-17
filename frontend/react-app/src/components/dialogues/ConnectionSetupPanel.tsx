@@ -15,13 +15,15 @@ import {
 } from '@mui/material'
 import {
   CONTROL_ACTIONS,
-  DEFAULT_GAMEPAD_BINDS,
-  DEFAULT_KEYBINDS,
   type ControlActionId,
   type ControlBinding,
   type ControlKeybinds,
   formatBinding,
   formatGamepadId,
+  resetGamepadDefaults,
+  resetKeyboardDefaults,
+  setActionGamepad,
+  setActionKeyboard,
 } from '../../controls/defaultKeybinds'
 
 const AXIS_DEADZONE = 0.45
@@ -164,13 +166,17 @@ export function ConnectionSetupPanel({
   onSave,
   onBackToControls,
 }: ConnectionSetupPanelProps) {
-  const [listeningFor, setListeningFor] = useState<ControlActionId | null>(null)
-  const [captureMode, setCaptureMode] = useState<'keyboard' | 'gamepad'>('keyboard')
+  type ListenTarget = { actionId: ControlActionId; device: 'keyboard' | 'gamepad' }
+  const [listeningFor, setListeningFor] = useState<ListenTarget | null>(null)
   const [pads, setPads] = useState<{ index: number; id: string }[]>([])
 
   const assignBinding = useCallback(
     (actionId: ControlActionId, binding: ControlBinding) => {
-      onKeybindsChange({ ...keybinds, [actionId]: binding })
+      if (binding.device === 'keyboard') {
+        onKeybindsChange(setActionKeyboard(keybinds, actionId, binding))
+      } else {
+        onKeybindsChange(setActionGamepad(keybinds, actionId, binding))
+      }
       setListeningFor(null)
     },
     [keybinds, onKeybindsChange],
@@ -191,30 +197,31 @@ export function ConnectionSetupPanel({
   }, [])
 
   useEffect(() => {
-    if (!listeningFor || captureMode !== 'keyboard') return
+    if (!listeningFor || listeningFor.device !== 'keyboard') return
+    const actionId = listeningFor.actionId
     const onKey = (e: KeyboardEvent) => {
       e.preventDefault()
       e.stopPropagation()
-      // Accept any physical key, including modifiers (ControlLeft, ShiftLeft, …).
-      assignBinding(listeningFor, { device: 'keyboard', code: e.code })
+      assignBinding(actionId, { device: 'keyboard', code: e.code })
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [listeningFor, captureMode, assignBinding])
+  }, [listeningFor, assignBinding])
 
   useEffect(() => {
-    if (!listeningFor || captureMode !== 'gamepad') return
+    if (!listeningFor || listeningFor.device !== 'gamepad') return
+    const actionId = listeningFor.actionId
     let cancelled = false
     ;(async () => {
       const binding = await captureGamepadBinding()
-      if (cancelled || !listeningFor) return
-      if (binding) assignBinding(listeningFor, binding)
+      if (cancelled) return
+      if (binding) assignBinding(actionId, binding)
       else setListeningFor(null)
     })()
     return () => {
       cancelled = true
     }
-  }, [listeningFor, captureMode, assignBinding])
+  }, [listeningFor, assignBinding])
 
   const groups = [...new Set(CONTROL_ACTIONS.map((a) => a.group))]
 
@@ -325,8 +332,8 @@ export function ConnectionSetupPanel({
         Control map
       </Typography>
       <Typography sx={{ fontSize: '0.75rem', color: '#64748b', mb: 1 }}>
-        Binds apply only to this connection. Use Keyboard or Gamepad mode, click a bind, then press the key /
-        button / stick direction. Save stores them to your account.
+        Keyboard and gamepad binds are saved separately for this connection. Both work at the same time — no mode
+        switch. Click a slot, then press the key / button / stick. Save stores them to your account.
       </Typography>
       <Typography sx={{ fontSize: '0.75rem', color: pads.length ? '#4ade80' : '#64748b', mb: 1.5 }}>
         {pads.length === 0
@@ -334,53 +341,34 @@ export function ConnectionSetupPanel({
           : `Connected: ${pads.map((p) => formatGamepadId(p.id)).join(' · ')}`}
       </Typography>
 
-      <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+      <Box sx={{ display: 'flex', gap: 1, mb: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+        <Typography sx={{ fontSize: '0.7rem', color: '#94a3b8', mr: 0.5 }}>Keyboard Controls</Typography>
         <Button
           size="small"
-          variant={captureMode === 'keyboard' ? 'contained' : 'outlined'}
           onClick={() => {
-            setCaptureMode('keyboard')
             setListeningFor(null)
+            onKeybindsChange(resetKeyboardDefaults(keybinds))
           }}
-          sx={{ textTransform: 'none', borderRadius: '2px' }}
+          sx={{ textTransform: 'none', color: '#94a3b8', borderRadius: '2px' }}
         >
-          Keyboard
+          Reset to default
         </Button>
+        <Typography sx={{ fontSize: '0.7rem', color: '#94a3b8', ml: 1.5, mr: 0.5 }}>Gamepad Controls</Typography>
         <Button
           size="small"
-          variant={captureMode === 'gamepad' ? 'contained' : 'outlined'}
           onClick={() => {
-            setCaptureMode('gamepad')
             setListeningFor(null)
+            onKeybindsChange(resetGamepadDefaults(keybinds))
           }}
-          sx={{ textTransform: 'none', borderRadius: '2px' }}
+          sx={{ textTransform: 'none', color: '#38bdf8', borderRadius: '2px' }}
         >
-          Gamepad
-        </Button>
-        <Button
-          size="small"
-          onClick={() => onKeybindsChange({ ...DEFAULT_KEYBINDS })}
-          sx={{ textTransform: 'none', color: '#94a3b8', ml: 'auto' }}
-        >
-          Keyboard defaults
-        </Button>
-        <Button
-          size="small"
-          onClick={() => {
-            setCaptureMode('gamepad')
-            onKeybindsChange({ ...DEFAULT_GAMEPAD_BINDS })
-          }}
-          sx={{ textTransform: 'none', color: '#38bdf8' }}
-        >
-          Gamepad defaults
+          Reset to default
         </Button>
       </Box>
-      {captureMode === 'gamepad' && (
-        <Typography sx={{ fontSize: '0.7rem', color: '#64748b', mb: 1.5 }}>
-          Defaults: left stick move, right stick yaw, RT ascend, LT descend, B/○ brake, Y/△ RTL. Works with Xbox
-          Series and PlayStation DualShock / DualSense on the browser standard mapping.
-        </Typography>
-      )}
+      <Typography sx={{ fontSize: '0.7rem', color: '#64748b', mb: 1.5 }}>
+        Gamepad defaults: left stick move, right stick yaw, RT ascend, LT descend, B/○ brake, Y/△ RTL (Xbox /
+        DualShock / DualSense standard mapping).
+      </Typography>
 
       {groups.map((group) => (
         <Box key={group} sx={{ mb: 2.5 }}>
@@ -396,27 +384,42 @@ export function ConnectionSetupPanel({
             }}
           >
             {CONTROL_ACTIONS.filter((a) => a.group === group).map((action) => {
-              const binding = keybinds[action.id]
-              const listening = listeningFor === action.id
+              const slots = keybinds[action.id]
+              const listenKb =
+                listeningFor?.actionId === action.id && listeningFor.device === 'keyboard'
+              const listenGp =
+                listeningFor?.actionId === action.id && listeningFor.device === 'gamepad'
               return (
                 <ListItem
                   key={action.id}
                   secondaryAction={
-                    <Button
-                      size="small"
-                      variant={listening ? 'contained' : 'outlined'}
-                      onClick={() => setListeningFor(listening ? null : action.id)}
-                      sx={{ textTransform: 'none', minWidth: 100, borderRadius: '2px' }}
-                      title={binding ? formatBinding(binding) : undefined}
-                    >
-                      {listening
-                        ? captureMode === 'gamepad'
-                          ? 'Press…'
-                          : 'Listening…'
-                        : formatBinding(binding)}
-                    </Button>
+                    <Box sx={{ display: 'flex', gap: 0.75 }}>
+                      <Button
+                        size="small"
+                        variant={listenKb ? 'contained' : 'outlined'}
+                        onClick={() =>
+                          setListeningFor(listenKb ? null : { actionId: action.id, device: 'keyboard' })
+                        }
+                        sx={{ textTransform: 'none', minWidth: 72, borderRadius: '2px' }}
+                        title={`Keyboard: ${formatBinding(slots.keyboard)}`}
+                      >
+                        {listenKb ? 'Listening…' : formatBinding(slots.keyboard)}
+                      </Button>
+                      <Button
+                        size="small"
+                        variant={listenGp ? 'contained' : 'outlined'}
+                        color="info"
+                        onClick={() =>
+                          setListeningFor(listenGp ? null : { actionId: action.id, device: 'gamepad' })
+                        }
+                        sx={{ textTransform: 'none', minWidth: 96, borderRadius: '2px' }}
+                        title={`Gamepad: ${formatBinding(slots.gamepad)}`}
+                      >
+                        {listenGp ? 'Press…' : formatBinding(slots.gamepad)}
+                      </Button>
+                    </Box>
                   }
-                  sx={{ pr: 14, py: 0.35 }}
+                  sx={{ pr: 28, py: 0.45 }}
                 >
                   <ListItemText
                     primary={action.label}
