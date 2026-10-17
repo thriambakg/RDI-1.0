@@ -124,21 +124,64 @@ function isGamepadBinding(v: unknown): v is GamepadBinding {
   return isRecord(v) && v.device === 'gamepad' && typeof v.control === 'string'
 }
 
+/**
+ * Pull a clean keyboard bind out of legacy / deep-merge-polluted shapes.
+ * Prefers nested `.keyboard` (unwraps recursively), else top-level `{device,code}`.
+ */
+function extractKeyboard(raw: unknown): KeyboardBinding | null {
+  if (!isRecord(raw)) return null
+  if ('keyboard' in raw) {
+    const nested = extractKeyboard(raw.keyboard)
+    if (nested) return nested
+  }
+  if (typeof raw.code === 'string' && (raw.device === 'keyboard' || raw.device == null)) {
+    return { device: 'keyboard', code: raw.code }
+  }
+  return null
+}
+
+function extractGamepad(raw: unknown): GamepadBinding | null {
+  if (!isRecord(raw)) return null
+  if ('gamepad' in raw) {
+    const nested = extractGamepad(raw.gamepad)
+    if (nested) return nested
+  }
+  if (typeof raw.control === 'string' && (raw.device === 'gamepad' || raw.device == null)) {
+    return { device: 'gamepad', control: raw.control }
+  }
+  return null
+}
+
 /** Normalize legacy single-binding or partial dual slots into ActionBindings. */
 export function normalizeActionBindings(raw: unknown, actionId: ControlActionId): ActionBindings {
   const fallback = DEFAULT_KEYBINDS[actionId]
+  if (!isRecord(raw)) {
+    return { keyboard: { ...fallback.keyboard }, gamepad: { ...fallback.gamepad } }
+  }
+
+  // Dual-slot (or deep-merge polluted) objects: prefer nested keyboard/gamepad first.
+  // Checking this before legacy flat `{device,code}` avoids ignoring nested Digit2 etc.
+  if ('keyboard' in raw || 'gamepad' in raw) {
+    return {
+      keyboard: extractKeyboard(raw) ?? { ...fallback.keyboard },
+      gamepad: extractGamepad(raw) ?? { ...fallback.gamepad },
+    }
+  }
+
   if (isKeyboardBinding(raw)) {
-    return { keyboard: raw, gamepad: fallback.gamepad }
+    return {
+      keyboard: { device: 'keyboard', code: raw.code },
+      gamepad: { ...fallback.gamepad },
+    }
   }
   if (isGamepadBinding(raw)) {
-    return { keyboard: fallback.keyboard, gamepad: raw }
+    return {
+      keyboard: { ...fallback.keyboard },
+      gamepad: { device: 'gamepad', control: raw.control },
+    }
   }
-  if (isRecord(raw)) {
-    const keyboard = isKeyboardBinding(raw.keyboard) ? raw.keyboard : fallback.keyboard
-    const gamepad = isGamepadBinding(raw.gamepad) ? raw.gamepad : fallback.gamepad
-    return { keyboard, gamepad }
-  }
-  return { ...fallback, keyboard: { ...fallback.keyboard }, gamepad: { ...fallback.gamepad } }
+
+  return { keyboard: { ...fallback.keyboard }, gamepad: { ...fallback.gamepad } }
 }
 
 export function normalizeKeybinds(partial?: Partial<ControlKeybinds> | Record<string, unknown> | null): ControlKeybinds {
@@ -146,6 +189,19 @@ export function normalizeKeybinds(partial?: Partial<ControlKeybinds> | Record<st
   for (const action of CONTROL_ACTIONS) {
     const raw = partial?.[action.id]
     out[action.id] = normalizeActionBindings(raw, action.id)
+  }
+  return out
+}
+
+/** Clean dual-slot map for DynamoDB — never send polluted / nested merge junk. */
+export function sanitizeKeybindsForSave(keybinds: ControlKeybinds): ControlKeybinds {
+  const out = {} as ControlKeybinds
+  for (const action of CONTROL_ACTIONS) {
+    const slots = normalizeActionBindings(keybinds[action.id], action.id)
+    out[action.id] = {
+      keyboard: { device: 'keyboard', code: slots.keyboard.code },
+      gamepad: { device: 'gamepad', control: slots.gamepad.control },
+    }
   }
   return out
 }

@@ -195,7 +195,7 @@ def _patch_profile(user_id: str, body: dict, headers: dict) -> dict:
 
 
 def _update_settings(user_id: str, settings_patch: dict, headers: dict) -> dict:
-    """Deep-merge settings onto the user-profiles item (e.g. controls.keybinds)."""
+    """Merge settings onto the user-profiles item (e.g. controls.keybinds)."""
     dynamodb = boto3.client("dynamodb")
     try:
         resp = dynamodb.get_item(
@@ -210,7 +210,7 @@ def _update_settings(user_id: str, settings_patch: dict, headers: dict) -> dict:
         current = _from_dynamo_value(item["settings"]) or {}
     if not isinstance(current, dict):
         current = {}
-    merged = _deep_merge_dicts(current, settings_patch)
+    merged = _merge_settings(current, settings_patch)
     dynamodb.update_item(
         TableName=TABLE_NAME,
         Key={"user_id": {"S": user_id}},
@@ -224,6 +224,37 @@ def _deep_merge_dicts(base: dict, patch: dict) -> dict:
     out = copy.deepcopy(base)
     for key, value in patch.items():
         if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge_dicts(out[key], value)
+        else:
+            out[key] = copy.deepcopy(value)
+    return out
+
+
+def _merge_controls(base: dict, patch: dict) -> dict:
+    """Merge controls; replace each session's connection_keybinds map (no deep-merge into actions)."""
+    out = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for key, value in patch.items():
+        if key == "connection_keybinds" and isinstance(value, dict):
+            ck = out.get("connection_keybinds")
+            ck = copy.deepcopy(ck) if isinstance(ck, dict) else {}
+            for session_id, binds in value.items():
+                # Wholesale replace — dual-slot binds must not merge into legacy {device,code}.
+                ck[session_id] = copy.deepcopy(binds)
+            out["connection_keybinds"] = ck
+        elif isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge_dicts(out[key], value)
+        else:
+            out[key] = copy.deepcopy(value)
+    return out
+
+
+def _merge_settings(base: dict, patch: dict) -> dict:
+    out = copy.deepcopy(base)
+    for key, value in patch.items():
+        if key == "controls" and isinstance(value, dict):
+            existing = out.get("controls")
+            out[key] = _merge_controls(existing if isinstance(existing, dict) else {}, value)
+        elif isinstance(value, dict) and isinstance(out.get(key), dict):
             out[key] = _deep_merge_dicts(out[key], value)
         else:
             out[key] = copy.deepcopy(value)

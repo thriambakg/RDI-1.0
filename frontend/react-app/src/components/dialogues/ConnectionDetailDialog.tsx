@@ -19,6 +19,7 @@ import {
   DEFAULT_KEYBINDS,
   resolveConnectionKeybinds,
   resolveActiveActions,
+  sanitizeKeybindsForSave,
   type ControlKeybinds,
 } from '../../controls/defaultKeybinds'
 import { getProfile, updateUserSettings, type RelayRef } from '../../services/profileApi'
@@ -444,14 +445,18 @@ export function ConnectionDetailDialog({
         name: editName.trim() || 'drone',
         ttl_seconds: editTtl,
       })
+      const cleanBinds = sanitizeKeybindsForSave(keybinds)
       await updateUserSettings({
         controls: {
-          version: 1,
+          version: 2,
           connection_keybinds: {
-            [sessionId]: keybinds,
+            // Replace this session's map wholesale (backend must not deep-merge into legacy flat binds).
+            [sessionId]: cleanBinds,
           },
         },
       })
+      // Keep local state clean so a second Save can't re-pollute.
+      setKeybinds(cleanBinds)
       const refreshed = await getSession(sessionId)
       setData(refreshed)
       setEditTtl(refreshed.ttl_seconds ?? editTtl)
