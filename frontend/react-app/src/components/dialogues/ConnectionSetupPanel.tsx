@@ -13,6 +13,8 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
+import KeyboardOutlinedIcon from '@mui/icons-material/KeyboardOutlined'
+import SportsEsportsOutlinedIcon from '@mui/icons-material/SportsEsportsOutlined'
 import {
   CONTROL_ACTIONS,
   type ControlActionId,
@@ -25,6 +27,42 @@ import {
   setActionGamepad,
   setActionKeyboard,
 } from '../../controls/defaultKeybinds'
+
+const BIND_BTN_SX = {
+  textTransform: 'none' as const,
+  minWidth: 88,
+  borderRadius: '2px',
+  '@keyframes rdiBindFlash': {
+    '0%, 100%': {
+      borderColor: 'rgba(148, 163, 184, 0.45)',
+      backgroundColor: 'transparent',
+      color: '#e2e8f0',
+    },
+    '40%, 60%': {
+      borderColor: '#f87171',
+      backgroundColor: 'rgba(248, 113, 113, 0.28)',
+      color: '#fecaca',
+    },
+  },
+}
+
+function bindingConflicts(
+  keybinds: ControlKeybinds,
+  actionId: ControlActionId,
+  binding: ControlBinding,
+): boolean {
+  for (const action of CONTROL_ACTIONS) {
+    if (action.id === actionId) continue
+    const slots = keybinds[action.id]
+    if (!slots) continue
+    if (binding.device === 'keyboard') {
+      if (slots.keyboard.code === binding.code) return true
+    } else if (slots.gamepad.control === binding.control) {
+      return true
+    }
+  }
+  return false
+}
 
 const AXIS_DEADZONE = 0.45
 const AXIS_DELTA = 0.35
@@ -168,10 +206,21 @@ export function ConnectionSetupPanel({
 }: ConnectionSetupPanelProps) {
   type ListenTarget = { actionId: ControlActionId; device: 'keyboard' | 'gamepad' }
   const [listeningFor, setListeningFor] = useState<ListenTarget | null>(null)
+  const [flashConflict, setFlashConflict] = useState<ListenTarget | null>(null)
   const [pads, setPads] = useState<{ index: number; id: string }[]>([])
+
+  const flashBindConflict = useCallback((target: ListenTarget) => {
+    setFlashConflict(target)
+    window.setTimeout(() => setFlashConflict(null), 500)
+  }, [])
 
   const assignBinding = useCallback(
     (actionId: ControlActionId, binding: ControlBinding) => {
+      if (bindingConflicts(keybinds, actionId, binding)) {
+        flashBindConflict({ actionId, device: binding.device })
+        setListeningFor(null)
+        return
+      }
       if (binding.device === 'keyboard') {
         onKeybindsChange(setActionKeyboard(keybinds, actionId, binding))
       } else {
@@ -179,7 +228,7 @@ export function ConnectionSetupPanel({
       }
       setListeningFor(null)
     },
-    [keybinds, onKeybindsChange],
+    [keybinds, onKeybindsChange, flashBindConflict],
   )
 
   // Keep connected-pad list fresh (Chrome only exposes pads after a button press).
@@ -332,8 +381,8 @@ export function ConnectionSetupPanel({
         Control map
       </Typography>
       <Typography sx={{ fontSize: '0.75rem', color: '#64748b', mb: 1 }}>
-        Keyboard and gamepad binds are saved separately for this connection. Both work at the same time — no mode
-        switch. Click a slot, then press the key / button / stick. Save stores them to your account.
+        Keyboard and gamepad binds are saved separately. Both work at once — click a slot, then press the key /
+        button / stick. Each input can only map to one action. Save stores them to your account.
       </Typography>
       <Typography sx={{ fontSize: '0.75rem', color: pads.length ? '#4ade80' : '#64748b', mb: 1.5 }}>
         {pads.length === 0
@@ -341,34 +390,39 @@ export function ConnectionSetupPanel({
           : `Connected: ${pads.map((p) => formatGamepadId(p.id)).join(' · ')}`}
       </Typography>
 
-      <Box sx={{ display: 'flex', gap: 1, mb: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
-        <Typography sx={{ fontSize: '0.7rem', color: '#94a3b8', mr: 0.5 }}>Keyboard Controls</Typography>
-        <Button
-          size="small"
-          onClick={() => {
-            setListeningFor(null)
-            onKeybindsChange(resetKeyboardDefaults(keybinds))
+      {/* Column icons aligned over the bind buttons */}
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          gap: 0.75,
+          pr: 1.5,
+          mb: 0.75,
+        }}
+      >
+        <Box
+          sx={{
+            width: 88,
+            display: 'flex',
+            justifyContent: 'center',
+            color: '#94a3b8',
           }}
-          sx={{ textTransform: 'none', color: '#94a3b8', borderRadius: '2px' }}
+          title="Keyboard Controls"
         >
-          Reset to default
-        </Button>
-        <Typography sx={{ fontSize: '0.7rem', color: '#94a3b8', ml: 1.5, mr: 0.5 }}>Gamepad Controls</Typography>
-        <Button
-          size="small"
-          onClick={() => {
-            setListeningFor(null)
-            onKeybindsChange(resetGamepadDefaults(keybinds))
+          <KeyboardOutlinedIcon sx={{ fontSize: 18 }} />
+        </Box>
+        <Box
+          sx={{
+            width: 88,
+            display: 'flex',
+            justifyContent: 'center',
+            color: '#38bdf8',
           }}
-          sx={{ textTransform: 'none', color: '#38bdf8', borderRadius: '2px' }}
+          title="Gamepad Controls"
         >
-          Reset to default
-        </Button>
+          <SportsEsportsOutlinedIcon sx={{ fontSize: 18 }} />
+        </Box>
       </Box>
-      <Typography sx={{ fontSize: '0.7rem', color: '#64748b', mb: 1.5 }}>
-        Gamepad defaults: left stick move, right stick yaw, RT ascend, LT descend, B/○ brake, Y/△ RTL (Xbox /
-        DualShock / DualSense standard mapping).
-      </Typography>
 
       {groups.map((group) => (
         <Box key={group} sx={{ mb: 2.5 }}>
@@ -389,6 +443,10 @@ export function ConnectionSetupPanel({
                 listeningFor?.actionId === action.id && listeningFor.device === 'keyboard'
               const listenGp =
                 listeningFor?.actionId === action.id && listeningFor.device === 'gamepad'
+              const flashKb =
+                flashConflict?.actionId === action.id && flashConflict.device === 'keyboard'
+              const flashGp =
+                flashConflict?.actionId === action.id && flashConflict.device === 'gamepad'
               return (
                 <ListItem
                   key={action.id}
@@ -400,7 +458,10 @@ export function ConnectionSetupPanel({
                         onClick={() =>
                           setListeningFor(listenKb ? null : { actionId: action.id, device: 'keyboard' })
                         }
-                        sx={{ textTransform: 'none', minWidth: 72, borderRadius: '2px' }}
+                        sx={{
+                          ...BIND_BTN_SX,
+                          ...(flashKb ? { animation: 'rdiBindFlash 0.25s ease 2' } : {}),
+                        }}
                         title={`Keyboard: ${formatBinding(slots.keyboard)}`}
                       >
                         {listenKb ? 'Listening…' : formatBinding(slots.keyboard)}
@@ -412,7 +473,10 @@ export function ConnectionSetupPanel({
                         onClick={() =>
                           setListeningFor(listenGp ? null : { actionId: action.id, device: 'gamepad' })
                         }
-                        sx={{ textTransform: 'none', minWidth: 96, borderRadius: '2px' }}
+                        sx={{
+                          ...BIND_BTN_SX,
+                          ...(flashGp ? { animation: 'rdiBindFlash 0.25s ease 2' } : {}),
+                        }}
                         title={`Gamepad: ${formatBinding(slots.gamepad)}`}
                       >
                         {listenGp ? 'Press…' : formatBinding(slots.gamepad)}
@@ -431,6 +495,58 @@ export function ConnectionSetupPanel({
           </List>
         </Box>
       ))}
+
+      <Box sx={{ mb: 2.5 }}>
+        <Typography sx={{ fontSize: '0.7rem', color: '#64748b', mb: 1 }}>Reset</Typography>
+        <List
+          dense
+          disablePadding
+          sx={{
+            backgroundColor: '#020617',
+            border: '1px solid #1e293b',
+            borderRadius: '2px',
+            py: 1.25,
+          }}
+        >
+          <ListItem
+            secondaryAction={
+              <Box sx={{ display: 'flex', gap: 0.75 }}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    setListeningFor(null)
+                    onKeybindsChange(resetKeyboardDefaults(keybinds))
+                  }}
+                  sx={{ ...BIND_BTN_SX, color: '#94a3b8' }}
+                  title="Reset keyboard binds to defaults"
+                >
+                  Reset
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="info"
+                  onClick={() => {
+                    setListeningFor(null)
+                    onKeybindsChange(resetGamepadDefaults(keybinds))
+                  }}
+                  sx={BIND_BTN_SX}
+                  title="Reset gamepad binds to defaults"
+                >
+                  Reset
+                </Button>
+              </Box>
+            }
+            sx={{ pr: 28, py: 0.45 }}
+          >
+            <ListItemText
+              primary="Reset to default"
+              primaryTypographyProps={{ sx: { color: '#e2e8f0', fontSize: '0.85rem' } }}
+            />
+          </ListItem>
+        </List>
+      </Box>
 
       {error && (
         <Typography sx={{ color: '#f87171', fontSize: '0.8125rem', mb: 1 }}>{error}</Typography>
