@@ -172,7 +172,7 @@ export function ConnectionDetailDialog({
   })
 
   const listenInputs = isActiveController
-  const { pressed, stream } = usePressedInputs(listenInputs)
+  const { pressed, stream, gamepads } = usePressedInputs(listenInputs)
   const activeActions = useMemo(() => resolveActiveActions(pressed, keybinds), [pressed, keybinds])
 
   const sendCommand = useCallback(
@@ -928,6 +928,7 @@ export function ConnectionDetailDialog({
               lastTxNote={lastTxNote}
               connected={isConnected}
               livePing={livePing}
+              gamepads={gamepads}
             />
           )}
           {ctrlError && (

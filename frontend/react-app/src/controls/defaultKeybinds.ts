@@ -64,6 +64,36 @@ export const DEFAULT_KEYBINDS: ControlKeybinds = {
   rtl: { device: 'keyboard', code: 'KeyR' },
 }
 
+/**
+ * Video-game style defaults for the W3C "standard" gamepad mapping
+ * (Xbox Series / DualSense / DualShock via Chromium).
+ * Left stick = strafe/forward, right stick X = yaw, triggers = up/down.
+ */
+export const DEFAULT_GAMEPAD_BINDS: ControlKeybinds = {
+  move_forward: { device: 'gamepad', control: 'axis:1:-' },
+  move_back: { device: 'gamepad', control: 'axis:1:+' },
+  move_left: { device: 'gamepad', control: 'axis:0:-' },
+  move_right: { device: 'gamepad', control: 'axis:0:+' },
+  move_up: { device: 'gamepad', control: '7' },
+  move_down: { device: 'gamepad', control: '6' },
+  yaw_left: { device: 'gamepad', control: 'axis:2:-' },
+  yaw_right: { device: 'gamepad', control: 'axis:2:+' },
+  brake: { device: 'gamepad', control: '1' },
+  rtl: { device: 'gamepad', control: '3' },
+}
+
+/** Friendly name from navigator.getGamepads()[].id */
+export function formatGamepadId(id: string): string {
+  const lower = id.toLowerCase()
+  if (lower.includes('dualsense')) return 'PlayStation DualSense (PS5)'
+  if (lower.includes('dualshock') || lower.includes('playstation')) return 'PlayStation DualShock (PS4)'
+  // Sony vendor 054c + "Wireless Controller" is usually DualShock/DualSense on Windows.
+  if (lower.includes('054c') && lower.includes('wireless controller')) return 'PlayStation controller'
+  if (lower.includes('xbox') || lower.includes('xinput') || lower.includes('045e')) return 'Xbox controller'
+  if (id.length > 48) return `${id.slice(0, 45)}…`
+  return id || 'Gamepad'
+}
+
 export function mergeKeybinds(partial?: Partial<ControlKeybinds> | null): ControlKeybinds {
   return { ...DEFAULT_KEYBINDS, ...(partial ?? {}) }
 }
@@ -170,4 +200,21 @@ export function formatGamepadControl(control: string): string {
   const idx = Number(control)
   if (!Number.isNaN(idx) && GP_BUTTON_LABELS[idx]) return GP_BUTTON_LABELS[idx]
   return `Button ${control}`
+}
+
+/** Format a live pressed token (KeyW / GP0-BTN0 / GP0-AX1-) for HUD display. */
+export function formatInputToken(token: string): string {
+  if (token.startsWith('GP') && token.includes('-BTN')) {
+    const btn = Number(token.slice(token.lastIndexOf('BTN') + 3))
+    if (!Number.isNaN(btn) && GP_BUTTON_LABELS[btn]) return GP_BUTTON_LABELS[btn]
+    return `Btn ${btn}`
+  }
+  if (token.startsWith('GP') && token.includes('-AX')) {
+    const m = token.match(/-AX(\d+)([+-])$/)
+    if (m) {
+      const key = `axis:${m[1]}:${m[2]}`
+      return GP_AXIS_LABELS[key] ?? `Axis ${m[1]}${m[2]}`
+    }
+  }
+  return formatKeyboardCode(token)
 }

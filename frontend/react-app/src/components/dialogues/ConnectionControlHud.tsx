@@ -1,28 +1,38 @@
 import { useMemo } from 'react'
 import {
   CONTROL_ACTIONS,
-  formatKeyboardCode,
+  formatBinding,
+  formatGamepadId,
+  formatInputToken,
   type ControlActionId,
   type ControlKeybinds,
 } from '../../controls/defaultKeybinds'
 import type { ControlPath } from '../../utils/rdiControl'
 import './ConnectionControlHud.css'
 
-const PAD: { id: string; label: string; action?: ControlActionId; row: number; col: number }[] = [
-  { id: 'q', label: 'Q', action: 'yaw_left', row: 0, col: 0 },
-  { id: 'w', label: 'W', action: 'move_forward', row: 0, col: 1 },
-  { id: 'e', label: 'E', action: 'yaw_right', row: 0, col: 2 },
-  { id: 'a', label: 'A', action: 'move_left', row: 1, col: 0 },
-  { id: 's', label: 'S', action: 'move_back', row: 1, col: 1 },
-  { id: 'd', label: 'D', action: 'move_right', row: 1, col: 2 },
+const PAD_ACTIONS: { action: ControlActionId; row: number; col: number }[] = [
+  { action: 'yaw_left', row: 0, col: 0 },
+  { action: 'move_forward', row: 0, col: 1 },
+  { action: 'yaw_right', row: 0, col: 2 },
+  { action: 'move_left', row: 1, col: 0 },
+  { action: 'move_back', row: 1, col: 1 },
+  { action: 'move_right', row: 1, col: 2 },
 ]
 
-const EXTRA: { label: string; action: ControlActionId }[] = [
-  { label: 'Space', action: 'move_up' },
-  { label: 'C', action: 'move_down' },
-  { label: 'X', action: 'brake' },
-  { label: 'R', action: 'rtl' },
-]
+const EXTRA_ACTIONS: ControlActionId[] = ['move_up', 'move_down', 'brake', 'rtl']
+
+function shortBindLabel(keybinds: ControlKeybinds, action: ControlActionId): string {
+  const b = keybinds[action]
+  if (!b) return '—'
+  const full = formatBinding(b)
+  if (full.length <= 10) return full
+  if (b.device === 'gamepad' && b.control.startsWith('axis:')) {
+    const parts = b.control.split(':')
+    return `A${parts[1]}${parts[2]}`
+  }
+  if (b.device === 'gamepad') return `B${b.control}`
+  return full.slice(0, 8)
+}
 
 export type LivePingState = {
   ms: number | null
@@ -39,12 +49,7 @@ function prettyStream(stream: string): string {
   if (!stream) return ''
   return stream
     .split('+')
-    .map((token) => {
-      if (token.startsWith('Key') || token === 'Space' || token.startsWith('Digit') || token.startsWith('Arrow')) {
-        return formatKeyboardCode(token)
-      }
-      return token
-    })
+    .map((token) => formatInputToken(token))
     .join(' + ')
 }
 
@@ -73,6 +78,7 @@ export type ConnectionControlHudProps = {
   lastTxNote?: string | null
   connected: boolean
   livePing: LivePingState
+  gamepads?: { index: number; id: string }[]
 }
 
 export function ConnectionControlHud({
@@ -86,8 +92,13 @@ export function ConnectionControlHud({
   lastTxNote,
   connected,
   livePing,
+  gamepads = [],
 }: ConnectionControlHudProps) {
   const activeSet = useMemo(() => new Set(activeActions), [activeActions])
+  const usesGamepad = useMemo(
+    () => Object.values(keybinds).some((b) => b.device === 'gamepad'),
+    [keybinds],
+  )
 
   const padCells = useMemo(() => {
     const cells: ({ kind: 'empty' } | { kind: 'key'; label: string; lit: boolean })[] = []
@@ -97,20 +108,20 @@ export function ConnectionControlHud({
           cells.push({ kind: 'empty' })
           continue
         }
-        const item = PAD.find((p) => p.row === row && p.col === col)
-        if (!item?.action) {
+        const item = PAD_ACTIONS.find((p) => p.row === row && p.col === col)
+        if (!item) {
           cells.push({ kind: 'empty' })
           continue
         }
         cells.push({
           kind: 'key',
-          label: item.label,
+          label: shortBindLabel(keybinds, item.action),
           lit: activeSet.has(item.action),
         })
       }
     }
     return cells
-  }, [activeSet])
+  }, [activeSet, keybinds])
 
   const tone = pingTone(livePing.path, livePing.ms, livePing.status)
   const pingLabel = livePing.path === 'radio' ? 'Radio RTT' : 'Relay ping'
@@ -136,7 +147,15 @@ export function ConnectionControlHud({
       <div className="rdi-hud-header">
         <div className="rdi-hud-title">
           <strong>Control link</strong>
-          <span>{connected ? 'Channel live — hold binds (chords OK)' : 'Waiting for WebRTC channel…'}</span>
+          <span>
+            {connected
+              ? gamepads.length > 0
+                ? `Channel live · ${gamepads.map((g) => formatGamepadId(g.id)).join(', ')}`
+                : usesGamepad
+                  ? 'Channel live — press a button on your controller to wake it'
+                  : 'Channel live — hold binds (chords OK)'
+              : 'Waiting for WebRTC channel…'}
+          </span>
         </div>
         <div className="rdi-hud-status">
           <div className={`rdi-hud-armed ${armed ? '' : 'is-off'}`}>
@@ -213,20 +232,18 @@ export function ConnectionControlHud({
             {path === 'radio'
               ? 'Browser → Pi → radio (desktop agent should log ctrl frames).'
               : 'Browser → Pi only (relay logs + ack).'}{' '}
-            Binds for this connection (gear → setup)
-            {keybinds.move_forward?.device === 'keyboard'
-              ? ` — e.g. ${formatKeyboardCode(
-                  keybinds.move_forward.device === 'keyboard' ? keybinds.move_forward.code : 'KeyW',
-                )} = forward.`
+            Binds: gear → setup
+            {keybinds.move_forward
+              ? ` — e.g. ${formatBinding(keybinds.move_forward)} = forward.`
               : '.'}
           </p>
         </div>
       </div>
 
       <div className="rdi-hud-extra" aria-hidden>
-        {EXTRA.map((item) => (
-          <div key={item.action} className={`rdi-hud-key ${activeSet.has(item.action) ? 'is-lit' : ''}`}>
-            {item.label}
+        {EXTRA_ACTIONS.map((action) => (
+          <div key={action} className={`rdi-hud-key ${activeSet.has(action) ? 'is-lit' : ''}`}>
+            {shortBindLabel(keybinds, action)}
           </div>
         ))}
       </div>

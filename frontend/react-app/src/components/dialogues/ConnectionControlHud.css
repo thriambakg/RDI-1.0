@@ -241,9 +241,12 @@
   border: 1px solid rgba(51, 65, 85, 0.95);
   background: rgba(15, 23, 42, 0.75);
   color: #94a3b8;
-  font-size: 0.78rem;
+  font-size: 0.62rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
+  text-align: center;
+  line-height: 1.15;
+  padding: 0.2rem 0.15rem;
   min-height: 40px;
   transition: background 80ms ease, color 80ms ease, border-color 80ms ease, transform 80ms ease,
     box-shadow 80ms ease;

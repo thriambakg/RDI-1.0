@@ -15,51 +15,101 @@ import {
 } from '@mui/material'
 import {
   CONTROL_ACTIONS,
+  DEFAULT_GAMEPAD_BINDS,
   DEFAULT_KEYBINDS,
   type ControlActionId,
   type ControlBinding,
   type ControlKeybinds,
   formatBinding,
+  formatGamepadId,
 } from '../../controls/defaultKeybinds'
 
-const AXIS_DEADZONE = 0.35
+const AXIS_DEADZONE = 0.45
+const AXIS_DELTA = 0.35
+const CAPTURE_SETTLE_MS = 220
+const CAPTURE_TIMEOUT_MS = 10_000
 
+function listConnectedPads(): { index: number; id: string }[] {
+  const pads = navigator.getGamepads?.() ?? []
+  const out: { index: number; id: string }[] = []
+  for (const gp of pads) {
+    if (gp?.connected) out.push({ index: gp.index, id: gp.id })
+  }
+  return out
+}
+
+/**
+ * Wait for a fresh button press or stick deflection.
+ * Ignores stick drift already present when listening starts (baseline + settle).
+ */
 function captureGamepadBinding(): Promise<ControlBinding | null> {
   return new Promise((resolve) => {
     const started = performance.now()
+    const baseline = new Map<string, number>()
+    let settled = false
     let raf = 0
-    const tick = () => {
+
+    const sampleBaseline = () => {
       const pads = navigator.getGamepads?.() ?? []
       for (const gp of pads) {
         if (!gp?.connected) continue
+        gp.axes.forEach((v, i) => baseline.set(`${gp.index}:${i}`, v))
+        gp.buttons.forEach((btn, i) => {
+          if (btn.pressed || btn.value > 0.5) baseline.set(`btn:${gp.index}:${i}`, 1)
+        })
+      }
+    }
+
+    const tick = () => {
+      const elapsed = performance.now() - started
+      if (!settled) {
+        sampleBaseline()
+        if (elapsed >= CAPTURE_SETTLE_MS) settled = true
+        raf = requestAnimationFrame(tick)
+        return
+      }
+
+      const pads = navigator.getGamepads?.() ?? []
+      for (const gp of pads) {
+        if (!gp?.connected) continue
+
+        // Prefer buttons — less false-positive than stick noise.
         for (let i = 0; i < gp.buttons.length; i++) {
-          if (gp.buttons[i]?.pressed) {
-            cancelAnimationFrame(raf)
-            resolve({ device: 'gamepad', control: String(i) })
-            return
-          }
+          const pressed = !!gp.buttons[i]?.pressed || (gp.buttons[i]?.value ?? 0) > 0.55
+          if (!pressed) continue
+          if (baseline.has(`btn:${gp.index}:${i}`)) continue
+          cancelAnimationFrame(raf)
+          resolve({ device: 'gamepad', control: String(i) })
+          return
         }
+
         for (let i = 0; i < gp.axes.length; i++) {
           const v = gp.axes[i]
-          if (v >= AXIS_DEADZONE) {
+          const base = baseline.get(`${gp.index}:${i}`) ?? 0
+          const delta = v - base
+          if (Math.abs(delta) < AXIS_DELTA && Math.abs(v) < AXIS_DEADZONE) continue
+          if (v >= AXIS_DEADZONE || delta >= AXIS_DELTA) {
             cancelAnimationFrame(raf)
             resolve({ device: 'gamepad', control: `axis:${i}:+` })
             return
           }
-          if (v <= -AXIS_DEADZONE) {
+          if (v <= -AXIS_DEADZONE || delta <= -AXIS_DELTA) {
             cancelAnimationFrame(raf)
             resolve({ device: 'gamepad', control: `axis:${i}:-` })
             return
           }
         }
       }
-      if (performance.now() - started > 8000) {
+
+      if (elapsed > CAPTURE_TIMEOUT_MS) {
         cancelAnimationFrame(raf)
         resolve(null)
         return
       }
       raf = requestAnimationFrame(tick)
     }
+
+    sampleBaseline()
     raf = requestAnimationFrame(tick)
   })
 }
@@ -116,6 +166,7 @@ export function ConnectionSetupPanel({
 }: ConnectionSetupPanelProps) {
   const [listeningFor, setListeningFor] = useState<ControlActionId | null>(null)
   const [captureMode, setCaptureMode] = useState<'keyboard' | 'gamepad'>('keyboard')
+  const [pads, setPads] = useState<{ index: number; id: string }[]>([])
 
   const assignBinding = useCallback(
     (actionId: ControlActionId, binding: ControlBinding) => {
@@ -124,6 +175,20 @@ export function ConnectionSetupPanel({
     },
     [keybinds, onKeybindsChange],
   )
+
+  // Keep connected-pad list fresh (Chrome only exposes pads after a button press).
+  useEffect(() => {
+    const refresh = () => setPads(listConnectedPads())
+    refresh()
+    window.addEventListener('gamepadconnected', refresh)
+    window.addEventListener('gamepaddisconnected', refresh)
+    const id = window.setInterval(refresh, 1500)
+    return () => {
+      window.removeEventListener('gamepadconnected', refresh)
+      window.removeEventListener('gamepaddisconnected', refresh)
+      window.clearInterval(id)
+    }
+  }, [])
 
   useEffect(() => {
     if (!listeningFor || captureMode !== 'keyboard') return
@@ -259,16 +324,24 @@ export function ConnectionSetupPanel({
       >
         Control map
       </Typography>
-      <Typography sx={{ fontSize: '0.75rem', color: '#64748b', mb: 1.5 }}>
-        Binds apply only to this connection. Changes update the control deck immediately; Save stores them to your
-        account.
+      <Typography sx={{ fontSize: '0.75rem', color: '#64748b', mb: 1 }}>
+        Binds apply only to this connection. Use Keyboard or Gamepad mode, click a bind, then press the key /
+        button / stick direction. Save stores them to your account.
+      </Typography>
+      <Typography sx={{ fontSize: '0.75rem', color: pads.length ? '#4ade80' : '#64748b', mb: 1.5 }}>
+        {pads.length === 0
+          ? 'No controller detected — connect a PS4 / PS5 / Xbox pad and press any button once (Chrome requires it).'
+          : `Connected: ${pads.map((p) => formatGamepadId(p.id)).join(' · ')}`}
       </Typography>
 
-      <Box sx={{ display: 'flex', gap: 1, mb: 1.5 }}>
+      <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
         <Button
           size="small"
           variant={captureMode === 'keyboard' ? 'contained' : 'outlined'}
-          onClick={() => setCaptureMode('keyboard')}
+          onClick={() => {
+            setCaptureMode('keyboard')
+            setListeningFor(null)
+          }}
           sx={{ textTransform: 'none', borderRadius: '2px' }}
         >
           Keyboard
@@ -276,7 +349,10 @@ export function ConnectionSetupPanel({
         <Button
           size="small"
           variant={captureMode === 'gamepad' ? 'contained' : 'outlined'}
-          onClick={() => setCaptureMode('gamepad')}
+          onClick={() => {
+            setCaptureMode('gamepad')
+            setListeningFor(null)
+          }}
           sx={{ textTransform: 'none', borderRadius: '2px' }}
         >
           Gamepad
@@ -286,9 +362,25 @@ export function ConnectionSetupPanel({
           onClick={() => onKeybindsChange({ ...DEFAULT_KEYBINDS })}
           sx={{ textTransform: 'none', color: '#94a3b8', ml: 'auto' }}
         >
-          Reset defaults
+          Keyboard defaults
+        </Button>
+        <Button
+          size="small"
+          onClick={() => {
+            setCaptureMode('gamepad')
+            onKeybindsChange({ ...DEFAULT_GAMEPAD_BINDS })
+          }}
+          sx={{ textTransform: 'none', color: '#38bdf8' }}
+        >
+          Gamepad defaults
         </Button>
       </Box>
+      {captureMode === 'gamepad' && (
+        <Typography sx={{ fontSize: '0.7rem', color: '#64748b', mb: 1.5 }}>
+          Defaults: left stick move, right stick yaw, RT ascend, LT descend, B/○ brake, Y/△ RTL. Works with Xbox
+          Series and PlayStation DualShock / DualSense on the browser standard mapping.
+        </Typography>
+      )}
 
       {groups.map((group) => (
         <Box key={group} sx={{ mb: 2.5 }}>
@@ -314,9 +406,14 @@ export function ConnectionSetupPanel({
                       size="small"
                       variant={listening ? 'contained' : 'outlined'}
                       onClick={() => setListeningFor(listening ? null : action.id)}
-                      sx={{ textTransform: 'none', minWidth: 88, borderRadius: '2px' }}
+                      sx={{ textTransform: 'none', minWidth: 100, borderRadius: '2px' }}
+                      title={binding ? formatBinding(binding) : undefined}
                     >
-                      {listening ? 'Listening…' : formatBinding(binding)}
+                      {listening
+                        ? captureMode === 'gamepad'
+                          ? 'Press…'
+                          : 'Listening…'
+                        : formatBinding(binding)}
                     </Button>
                   }
                   sx={{ pr: 14, py: 0.35 }}
