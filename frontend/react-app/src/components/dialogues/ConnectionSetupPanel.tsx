@@ -390,43 +390,45 @@ export function ConnectionSetupPanel({
           : `Connected: ${pads.map((p) => formatGamepadId(p.id)).join(' · ')}`}
       </Typography>
 
-      {/* Column icons aligned over the bind buttons */}
-      <Box
-        sx={{
-          display: 'flex',
-          justifyContent: 'flex-end',
-          gap: 0.75,
-          pr: 1.5,
-          mb: 0.75,
-        }}
-      >
-        <Box
-          sx={{
-            width: 88,
-            display: 'flex',
-            justifyContent: 'center',
-            color: '#94a3b8',
-          }}
-          title="Keyboard Controls"
-        >
-          <KeyboardOutlinedIcon sx={{ fontSize: 18 }} />
-        </Box>
-        <Box
-          sx={{
-            width: 88,
-            display: 'flex',
-            justifyContent: 'center',
-            color: '#38bdf8',
-          }}
-          title="Gamepad Controls"
-        >
-          <SportsEsportsOutlinedIcon sx={{ fontSize: 18 }} />
-        </Box>
-      </Box>
-
       {groups.map((group) => (
         <Box key={group} sx={{ mb: 2.5 }}>
-          <Typography sx={{ fontSize: '0.7rem', color: '#64748b', mb: 1 }}>{group}</Typography>
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              mb: 1,
+              pr: 1.5,
+            }}
+          >
+            <Typography sx={{ fontSize: '0.7rem', color: '#64748b' }}>{group}</Typography>
+            {group === 'Movement' && (
+              <Box sx={{ display: 'flex', gap: 0.75 }}>
+                <Box
+                  sx={{
+                    width: 88,
+                    display: 'flex',
+                    justifyContent: 'center',
+                    color: '#94a3b8',
+                  }}
+                  title="Keyboard Controls"
+                >
+                  <KeyboardOutlinedIcon sx={{ fontSize: 18 }} />
+                </Box>
+                <Box
+                  sx={{
+                    width: 88,
+                    display: 'flex',
+                    justifyContent: 'center',
+                    color: '#38bdf8',
+                  }}
+                  title="Gamepad Controls"
+                >
+                  <SportsEsportsOutlinedIcon sx={{ fontSize: 18 }} />
+                </Box>
+              </Box>
+            )}
+          </Box>
           <List
             dense
             disablePadding
