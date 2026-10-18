@@ -27,6 +27,11 @@ export interface OpenWebRtcOptions {
   force?: boolean
   /** Wait for Pi relay daemon poll + KVS worker before opening viewer (default 0). */
   waitForPiMs?: number
+  /**
+   * Same-Wi‑Fi shortcut: allow direct LAN ICE (`all`). Default false = TURN-only (`relay`).
+   * Omitted on reconnect keeps the last value set for this session.
+   */
+  allowLanShortcut?: boolean
 }
 
 export interface SessionWebRtcContextType {
@@ -81,6 +86,7 @@ export function SessionWebRtcProvider({ children }: { children: ReactNode }) {
       if (options?.clearBundle !== false) {
         bundleRef.current.delete(sessionId)
         reconnectingRef.current.delete(sessionId)
+        lanShortcutRef.current.delete(sessionId)
       }
     },
     [detachHealthMonitor],
@@ -96,6 +102,8 @@ export function SessionWebRtcProvider({ children }: { children: ReactNode }) {
 
   const viewerClientIdRef = useRef<Map<string, string>>(new Map())
   const channelArnRef = useRef<Map<string, string>>(new Map())
+  /** Per-session LAN shortcut preference (default off = TURN-only). */
+  const lanShortcutRef = useRef<Map<string, boolean>>(new Map())
   const openSessionRef = useRef<
     (sessionId: string, bundle: WebRtcViewerBundle, options?: OpenWebRtcOptions) => void
   >(() => {})
@@ -189,8 +197,16 @@ export function SessionWebRtcProvider({ children }: { children: ReactNode }) {
         }
       }
 
+      if (typeof options?.allowLanShortcut === 'boolean') {
+        lanShortcutRef.current.set(sessionId, options.allowLanShortcut)
+      }
+      // Read after optional update; tearDown(clearBundle:false) must not wipe this.
+      const allowLanShortcut = lanShortcutRef.current.get(sessionId) === true
+
       bundleRef.current.set(sessionId, bundle)
       tearDownTransport(sessionId, { clearBundle: false })
+      // Re-assert after tearDown so reconnects keep the preference even if map was cleared.
+      lanShortcutRef.current.set(sessionId, allowLanShortcut)
       channelArnRef.current.set(sessionId, bundle.channel_arn)
       connectingSinceRef.current.set(sessionId, Date.now())
 
@@ -205,6 +221,7 @@ export function SessionWebRtcProvider({ children }: { children: ReactNode }) {
         session_id: sessionId,
         force,
         waitForPiMs,
+        allowLanShortcut,
         channel: bundle.channel_arn.slice(-36),
       })
 
@@ -214,10 +231,18 @@ export function SessionWebRtcProvider({ children }: { children: ReactNode }) {
           if (controller.signal.aborted) return
         }
 
-        console.log('[RDI WebRTC] starting KVS viewer connect', { session_id: sessionId, viewerClientId })
+        console.log('[RDI WebRTC] starting KVS viewer connect', {
+          session_id: sessionId,
+          viewerClientId,
+          allowLanShortcut,
+        })
 
         try {
-          const conn = await connectKvsViewer(bundle, { signal: controller.signal, viewerClientId })
+          const conn = await connectKvsViewer(bundle, {
+            signal: controller.signal,
+            viewerClientId,
+            allowLanShortcut,
+          })
           if (controller.signal.aborted) {
             conn.close()
             return

@@ -69,15 +69,31 @@ async function fetchIceServers(
 
 export async function connectKvsViewer(
   bundle: WebRtcViewerBundle,
-  options?: { viewerClientId?: string; signal?: AbortSignal },
+  options?: {
+    viewerClientId?: string
+    signal?: AbortSignal
+    /**
+     * Same-Wi‑Fi / LAN shortcut: allow host+srflx candidates (`iceTransportPolicy: all`).
+     * Off (default) forces TURN only — correct for browser and relay on different networks.
+     */
+    allowLanShortcut?: boolean
+  },
 ): Promise<KvsViewerConnection> {
   const viewerClientId =
     options?.viewerClientId ??
     `viewer-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
+  const allowLanShortcut = options?.allowLanShortcut === true
   const iceServers = await fetchIceServers(bundle, viewerClientId)
-  const pc = new RTCPeerConnection({ iceServers })
+  const iceTransportPolicy: RTCIceTransportPolicy = allowLanShortcut ? 'all' : 'relay'
+  const pc = new RTCPeerConnection({ iceServers, iceTransportPolicy })
   let signaling: KvsSignalingViewer | null = null
   let closed = false
+
+  console.log('[RDI WebRTC] ICE policy', {
+    iceTransportPolicy,
+    allowLanShortcut,
+    iceServerCount: iceServers.length,
+  })
 
   const dataChannel = pc.createDataChannel('mavlink', { ordered: false, maxRetransmits: 0 })
 
@@ -106,7 +122,9 @@ export async function connectKvsViewer(
     const connectTimeout = window.setTimeout(() => {
       fail(
         new Error(
-          `WebRTC connection timed out (45s). Pi state=${pc.connectionState}, ice=${pc.iceConnectionState}. Same-LAN? Allow UDP on the Pi firewall.`,
+          allowLanShortcut
+            ? `WebRTC connection timed out (45s). Pi state=${pc.connectionState}, ice=${pc.iceConnectionState}. Same-LAN shortcut is on — allow UDP on the Pi firewall, or turn the shortcut off to force TURN.`
+            : `WebRTC connection timed out (45s). Pi state=${pc.connectionState}, ice=${pc.iceConnectionState}. TURN-only path failed — check KVS ICE credentials / network.`,
         ),
       )
     }, 45000)

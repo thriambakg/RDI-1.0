@@ -1,6 +1,6 @@
-import { Button, Box, Typography, IconButton } from '@mui/material'
+import { Button, Box, Typography, IconButton, Switch, Tooltip } from '@mui/material'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { FloatingWindow, type WindowRect } from './FloatingWindow'
 import { getSession, updateSession, fetchWebRtcBundleForSession } from '../../services/sessionApi'
 import { useSessionWebSocket } from '../../contexts/SessionWebSocketContext'
@@ -134,6 +134,10 @@ export function ConnectionDetailDialog({
   const [keybinds, setKeybinds] = useState<ControlKeybinds>(DEFAULT_KEYBINDS)
   const [lastTxNote, setLastTxNote] = useState<string | null>(null)
   const [transmitting, setTransmitting] = useState(false)
+  /** Same-Wi‑Fi ICE shortcut (host candidates). Off = TURN-only for remote relays. */
+  const [allowLanShortcut, setAllowLanShortcut] = useState(false)
+  const allowLanShortcutRef = useRef(false)
+  allowLanShortcutRef.current = allowLanShortcut
 
   const { getWs, openSession, connectionState, connectionError } = useSessionWebSocket()
   const {
@@ -142,6 +146,35 @@ export function ConnectionDetailDialog({
     connectionState: webRtcState,
     connectionError: webRtcError,
   } = useSessionWebRtc()
+
+  const openWebRtc = useCallback(
+    (
+      sid: string,
+      bundle: WebRtcViewerBundle,
+      options?: { force?: boolean; waitForPiMs?: number; allowLanShortcut?: boolean },
+    ) => {
+      openWebRtcSession(sid, bundle, {
+        ...options,
+        allowLanShortcut: options?.allowLanShortcut ?? allowLanShortcutRef.current,
+      })
+    },
+    [openWebRtcSession],
+  )
+
+  const handleLanShortcutToggle = useCallback(
+    (_: ChangeEvent<HTMLInputElement>, checked: boolean) => {
+      setAllowLanShortcut(checked)
+      allowLanShortcutRef.current = checked
+      if (!sessionId || !data?.webrtc || data.status !== 'active') return
+      if (usesWebSocketTransport(data)) return
+      openWebRtc(sessionId, data.webrtc, {
+        force: true,
+        waitForPiMs: WEBRTC_PI_READY_MS,
+        allowLanShortcut: checked,
+      })
+    },
+    [sessionId, data, openWebRtc],
+  )
 
   const addLog = useCallback((line: string) => {
     setLogLines((prev) => [...prev.slice(-98), line])
@@ -253,6 +286,12 @@ export function ConnectionDetailDialog({
     }
   }, [open, sessionId])
 
+  // Fresh connection window defaults to TURN-only (real-world path).
+  useEffect(() => {
+    setAllowLanShortcut(false)
+    allowLanShortcutRef.current = false
+  }, [sessionId])
+
   useEffect(() => {
     if (!open || !sessionId || !sessionStatus) return
     const prevStatus = prevSessionStatusRef.current
@@ -268,14 +307,14 @@ export function ConnectionDetailDialog({
             (webrtc) => {
               if (webrtc) {
                 console.log('[RDI ConnectionDetail] Reactivate: opening WebRTC', { session_id: sessionId })
-                openWebRtcSession(sessionId, webrtc, { force: true, waitForPiMs: WEBRTC_PI_READY_MS })
+                openWebRtc(sessionId, webrtc, { force: true, waitForPiMs: WEBRTC_PI_READY_MS })
               }
             },
           )
         }
       })
       .catch(() => { /* ignore */ })
-  }, [open, sessionId, sessionStatus, openWebRtcSession])
+  }, [open, sessionId, sessionStatus, openWebRtc])
 
   // Keep WebSocket open for legacy WebSocket sessions when dialog is open
   useEffect(() => {
@@ -466,7 +505,7 @@ export function ConnectionDetailDialog({
         patch.webrtc &&
         !usesWebSocketTransport(refreshed)
       ) {
-        openWebRtcSession(sessionId, patch.webrtc, { force: true, waitForPiMs: WEBRTC_PI_READY_MS })
+        openWebRtc(sessionId, patch.webrtc, { force: true, waitForPiMs: WEBRTC_PI_READY_MS })
       }
       setSettingsSavedMsg('Connection settings saved.')
     } catch (e) {
@@ -474,7 +513,7 @@ export function ConnectionDetailDialog({
     } finally {
       setSavingSettings(false)
     }
-  }, [sessionId, data, editName, editTtl, keybinds, onSessionUpdated, openWebRtcSession])
+  }, [sessionId, data, editName, editTtl, keybinds, onSessionUpdated, openWebRtc])
 
   // Listen for agent log messages (RLOG) when WebSocket is connected
   useEffect(() => {
@@ -698,6 +737,58 @@ export function ConnectionDetailDialog({
 
   const windowTitle = (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, minWidth: 0, flex: 1 }}>
+      {isWebRtc && (
+        <Tooltip
+          title={
+            allowLanShortcut
+              ? 'Same-Wi‑Fi shortcut on: allow direct LAN ICE. Turn off for remote / cellular relays (TURN-only).'
+              : 'Same-Wi‑Fi shortcut off: force TURN (real-world path). Enable only when browser and relay share a LAN.'
+          }
+          placement="bottom-start"
+        >
+          <Box
+            data-no-drag
+            onMouseDown={(e) => e.stopPropagation()}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.5,
+              flexShrink: 0,
+              pr: 0.75,
+              mr: 0.25,
+              borderRight: '1px solid #1e293b',
+            }}
+          >
+            <Typography
+              component="span"
+              sx={{
+                fontSize: '0.65rem',
+                fontWeight: 600,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                color: allowLanShortcut ? '#38bdf8' : '#64748b',
+                whiteSpace: 'nowrap',
+                userSelect: 'none',
+              }}
+            >
+              Same Wi‑Fi
+            </Typography>
+            <Switch
+              size="small"
+              checked={allowLanShortcut}
+              onChange={handleLanShortcutToggle}
+              inputProps={{ 'aria-label': 'Same Wi-Fi LAN shortcut' }}
+              sx={{
+                m: 0,
+                '& .MuiSwitch-switchBase.Mui-checked': { color: '#38bdf8' },
+                '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
+                  backgroundColor: '#0ea5e9',
+                },
+              }}
+            />
+          </Box>
+        </Tooltip>
+      )}
       <Typography
         component="span"
         sx={{
@@ -804,7 +895,7 @@ export function ConnectionDetailDialog({
           <Button
             variant="outlined"
             size="small"
-            onClick={() => openWebRtcSession(sessionId!, data.webrtc!, { force: true })}
+            onClick={() => openWebRtc(sessionId!, data.webrtc!, { force: true })}
             sx={{
               color: '#3b82f6',
               borderColor: '#475569',
@@ -829,7 +920,7 @@ export function ConnectionDetailDialog({
             <Button
               variant="outlined"
               size="small"
-              onClick={() => openWebRtcSession(sessionId!, data.webrtc!, { force: true })}
+              onClick={() => openWebRtc(sessionId!, data.webrtc!, { force: true })}
               sx={{
                 color: '#3b82f6',
                 borderColor: '#475569',
