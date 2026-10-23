@@ -15,7 +15,9 @@ import boto3
 from botocore.exceptions import ClientError
 
 USER_PROFILES_TABLE = os.environ.get("USER_PROFILES_TABLE", "")
-_AUTH_SESSION_SKEW_SECONDS = 10
+# PostAuth may stamp wall-clock a second after JWT auth_time; keep skew tight so
+# two logins a few seconds apart still invalidate the older one.
+_AUTH_SESSION_SKEW_SECONDS = 2
 
 _dynamodb = boto3.client("dynamodb")
 

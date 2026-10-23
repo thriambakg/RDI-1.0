@@ -69,6 +69,29 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     }
   }, [isAuthenticated, fetchProfile])
 
+  // Re-check session when the tab becomes visible so a superseded device signs out promptly.
+  useEffect(() => {
+    if (!isAuthenticated) return
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void fetchProfile({ silent: true })
+      }
+    }
+    const onFocus = () => {
+      void fetchProfile({ silent: true })
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onFocus)
+    const interval = window.setInterval(() => {
+      void fetchProfile({ silent: true })
+    }, 30_000)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onFocus)
+      window.clearInterval(interval)
+    }
+  }, [isAuthenticated, fetchProfile])
+
   const value: ProfileContextType = {
     profile,
     hierarchy,
