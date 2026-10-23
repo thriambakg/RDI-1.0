@@ -1,132 +1,80 @@
-.rdi-vpad {
-  --vpad-cyan: #38bdf8;
-  --vpad-dim: #64748b;
-  --vpad-panel: rgba(8, 16, 28, 0.94);
-  --vpad-line: rgba(56, 189, 248, 0.35);
-  --vpad-lit: rgba(56, 189, 248, 0.35);
-  --vpad-text: #e2e8f0;
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  flex-shrink: 0;
-  min-height: min(58vh, 320px);
-  user-select: none;
-  -webkit-user-select: none;
-  font-family: 'Segoe UI', 'IBM Plex Sans', system-ui, sans-serif;
+/* Floating overlay over video — sticks do not fill the page */
+.rdi-vpad-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
 }
 
-.rdi-vpad-status {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.35rem 0.75rem;
-  border-bottom: 1px solid #1e293b;
-  flex-shrink: 0;
-}
-
-.rdi-vpad-status strong {
-  font-size: 0.65rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--vpad-cyan);
-}
-
-.rdi-vpad-status span {
-  font-size: 0.7rem;
-  color: var(--vpad-dim);
-}
-
-.rdi-vpad-path {
-  display: inline-flex;
-  gap: 0.35rem;
-}
-
-.rdi-vpad-path button {
-  appearance: none;
-  border: 1px solid #334155;
-  background: transparent;
-  color: var(--vpad-dim);
-  font-size: 0.65rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 0.25rem 0.55rem;
-  border-radius: 2px;
-  touch-action: manipulation;
-}
-
-.rdi-vpad-path button.is-active {
-  color: var(--vpad-cyan);
-  border-color: var(--vpad-cyan);
-  background: rgba(56, 189, 248, 0.12);
-}
-
-.rdi-vpad-path button.is-radio.is-active {
-  color: #fbbf24;
-  border-color: #fbbf24;
-  background: rgba(251, 191, 36, 0.12);
-}
-
-.rdi-vpad-body {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.65rem 1rem 0.85rem;
-}
-
-.rdi-vpad-cluster {
+.rdi-vpad-overlay--rotate {
+  pointer-events: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.4rem;
-  flex: 1;
-  max-width: 40vw;
-}
-
-.rdi-vpad-cluster-label {
-  font-size: 0.6rem;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--vpad-dim);
-}
-
-.rdi-vpad-cluster-hint {
-  font-size: 0.55rem;
-  letter-spacing: 0.06em;
-  color: #475569;
+  gap: 0.75rem;
+  padding: 2rem;
   text-align: center;
+  background: rgba(5, 10, 18, 0.72);
+  color: #e2e8f0;
+  backdrop-filter: blur(4px);
 }
 
-.rdi-vpad-stick {
-  position: relative;
-  width: min(28vw, 148px);
-  height: min(28vw, 148px);
+.rdi-vpad-overlay--rotate strong {
+  font-size: 1rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #38bdf8;
+}
+
+.rdi-vpad-overlay--rotate p {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.9rem;
+  max-width: 18rem;
+}
+
+.rdi-vpad-float-stick {
+  position: absolute;
+  bottom: calc(var(--vpad-bottom-inset, 0px) + max(12px, env(safe-area-inset-bottom, 0px)));
+  width: min(26vw, 132px);
+  height: min(26vw, 132px);
   border-radius: 50%;
-  background:
-    radial-gradient(circle at 50% 50%, rgba(56, 189, 248, 0.08), transparent 62%),
-    var(--vpad-panel);
-  border: 1px solid var(--vpad-line);
-  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.85);
+  pointer-events: auto;
   touch-action: none;
   -webkit-tap-highlight-color: transparent;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(56, 189, 248, 0.12), transparent 62%),
+    rgba(8, 16, 28, 0.42);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.35);
+  backdrop-filter: blur(2px);
   overflow: hidden;
 }
 
-.rdi-vpad-stick.is-active {
-  border-color: var(--vpad-cyan);
+.rdi-vpad-float-stick--left {
+  left: max(10px, env(safe-area-inset-left, 0px));
+}
+
+.rdi-vpad-float-stick--right {
+  right: max(10px, env(safe-area-inset-right, 0px));
+}
+
+.rdi-vpad-float-stick.is-active {
+  border-color: #38bdf8;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(56, 189, 248, 0.22), transparent 62%),
+    rgba(8, 16, 28, 0.5);
   box-shadow:
-    inset 0 0 0 1px rgba(15, 23, 42, 0.85),
-    0 0 18px rgba(56, 189, 248, 0.22);
+    inset 0 0 0 1px rgba(15, 23, 42, 0.35),
+    0 0 18px rgba(56, 189, 248, 0.28);
 }
 
 .rdi-vpad-stick-ring {
   position: absolute;
   inset: 18%;
   border-radius: 50%;
-  border: 1px dashed rgba(100, 116, 139, 0.45);
+  border: 1px dashed rgba(148, 163, 184, 0.4);
   pointer-events: none;
 }
 
@@ -135,8 +83,8 @@
   inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(90deg, transparent 49.2%, rgba(100, 116, 139, 0.28) 49.2%, rgba(100, 116, 139, 0.28) 50.8%, transparent 50.8%),
-    linear-gradient(0deg, transparent 49.2%, rgba(100, 116, 139, 0.28) 49.2%, rgba(100, 116, 139, 0.28) 50.8%, transparent 50.8%);
+    linear-gradient(90deg, transparent 49.2%, rgba(148, 163, 184, 0.28) 49.2%, rgba(148, 163, 184, 0.28) 50.8%, transparent 50.8%),
+    linear-gradient(0deg, transparent 49.2%, rgba(148, 163, 184, 0.28) 49.2%, rgba(148, 163, 184, 0.28) 50.8%, transparent 50.8%);
 }
 
 .rdi-vpad-stick-knob {
@@ -148,118 +96,52 @@
   margin-left: -19%;
   margin-top: -19%;
   border-radius: 50%;
-  background: linear-gradient(160deg, #38bdf8, #0ea5e9 55%, #0369a1);
+  background: linear-gradient(160deg, rgba(125, 211, 252, 0.95), rgba(14, 165, 233, 0.85) 55%, rgba(3, 105, 161, 0.9));
   border: 1px solid rgba(186, 230, 253, 0.55);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   pointer-events: none;
   will-change: transform;
+}
+
+.rdi-vpad-float-center {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--vpad-bottom-inset, 0px) + max(28px, env(safe-area-inset-bottom, 0px) + 16px));
+  transform: translateX(-50%);
+  display: flex;
+  gap: 0.5rem;
+  pointer-events: auto;
+  z-index: 3;
 }
 
 .rdi-vpad-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--vpad-line);
+  border: 1px solid rgba(56, 189, 248, 0.4);
   border-radius: 10px;
-  background: var(--vpad-panel);
-  color: var(--vpad-text);
-  font-size: clamp(0.7rem, 2.2vw, 0.85rem);
+  background: rgba(8, 16, 28, 0.45);
+  color: #e2e8f0;
+  font-size: clamp(0.65rem, 1.8vw, 0.8rem);
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   touch-action: none;
   -webkit-tap-highlight-color: transparent;
-  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.8);
-  min-width: 72px;
-  min-height: 48px;
-  padding: 0 0.75rem;
+  backdrop-filter: blur(2px);
+  min-width: 68px;
+  min-height: 40px;
+  padding: 0 0.7rem;
 }
 
 .rdi-vpad-btn.is-lit {
-  background: var(--vpad-lit);
-  border-color: var(--vpad-cyan);
+  background: rgba(56, 189, 248, 0.4);
+  border-color: #38bdf8;
   color: #fff;
-  box-shadow: 0 0 16px rgba(56, 189, 248, 0.25);
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.3);
 }
 
 .rdi-vpad-btn.is-warn.is-lit {
   border-color: #fbbf24;
-  background: rgba(251, 191, 36, 0.28);
-  box-shadow: 0 0 16px rgba(251, 191, 36, 0.22);
-}
-
-.rdi-vpad-extras {
-  display: flex;
-  gap: 0.45rem;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
-.rdi-vpad-center {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  flex: 0 0 auto;
-  min-width: 96px;
-  max-width: 140px;
-}
-
-.rdi-vpad-armed {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.7rem;
-  color: #4ade80;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.rdi-vpad-armed.is-off {
-  color: var(--vpad-dim);
-}
-
-.rdi-vpad-armed .dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
-.rdi-vpad-ping {
-  font-size: 0.75rem;
-  color: var(--vpad-dim);
-  text-align: center;
-}
-
-.rdi-vpad-ping strong {
-  color: var(--vpad-text);
-  font-variant-numeric: tabular-nums;
-}
-
-.rdi-vpad-rotate {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  padding: 2rem;
-  text-align: center;
-  color: var(--vpad-text);
-  min-height: 40vh;
-}
-
-.rdi-vpad-rotate strong {
-  font-size: 1rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--vpad-cyan);
-}
-
-.rdi-vpad-rotate p {
-  margin: 0;
-  color: var(--vpad-dim);
-  font-size: 0.9rem;
-  max-width: 18rem;
+  background: rgba(251, 191, 36, 0.35);
+  box-shadow: 0 0 14px rgba(251, 191, 36, 0.28);
 }

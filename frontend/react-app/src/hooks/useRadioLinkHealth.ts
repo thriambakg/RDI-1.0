@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import type { LivePingState } from '../components/dialogues/ConnectionControlHud'
 import {
   parseCtrlAck,
   parseLinkRtt,
   pipeLabelForCtrl,
   sendCtrlFrame,
   type ControlPath,
+  type LivePingState,
 } from '../utils/rdiControl'
 import {
   RADIO_LINK_HEALTH,

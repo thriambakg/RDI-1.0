@@ -1,6 +1,8 @@
 import { Button, Box, Typography, IconButton, Switch, Tooltip, Paper } from '@mui/material'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import CloseIcon from '@mui/icons-material/Close'
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
+import LockOpenOutlinedIcon from '@mui/icons-material/LockOpenOutlined'
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { FloatingWindow, type WindowRect } from './FloatingWindow'
 import { getSession, updateSession, fetchWebRtcBundleForSession } from '../../services/sessionApi'
@@ -28,9 +30,10 @@ import {
 } from '../../controls/defaultKeybinds'
 import { getProfile, updateUserSettings, type RelayRef } from '../../services/profileApi'
 import type { WebRtcViewerBundle } from '../../services/sessionApi'
-import { ConnectionControlHud } from './ConnectionControlHud'
 import { ConnectionSetupPanel } from './ConnectionSetupPanel'
 import { MobileVirtualGamepad } from './MobileVirtualGamepad'
+import { VideoFeedPlaceholder } from './VideoFeedPlaceholder'
+import './VideoFeedPlaceholder.css'
 
 const RLOG_PREFIX = new Uint8Array([0x52, 0x4c, 0x4f, 0x47]) // "RLOG"
 const LEGACY_CTRL_PREFIX = new TextEncoder().encode('CTRL')
@@ -137,7 +140,6 @@ export function ConnectionDetailDialog({
   const [ctrlError, setCtrlError] = useState<string | null>(null)
   const [controlPath, setControlPath] = useState<ControlPath>('relay')
   const [keybinds, setKeybinds] = useState<ControlKeybinds>(DEFAULT_KEYBINDS)
-  const [lastTxNote, setLastTxNote] = useState<string | null>(null)
   const [transmitting, setTransmitting] = useState(false)
   /** Same-Wi‑Fi ICE shortcut (host candidates). Off = TURN-only for remote relays. */
   const [allowLanShortcut, setAllowLanShortcut] = useState(false)
@@ -145,6 +147,8 @@ export function ConnectionDetailDialog({
   allowLanShortcutRef.current = allowLanShortcut
   /** Touch-held actions from the mobile virtual gamepad (no keybinds). */
   const [touchActions, setTouchActions] = useState<ControlActionId[]>([])
+  /** Lock video stage for CV / autonomous — sticks stay over a fixed feed. */
+  const [videoLocked, setVideoLocked] = useState(false)
 
   const isMobile = useIsMobile()
   const isLandscape = useIsLandscape()
@@ -217,7 +221,7 @@ export function ConnectionDetailDialog({
 
   // Mobile is touch-only — skip keyboard/gamepad capture on phones.
   const listenInputs = isActiveController && !isMobile
-  const { pressed, stream: physicalStream, gamepads } = usePressedInputs(listenInputs)
+  const { pressed, stream: physicalStream } = usePressedInputs(listenInputs)
   const activeActions = useMemo(() => {
     if (isMobile) {
       const order = CONTROL_ACTIONS.map((a) => a.id)
@@ -289,7 +293,6 @@ export function ConnectionDetailDialog({
       setSettingsError(null)
       setSettingsSavedMsg(null)
       setPanelView('controls')
-      setLastTxNote(null)
       setTransmitting(false)
       lastCtrlSigRef.current = ''
       return
@@ -447,7 +450,6 @@ export function ConnectionDetailDialog({
         setTransmitting(actions.length > 0)
         if (reason === 'edge') {
           if (actions.length > 0) {
-            setLastTxNote(actions.join(' + '))
             addLog(
               `[ctrl/${pipe}|${stack}] ${actions.join(' + ')} · ${liveStream || '—'}`,
             )
@@ -924,9 +926,173 @@ export function ConnectionDetailDialog({
     />
   )
 
-  // Phone: fullscreen landscape flight pad (touch only — no keybinds).
+  // Phone: video stage + floating sticks (touch only — no keybinds).
   if (isMobile) {
     if (!open || minimized) return null
+
+    const mobileArmed =
+      !!data &&
+      isConnected &&
+      data.status === 'active' &&
+      (controlPath !== 'radio' || radioLinkArmed)
+
+    const hudPingMs =
+      livePing.ms != null
+        ? `${livePing.ms}`
+        : livePing.status === 'probing'
+          ? '…'
+          : '—'
+
+    const videoStage = (
+      <Box
+        sx={{
+          position: 'relative',
+          width: '100%',
+          height: videoLocked ? '100%' : 'min(100dvh - 48px, 100%)',
+          minHeight: videoLocked ? 0 : 'calc(100dvh - 48px)',
+          flex: videoLocked ? 1 : undefined,
+          overflow: 'hidden',
+          backgroundColor: '#020617',
+        }}
+      >
+        <VideoFeedPlaceholder variant="mobile" />
+
+        {(loading || error) && (
+          <Box sx={{ position: 'absolute', top: 8, left: 12, zIndex: 3, maxWidth: '70%' }}>
+            {loading && <Typography sx={{ color: '#94a3b8', fontSize: '0.8rem' }}>Loading…</Typography>}
+            {error && <Typography sx={{ color: '#f87171', fontSize: '0.8rem' }}>{error}</Typography>}
+          </Box>
+        )}
+
+        {isWebRtc && data?.status === 'active' && !isConnected && !isFailed && !isConnecting && data?.webrtc && (
+          <Box sx={{ position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 3 }}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => openWebRtc(sessionId!, data.webrtc!, { force: true })}
+              sx={{ color: '#3b82f6', borderColor: '#475569', textTransform: 'none', bgcolor: 'rgba(5,10,18,0.55)' }}
+            >
+              Connect WebRTC
+            </Button>
+          </Box>
+        )}
+        {isWebRtc && isFailed && rtcError && (
+          <Box sx={{ position: 'absolute', top: 8, left: 12, right: 12, zIndex: 3 }}>
+            <Typography sx={{ color: '#f87171', fontSize: '0.75rem', mb: 0.5 }}>{rtcError}</Typography>
+            {data?.webrtc && (
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => openWebRtc(sessionId!, data.webrtc!, { force: true })}
+                sx={{ color: '#3b82f6', borderColor: '#475569', textTransform: 'none', bgcolor: 'rgba(5,10,18,0.55)' }}
+              >
+                Retry WebRTC
+              </Button>
+            )}
+          </Box>
+        )}
+      </Box>
+    )
+
+    const belowPanel = (
+      <Box sx={{ px: 1.25, pt: 1, pb: 2, bgcolor: '#050a12' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+          <Box
+            sx={{ display: 'inline-flex', gap: 0.35 }}
+            role="group"
+            aria-label="Command destination"
+          >
+            <Button
+              size="small"
+              variant={controlPath === 'relay' ? 'contained' : 'outlined'}
+              onClick={() => setControlPath('relay')}
+              sx={{
+                textTransform: 'none',
+                minWidth: 0,
+                px: 1,
+                fontSize: '0.7rem',
+                bgcolor: controlPath === 'relay' ? 'rgba(56,189,248,0.2)' : 'transparent',
+                color: controlPath === 'relay' ? '#38bdf8' : '#64748b',
+                borderColor: '#334155',
+              }}
+            >
+              Relay
+            </Button>
+            <Button
+              size="small"
+              variant={controlPath === 'radio' ? 'contained' : 'outlined'}
+              onClick={() => setControlPath('radio')}
+              sx={{
+                textTransform: 'none',
+                minWidth: 0,
+                px: 1,
+                fontSize: '0.7rem',
+                bgcolor: controlPath === 'radio' ? 'rgba(251,191,36,0.2)' : 'transparent',
+                color: controlPath === 'radio' ? '#fbbf24' : '#64748b',
+                borderColor: '#334155',
+              }}
+            >
+              Radio
+            </Button>
+          </Box>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => runPing('local')}
+            disabled={pingRunning || (isWebRtc && isConnecting)}
+            sx={{ color: '#38bdf8', borderColor: '#334155', textTransform: 'none', borderRadius: '2px' }}
+          >
+            {pingRunning ? '…' : 'Ping relay'}
+          </Button>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => runPing('radio')}
+            disabled={pingRunning || (isWebRtc && isConnecting) || !isWebRtc}
+            sx={{ color: '#fbbf24', borderColor: '#334155', textTransform: 'none', borderRadius: '2px' }}
+          >
+            {pingRunning ? '…' : 'Ping radio'}
+          </Button>
+        </Box>
+
+        {ctrlError && (
+          <Typography sx={{ color: '#f87171', fontSize: '0.75rem', mb: 0.75 }}>{ctrlError}</Typography>
+        )}
+
+        <Typography
+          sx={{
+            color: '#64748b',
+            mb: 0.75,
+            letterSpacing: '0.14em',
+            textTransform: 'uppercase',
+            fontSize: '0.65rem',
+          }}
+        >
+          Session log
+        </Typography>
+        <Box
+          component="pre"
+          sx={{
+            m: 0,
+            p: 1.25,
+            minHeight: 140,
+            backgroundColor: '#020617',
+            border: '1px solid #1e293b',
+            borderRadius: '2px',
+            fontSize: '0.72rem',
+            color: '#94a3b8',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          }}
+        >
+          {logLines.length > 0
+            ? logLines.join('\n')
+            : 'No log lines yet — scroll here after flying or pinging.'}
+        </Box>
+      </Box>
+    )
+
     return (
       <Paper
         elevation={16}
@@ -939,8 +1105,6 @@ export function ConnectionDetailDialog({
           flexDirection: 'column',
           overflow: 'hidden',
           backgroundColor: '#050a12',
-          backgroundImage:
-            'radial-gradient(ellipse at top, rgba(56,189,248,0.1), transparent 55%), linear-gradient(#0b1220, #050a12)',
           color: '#f8fafc',
           borderRadius: 0,
         }}
@@ -949,11 +1113,13 @@ export function ConnectionDetailDialog({
           sx={{
             display: 'flex',
             alignItems: 'center',
-            gap: 1,
+            gap: 0.75,
             px: 1.25,
-            py: 0.75,
+            py: 0.6,
             borderBottom: '1px solid #1e293b',
             flexShrink: 0,
+            bgcolor: 'rgba(5,10,18,0.92)',
+            zIndex: 5,
           }}
         >
           {connectionStatusDot}
@@ -961,7 +1127,7 @@ export function ConnectionDetailDialog({
             sx={{
               flex: 1,
               minWidth: 0,
-              fontSize: '0.8rem',
+              fontSize: '0.75rem',
               fontWeight: 600,
               letterSpacing: '0.1em',
               textTransform: 'uppercase',
@@ -972,16 +1138,11 @@ export function ConnectionDetailDialog({
           >
             {name || data?.drone_id || 'Connection'}
           </Typography>
+
           {isWebRtc && (
-            <Tooltip
-              title={
-                allowLanShortcut
-                  ? 'Same-Wi‑Fi shortcut on'
-                  : 'Same-Wi‑Fi shortcut off (TURN)'
-              }
-            >
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
-                <Typography sx={{ fontSize: '0.6rem', color: allowLanShortcut ? '#38bdf8' : '#64748b' }}>
+            <Tooltip title={allowLanShortcut ? 'Same-Wi‑Fi on' : 'Same-Wi‑Fi off (TURN)'}>
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                <Typography sx={{ fontSize: '0.55rem', color: allowLanShortcut ? '#38bdf8' : '#64748b', mr: 0.25 }}>
                   LAN
                 </Typography>
                 <Switch
@@ -1000,152 +1161,128 @@ export function ConnectionDetailDialog({
               </Box>
             </Tooltip>
           )}
+
+          <Tooltip
+            title={
+              videoLocked
+                ? 'Video locked — feed stays fixed for CV / autonomous'
+                : 'Lock video stage (keep feed in place while scrolling logs)'
+            }
+          >
+            <IconButton
+              size="small"
+              aria-label={videoLocked ? 'Unlock video' : 'Lock video'}
+              aria-pressed={videoLocked}
+              onClick={() => setVideoLocked((v) => !v)}
+              sx={{ color: videoLocked ? '#38bdf8' : '#64748b' }}
+            >
+              {videoLocked ? (
+                <LockOutlinedIcon sx={{ fontSize: 18 }} />
+              ) : (
+                <LockOpenOutlinedIcon sx={{ fontSize: 18 }} />
+              )}
+            </IconButton>
+          </Tooltip>
+
+          {/* Game-style HUD: armed + ping top-right */}
+          <Box
+            sx={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'flex-end',
+              lineHeight: 1.15,
+              mr: 0.25,
+              minWidth: 72,
+            }}
+          >
+            <Typography
+              sx={{
+                fontSize: '0.65rem',
+                fontWeight: 700,
+                letterSpacing: '0.12em',
+                textTransform: 'uppercase',
+                color: mobileArmed ? '#4ade80' : '#64748b',
+              }}
+            >
+              {mobileArmed ? 'Armed' : 'Standby'}
+            </Typography>
+            <Typography
+              sx={{
+                fontSize: '0.8rem',
+                fontWeight: 600,
+                fontVariantNumeric: 'tabular-nums',
+                color: livePing.path === 'radio' ? '#fbbf24' : '#e2e8f0',
+              }}
+            >
+              {hudPingMs}
+              <Typography component="span" sx={{ fontSize: '0.6rem', color: '#64748b', ml: 0.35 }}>
+                ms
+              </Typography>
+            </Typography>
+          </Box>
+
           <IconButton size="small" aria-label="Close" onClick={onClose} sx={{ color: '#94a3b8' }}>
             <CloseIcon sx={{ fontSize: 20 }} />
           </IconButton>
         </Box>
 
-        {/* Scroll away from sticks to reach ping + logs */}
-        <Box
-          sx={{
-            flex: 1,
-            minHeight: 0,
-            overflowY: 'auto',
-            WebkitOverflowScrolling: 'touch',
-            touchAction: 'pan-y',
-            overscrollBehavior: 'contain',
-          }}
-        >
-          {loading && (
-            <Typography sx={{ color: '#94a3b8', p: 2 }}>Loading…</Typography>
-          )}
-          {error && <Typography sx={{ color: '#f87171', p: 2 }}>{error}</Typography>}
-
-          {isWebRtc && data?.status === 'active' && !isConnected && !isFailed && !isConnecting && data?.webrtc && (
-            <Box sx={{ px: 2, pt: 1 }}>
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={() => openWebRtc(sessionId!, data.webrtc!, { force: true })}
-                sx={{ color: '#3b82f6', borderColor: '#475569', textTransform: 'none' }}
+        <Box sx={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+          {videoLocked ? (
+            <>
+              {videoStage}
+              <Box
+                sx={{
+                  flex: '0 0 38%',
+                  minHeight: 140,
+                  maxHeight: '42%',
+                  overflowY: 'auto',
+                  WebkitOverflowScrolling: 'touch',
+                  touchAction: 'pan-y',
+                  borderTop: '1px solid #1e293b',
+                  zIndex: 1,
+                }}
               >
-                Connect WebRTC
-              </Button>
-            </Box>
-          )}
-          {isWebRtc && isFailed && rtcError && (
-            <Box sx={{ px: 2, pt: 1 }}>
-              <Typography sx={{ color: '#f87171', fontSize: '0.8rem', mb: 1 }}>{rtcError}</Typography>
-              {data?.webrtc && (
-                <Button
-                  variant="outlined"
-                  size="small"
-                  onClick={() => openWebRtc(sessionId!, data.webrtc!, { force: true })}
-                  sx={{ color: '#3b82f6', borderColor: '#475569', textTransform: 'none' }}
-                >
-                  Retry WebRTC
-                </Button>
-              )}
+                {belowPanel}
+              </Box>
+            </>
+          ) : (
+            <Box
+              sx={{
+                flex: 1,
+                minHeight: 0,
+                overflowY: 'auto',
+                WebkitOverflowScrolling: 'touch',
+                touchAction: 'pan-y',
+                overscrollBehavior: 'contain',
+              }}
+            >
+              {videoStage}
+              {belowPanel}
             </Box>
           )}
 
+          {/* Sticks stay screen-fixed over video/logs; only the stick hitboxes capture touch */}
           {data && isWebRtc && (
-            <MobileVirtualGamepad
-              activeActions={activeActions}
-              onActionsChange={setTouchActions}
-              path={controlPath}
-              onPathChange={setControlPath}
-              armed={
-                isConnected &&
-                data.status === 'active' &&
-                (controlPath !== 'radio' || radioLinkArmed)
-              }
-              connected={isConnected}
-              livePing={livePing}
-              landscape={isLandscape}
-            />
-          )}
-
-          {isLandscape && (
             <Box
               sx={{
-                display: 'flex',
-                gap: 1,
-                px: 1.25,
-                py: 0.75,
-                borderTop: '1px solid #1e293b',
+                position: 'absolute',
+                inset: 0,
+                zIndex: 4,
+                pointerEvents: 'none',
+                '& .rdi-vpad-overlay': { pointerEvents: 'none' },
+                '& .rdi-vpad-float-stick, & .rdi-vpad-float-center, & .rdi-vpad-overlay--rotate': {
+                  pointerEvents: 'auto',
+                },
               }}
             >
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={() => runPing('local')}
-                disabled={pingRunning || (isWebRtc && isConnecting)}
-                sx={{
-                  flex: 1,
-                  color: '#38bdf8',
-                  borderColor: '#334155',
-                  textTransform: 'none',
-                  borderRadius: '2px',
-                }}
-              >
-                {pingRunning ? '…' : 'Ping relay'}
-              </Button>
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={() => runPing('radio')}
-                disabled={pingRunning || (isWebRtc && isConnecting) || !isWebRtc}
-                sx={{
-                  flex: 1,
-                  color: '#fbbf24',
-                  borderColor: '#334155',
-                  textTransform: 'none',
-                  borderRadius: '2px',
-                }}
-              >
-                {pingRunning ? '…' : 'Ping radio'}
-              </Button>
+              <MobileVirtualGamepad
+                activeActions={activeActions}
+                onActionsChange={setTouchActions}
+                landscape={isLandscape}
+                bottomInset={videoLocked ? '38%' : '0px'}
+              />
             </Box>
           )}
-
-          {ctrlError && (
-            <Typography sx={{ color: '#f87171', fontSize: '0.75rem', px: 1.5, pb: 0.75 }}>
-              {ctrlError}
-            </Typography>
-          )}
-
-          <Box sx={{ px: 1.25, pt: 1, pb: 2 }}>
-            <Typography
-              sx={{
-                color: '#64748b',
-                mb: 0.75,
-                letterSpacing: '0.14em',
-                textTransform: 'uppercase',
-                fontSize: '0.65rem',
-              }}
-            >
-              Session log
-            </Typography>
-            <Box
-              component="pre"
-              sx={{
-                m: 0,
-                p: 1.25,
-                minHeight: 120,
-                backgroundColor: '#020617',
-                border: '1px solid #1e293b',
-                borderRadius: '2px',
-                fontSize: '0.72rem',
-                color: '#94a3b8',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-              }}
-            >
-              {logLines.length > 0 ? logLines.join('\n') : 'No log lines yet — scroll here after flying or pinging.'}
-            </Box>
-          </Box>
         </Box>
       </Paper>
     )
@@ -1304,24 +1441,68 @@ export function ConnectionDetailDialog({
       {data && panelView === 'controls' && (
         <>
           {isWebRtc && (
-            <ConnectionControlHud
-              path={controlPath}
-              onPathChange={setControlPath}
-              stream={stream}
-              activeActions={activeActions}
-              keybinds={keybinds}
-              armed={
-                isConnected &&
-                data.status === 'active' &&
-                (controlPath !== 'radio' || radioLinkArmed)
-              }
-              transmitting={transmitting}
-              lastTxNote={lastTxNote}
-              connected={isConnected}
-              livePing={livePing}
-              gamepads={gamepads}
-            />
+            <Box className="rdi-video-stage-desktop">
+              <VideoFeedPlaceholder variant="desktop" />
+              <div className="rdi-video-stage-hud">
+                <div
+                  className={`rdi-video-stage-hud-armed ${
+                    isConnected && data.status === 'active' && (controlPath !== 'radio' || radioLinkArmed)
+                      ? 'is-on'
+                      : ''
+                  }`}
+                >
+                  {isConnected && data.status === 'active' && (controlPath !== 'radio' || radioLinkArmed)
+                    ? 'Armed'
+                    : 'Standby'}
+                </div>
+                <div
+                  className={`rdi-video-stage-hud-ping ${livePing.path === 'radio' ? 'is-radio' : ''}`}
+                >
+                  {livePing.ms != null ? livePing.ms : livePing.status === 'probing' ? '…' : '—'}
+                  <span className="unit">ms</span>
+                </div>
+              </div>
+              <div className="rdi-video-stage-path" role="group" aria-label="Command destination">
+                <Button
+                  size="small"
+                  variant={controlPath === 'relay' ? 'contained' : 'outlined'}
+                  onClick={() => setControlPath('relay')}
+                  disableRipple
+                  sx={{
+                    textTransform: 'none',
+                    minWidth: 0,
+                    px: 1,
+                    fontSize: '0.7rem',
+                    bgcolor: controlPath === 'relay' ? 'rgba(56,189,248,0.25)' : 'rgba(5,10,18,0.55)',
+                    color: controlPath === 'relay' ? '#38bdf8' : '#94a3b8',
+                    borderColor: '#334155',
+                    backdropFilter: 'blur(2px)',
+                  }}
+                >
+                  Relay
+                </Button>
+                <Button
+                  size="small"
+                  variant={controlPath === 'radio' ? 'contained' : 'outlined'}
+                  onClick={() => setControlPath('radio')}
+                  disableRipple
+                  sx={{
+                    textTransform: 'none',
+                    minWidth: 0,
+                    px: 1,
+                    fontSize: '0.7rem',
+                    bgcolor: controlPath === 'radio' ? 'rgba(251,191,36,0.25)' : 'rgba(5,10,18,0.55)',
+                    color: controlPath === 'radio' ? '#fbbf24' : '#94a3b8',
+                    borderColor: '#334155',
+                    backdropFilter: 'blur(2px)',
+                  }}
+                >
+                  Radio
+                </Button>
+              </div>
+            </Box>
           )}
+
           {ctrlError && (
             <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mb: 1 }}>{ctrlError}</Typography>
           )}
@@ -1373,7 +1554,7 @@ export function ConnectionDetailDialog({
             </Button>
           </Box>
           <Typography sx={{ color: '#475569', fontSize: '0.75rem', mb: 1.5 }}>
-            Ping relay = browser ↔ Pi. Ping radio = full RF path. Controls use the toggle above.
+            Controls appear in the session log. Path is on the video stage.
             {!focused ? ' Click this window to capture keyboard.' : null}
           </Typography>
           {pingError && (
@@ -1416,26 +1597,38 @@ export function ConnectionDetailDialog({
               </Box>
             </>
           )}
-          {logLines.length > 0 && (
-            <Box
-              component="pre"
-              sx={{
-                p: 1.5,
-                backgroundColor: '#020617',
-                border: '1px solid #1e293b',
-                borderRadius: '2px',
-                fontSize: '0.75rem',
-                color: '#94a3b8',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-                maxHeight: 180,
-                overflow: 'auto',
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-              }}
-            >
-              {logLines.join('\n')}
-            </Box>
-          )}
+
+          <Typography
+            sx={{
+              color: '#64748b',
+              mb: 0.75,
+              letterSpacing: '0.14em',
+              textTransform: 'uppercase',
+              fontSize: '0.65rem',
+            }}
+          >
+            Session log
+          </Typography>
+          <Box
+            component="pre"
+            sx={{
+              p: 1.5,
+              backgroundColor: '#020617',
+              border: '1px solid #1e293b',
+              borderRadius: '2px',
+              fontSize: '0.75rem',
+              color: '#94a3b8',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              maxHeight: 220,
+              overflow: 'auto',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            }}
+          >
+            {logLines.length > 0
+              ? logLines.join('\n')
+              : 'No log lines yet — fly or ping to see control / link traffic here.'}
+          </Box>
         </>
       )}
     </FloatingWindow>

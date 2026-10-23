@@ -4,6 +4,14 @@ export const CTRL_PREFIX = new TextEncoder().encode('CTRL')
 
 export type ControlPath = 'relay' | 'radio'
 
+/** Live link RTT meter shown in the connection HUD / video corner. */
+export type LivePingState = {
+  ms: number | null
+  /** probing | live | timeout | error | idle */
+  status: 'idle' | 'probing' | 'live' | 'timeout' | 'error'
+  path: ControlPath
+}
+
 export type RdiCtrlPayload = {
   type: 'rdi_ctrl'
   path: ControlPath

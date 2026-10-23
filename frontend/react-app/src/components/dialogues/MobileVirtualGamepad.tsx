@@ -4,12 +4,11 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import type { ControlActionId } from '../../controls/defaultKeybinds'
 import { CONTROL_ACTIONS } from '../../controls/defaultKeybinds'
-import type { ControlPath } from '../../utils/rdiControl'
-import type { LivePingState } from './ConnectionControlHud'
 import './MobileVirtualGamepad.css'
 
 const DEADZONE = 0.28
@@ -24,7 +23,6 @@ function orderActions(actions: Iterable<ControlActionId>): ControlActionId[] {
   return CONTROL_ACTIONS.map((a) => a.id).filter((id) => held.has(id))
 }
 
-/** Map normalized stick (-1..1, y+ = down) to discrete flight actions. */
 function leftStickActions(nx: number, ny: number): ControlActionId[] {
   const out: ControlActionId[] = []
   if (ny <= -DEADZONE) out.push('move_forward')
@@ -44,13 +42,13 @@ function rightStickActions(nx: number, ny: number): ControlActionId[] {
 }
 
 type StickProps = {
+  corner: 'left' | 'right'
   label: string
-  hint: string
   active: boolean
   onAxes: (nx: number, ny: number) => void
 }
 
-function VirtualJoystick({ label, hint, active, onAxes }: StickProps) {
+function VirtualJoystick({ corner, label, active, onAxes }: StickProps) {
   const baseRef = useRef<HTMLDivElement>(null)
   const pointerIdRef = useRef<number | null>(null)
   const [knob, setKnob] = useState({ x: 0, y: 0 })
@@ -107,34 +105,26 @@ function VirtualJoystick({ label, hint, active, onAxes }: StickProps) {
     reset()
   }
 
-  useEffect(() => {
-    return () => {
-      onAxes(0, 0)
-    }
-  }, [onAxes])
+  useEffect(() => () => onAxes(0, 0), [onAxes])
 
   return (
-    <div className="rdi-vpad-cluster">
-      <div className="rdi-vpad-cluster-label">{label}</div>
+    <div
+      className={`rdi-vpad-float-stick rdi-vpad-float-stick--${corner} ${active ? 'is-active' : ''}`}
+      ref={baseRef}
+      role="application"
+      aria-label={label}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <div className="rdi-vpad-stick-ring" aria-hidden />
+      <div className="rdi-vpad-stick-cross" aria-hidden />
       <div
-        ref={baseRef}
-        className={`rdi-vpad-stick ${active ? 'is-active' : ''}`}
-        role="application"
-        aria-label={label}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        onContextMenu={(e) => e.preventDefault()}
-      >
-        <div className="rdi-vpad-stick-ring" aria-hidden />
-        <div className="rdi-vpad-stick-cross" aria-hidden />
-        <div
-          className="rdi-vpad-stick-knob"
-          style={{ transform: `translate(${knob.x}px, ${knob.y}px)` }}
-        />
-      </div>
-      <div className="rdi-vpad-cluster-hint">{hint}</div>
+        className="rdi-vpad-stick-knob"
+        style={{ transform: `translate(${knob.x}px, ${knob.y}px)` }}
+      />
     </div>
   )
 }
@@ -142,23 +132,21 @@ function VirtualJoystick({ label, hint, active, onAxes }: StickProps) {
 export type MobileVirtualGamepadProps = {
   activeActions: ControlActionId[]
   onActionsChange: (actions: ControlActionId[]) => void
-  path: ControlPath
-  onPathChange: (path: ControlPath) => void
-  armed: boolean
-  connected: boolean
-  livePing: LivePingState
+  /** When false, show rotate prompt instead of sticks */
   landscape: boolean
+  /** Lift sticks above a bottom drawer (e.g. locked-video log panel), CSS length */
+  bottomInset?: string
 }
 
+/**
+ * Floating dual-joystick overlay (bottom-left / bottom-right) + BRAKE/RTL.
+ * Semi-transparent so a video feed behind remains visible.
+ */
 export function MobileVirtualGamepad({
   activeActions,
   onActionsChange,
-  path,
-  onPathChange,
-  armed,
-  connected,
-  livePing,
   landscape,
+  bottomInset = '0px',
 }: MobileVirtualGamepadProps) {
   const activeSet = useMemo(() => new Set(activeActions), [activeActions])
   const leftRef = useRef<ControlActionId[]>([])
@@ -213,21 +201,12 @@ export function MobileVirtualGamepad({
 
   if (!landscape) {
     return (
-      <section className="rdi-vpad" aria-label="Rotate device">
-        <div className="rdi-vpad-rotate">
-          <strong>Rotate to landscape</strong>
-          <p>Flight controls use a landscape dual-joystick pad. Turn your phone sideways to fly.</p>
-        </div>
-      </section>
+      <div className="rdi-vpad-overlay rdi-vpad-overlay--rotate" aria-label="Rotate device">
+        <strong>Rotate to landscape</strong>
+        <p>Flight sticks need landscape. Turn your phone sideways.</p>
+      </div>
     )
   }
-
-  const pingText =
-    livePing.ms != null
-      ? `${livePing.ms} ms`
-      : livePing.status === 'probing'
-        ? '…'
-        : '—'
 
   const leftActive =
     activeSet.has('move_forward') ||
@@ -241,70 +220,41 @@ export function MobileVirtualGamepad({
     activeSet.has('move_down')
 
   return (
-    <section className="rdi-vpad" aria-label="Virtual gamepad">
-      <div className="rdi-vpad-status">
-        <strong>Touch controls</strong>
-        <div className="rdi-vpad-path" role="group" aria-label="Command destination">
+    <div
+      className="rdi-vpad-overlay"
+      aria-label="Virtual gamepad overlay"
+      style={{ '--vpad-bottom-inset': bottomInset } as CSSProperties}
+    >
+      <div className="rdi-vpad-float-center">
+        {EXTRAS.map((btn) => (
           <button
+            key={btn.action}
             type="button"
-            className={path === 'relay' ? 'is-active' : ''}
-            onClick={() => onPathChange('relay')}
+            className={`rdi-vpad-btn ${btn.warn ? 'is-warn' : ''} ${
+              activeSet.has(btn.action) ? 'is-lit' : ''
+            }`}
+            onPointerDown={onBtnDown(btn.action)}
+            onPointerUp={onBtnUp}
+            onPointerCancel={onBtnUp}
+            onContextMenu={(e) => e.preventDefault()}
           >
-            Relay
+            {btn.label}
           </button>
-          <button
-            type="button"
-            className={path === 'radio' ? 'is-active is-radio' : ''}
-            onClick={() => onPathChange('radio')}
-          >
-            Radio
-          </button>
-        </div>
-        <span>{connected ? 'Channel live' : 'Waiting…'}</span>
+        ))}
       </div>
 
-      <div className="rdi-vpad-body">
-        <VirtualJoystick
-          label="Movement"
-          hint="Strafe / forward"
-          active={leftActive}
-          onAxes={onLeftAxes}
-        />
-
-        <div className="rdi-vpad-center">
-          <div className={`rdi-vpad-armed ${armed ? '' : 'is-off'}`}>
-            <span className="dot" />
-            {armed ? 'Armed' : 'Standby'}
-          </div>
-          <div className="rdi-vpad-ping">
-            {livePing.path === 'radio' ? 'Radio' : 'Relay'} <strong>{pingText}</strong>
-          </div>
-          <div className="rdi-vpad-extras">
-            {EXTRAS.map((btn) => (
-              <button
-                key={btn.action}
-                type="button"
-                className={`rdi-vpad-btn ${btn.warn ? 'is-warn' : ''} ${
-                  activeSet.has(btn.action) ? 'is-lit' : ''
-                }`}
-                onPointerDown={onBtnDown(btn.action)}
-                onPointerUp={onBtnUp}
-                onPointerCancel={onBtnUp}
-                onContextMenu={(e) => e.preventDefault()}
-              >
-                {btn.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <VirtualJoystick
-          label="Yaw / altitude"
-          hint="Yaw · up / down"
-          active={rightActive}
-          onAxes={onRightAxes}
-        />
-      </div>
-    </section>
+      <VirtualJoystick
+        corner="left"
+        label="Movement"
+        active={leftActive}
+        onAxes={onLeftAxes}
+      />
+      <VirtualJoystick
+        corner="right"
+        label="Yaw / altitude"
+        active={rightActive}
+        onAxes={onRightAxes}
+      />
+    </div>
   )
 }
