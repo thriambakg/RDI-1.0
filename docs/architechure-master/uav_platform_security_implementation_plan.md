@@ -74,7 +74,7 @@ These do **not** require Jetson/Microhard. They apply to Cognito, API Gateway, L
 
 | Item | Action now |
 |---|---|
-| TOTP MFA (email + Google app gate) | Verify staging; app TOTP secrets in **SSM SecureString** (AWS managed `alias/aws/ssm`); never log codes |
+| TOTP MFA (email + Google app gate) | Verify staging; encrypt/harden app TOTP secrets at rest if still plaintext; never log codes |
 | Single-login (deny while active) | Keep; document 15 min idle; ensure Sign out always calls `release_auth_session` |
 | Session epoch / `SESSION_SUPERSEDED` | Confirm all Cognito-protected APIs enforce; frontend signs out on focus/poll |
 | Email verification link | Confirm Cognito `CONFIRM_WITH_LINK` applied; SES later for branded From |
@@ -106,7 +106,8 @@ These do **not** require Jetson/Microhard. They apply to Cognito, API Gateway, L
    - Correlation id / `user_id` prefix / `session_id` for incident reconstruction.
 
 6. **Secrets and TOTP storage**
-   - App TOTP secrets: **SSM Parameter Store SecureString** under `/rdi/{env}/app-totp/*`, encrypted with the **AWS managed** key `alias/aws/ssm` (no customer CMK). DynamoDB only stores `app_totp_enabled`.
+   - App TOTP secrets: **customer-managed KMS CMK** field encryption (`enc:v1:…`) via the RDI-1.0 stack key (`module.kms`). DynamoDB AWS-managed/AWS-owned SSE alone is **not** enough (GetItem would still return plaintext).
+   - Do **not** use the `aws/dynamodb` AWS managed key for app Encrypt/Decrypt of TOTP fields.
    - Review IAM least privilege on user-profiles / connection-pool / relay tables.
 
 7. **Account security UX (app)**
@@ -239,7 +240,7 @@ Do not send “emergency land” as the only safety story — Pixhawk link-loss 
 - Object-level authz + automated cross-user tests.
 - Revocation → live WebRTC teardown / no credential renew.
 - Audit events + rate limits.
-- App TOTP in SSM SecureString (AWS managed KMS).
+- KMS for app TOTP secrets.
 - Confirm MFA + deny-while-active in staging/prod.
 
 ### Phase 2 — Stronger account security (NOW, optional order)
@@ -307,7 +308,7 @@ Pentest, HIL, RF, operational procedures, compliance review.
 
 1. Authz audit + cross-user API tests on sessions/relays/shares.  
 2. WebRTC disconnect on logout / `SESSION_SUPERSEDED`.  
-3. App TOTP via SSM SecureString (AWS managed `aws/ssm`) — done in code/tf.  
+3. KMS-encrypt `app_totp_secret`.  
 4. Rate limits on auth and session-create.  
 5. Structured security audit log fields.  
 6. Staging validation of MFA + deny-login + verify-link email.  

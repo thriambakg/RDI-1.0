@@ -170,6 +170,10 @@ def release_auth_session(user_id: str) -> None:
             UpdateExpression="REMOVE auth_session_last_seen",
         )
         print(f"[auth_session] released lock user_id={user_id!r}")
+        print(
+            '{"audit":true,"event":"auth_session_released","user_id":"%s"}'
+            % (user_id[:12] + ".." if len(user_id) > 12 else user_id)
+        )
     except Exception as e:
         print(f"[auth_session] release failed user_id={user_id!r}: {e}")
 

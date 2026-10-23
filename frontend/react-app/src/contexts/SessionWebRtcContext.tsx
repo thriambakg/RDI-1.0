@@ -12,6 +12,7 @@ import {
   type KvsViewerConnection,
   type WebRtcViewerBundle,
 } from '../services/kvsWebRtcViewer'
+import { AUTH_TRANSPORT_TEARDOWN_EVENT } from '../services/sessionGuard'
 
 /** Shorter wait when reconnecting — Pi worker is usually already on the channel. */
 const WEBRTC_RECONNECT_PI_MS = 3000
@@ -265,6 +266,20 @@ export function SessionWebRtcProvider({ children }: { children: ReactNode }) {
   )
 
   openSessionRef.current = openSession
+
+  const closeAllSessions = useCallback(() => {
+    const ids = [...connectionsRef.current.keys(), ...bundleRef.current.keys()]
+    for (const id of new Set(ids)) {
+      tearDownTransport(id, { clearBundle: true })
+      setState(id, 'closed', null)
+    }
+  }, [setState, tearDownTransport])
+
+  useEffect(() => {
+    const onTeardown = () => closeAllSessions()
+    window.addEventListener(AUTH_TRANSPORT_TEARDOWN_EVENT, onTeardown)
+    return () => window.removeEventListener(AUTH_TRANSPORT_TEARDOWN_EVENT, onTeardown)
+  }, [closeAllSessions])
 
   useEffect(() => {
     const recheckSessions = () => {

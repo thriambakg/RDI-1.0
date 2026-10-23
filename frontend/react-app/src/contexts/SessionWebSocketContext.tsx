@@ -3,7 +3,8 @@
  * user opens connection detail); close when session is paused or deleted.
  * Connection stays open until idle/delete so Ping only measures proxy + wavelength.
  */
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { AUTH_TRANSPORT_TEARDOWN_EVENT } from '../services/sessionGuard'
 
 const LOG_PREFIX = '[RDI SessionWS]'
 const CONNECT_TIMEOUT_MS = 15_000
@@ -166,6 +167,18 @@ export function SessionWebSocketProvider({ children }: { children: ReactNode }) 
       return rest
     })
   }, [setStatus, clearTimeoutForSession])
+
+  const closeAllSessions = useCallback(() => {
+    for (const id of [...wsMapRef.current.keys()]) {
+      closeSession(id)
+    }
+  }, [closeSession])
+
+  useEffect(() => {
+    const onTeardown = () => closeAllSessions()
+    window.addEventListener(AUTH_TRANSPORT_TEARDOWN_EVENT, onTeardown)
+    return () => window.removeEventListener(AUTH_TRANSPORT_TEARDOWN_EVENT, onTeardown)
+  }, [closeAllSessions])
 
   const getWs = useCallback((sessionId: string): WebSocket | null => {
     const ws = wsMapRef.current.get(sessionId)

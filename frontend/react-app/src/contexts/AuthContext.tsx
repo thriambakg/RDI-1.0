@@ -28,7 +28,7 @@ import {
   verifyAppMfa,
   verifyAppMfaSetup,
 } from '../services/profileApi'
-import { SESSION_SUPERSEDED_EVENT } from '../services/sessionGuard'
+import { notifyTransportTeardown, SESSION_SUPERSEDED_EVENT } from '../services/sessionGuard'
 
 export interface RDIUser {
   id: string
@@ -384,6 +384,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const logout = async () => {
+    notifyTransportTeardown()
     try {
       await releaseAuthSession()
     } catch {

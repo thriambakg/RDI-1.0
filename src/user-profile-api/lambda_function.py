@@ -13,10 +13,14 @@ import boto3
 from botocore.exceptions import ClientError
 
 from auth_session import reject_if_session_superseded, release_auth_session
-from totp_store import delete_secret, get_secret, put_secret
+from security_audit import audit
+from totp_crypto import decrypt_secret, encrypt_secret
 from totp_util import generate_secret, otpauth_uri, verify_totp
 
 TABLE_NAME = os.environ["USER_PROFILES_TABLE"]
+# Soft MFA attempt limit per user (sliding window in Dynamo).
+_MFA_MAX_ATTEMPTS = 8
+_MFA_WINDOW_SECONDS = 300
 
 # Shared folder has nested "Shared with me" and "Shared with others"
 SHARED_DEFAULT = {
@@ -212,6 +216,67 @@ def _patch_profile(user_id: str, body: dict, headers: dict) -> dict:
     return _response(400, {"error": f"Unknown action: {action}"}, headers)
 
 
+def _mfa_rate_limited(dynamodb, user_id: str) -> bool:
+    """Return True if too many recent MFA failures."""
+    import time as _time
+
+    now = int(_time.time())
+    try:
+        resp = dynamodb.get_item(
+            TableName=TABLE_NAME,
+            Key={"user_id": {"S": user_id}},
+            ProjectionExpression="mfa_fail_count, mfa_fail_window_start",
+        )
+        item = resp.get("Item") or {}
+        start = int((item.get("mfa_fail_window_start") or {}).get("N") or "0")
+        count = int((item.get("mfa_fail_count") or {}).get("N") or "0")
+        if start and now - start < _MFA_WINDOW_SECONDS and count >= _MFA_MAX_ATTEMPTS:
+            return True
+    except Exception as e:
+        print(f"[mfa] rate check failed: {e}")
+    return False
+
+
+def _mfa_record_failure(dynamodb, user_id: str) -> None:
+    import time as _time
+
+    now = int(_time.time())
+    try:
+        resp = dynamodb.get_item(
+            TableName=TABLE_NAME,
+            Key={"user_id": {"S": user_id}},
+            ProjectionExpression="mfa_fail_count, mfa_fail_window_start",
+        )
+        item = resp.get("Item") or {}
+        start = int((item.get("mfa_fail_window_start") or {}).get("N") or "0")
+        count = int((item.get("mfa_fail_count") or {}).get("N") or "0")
+        if not start or now - start >= _MFA_WINDOW_SECONDS:
+            start, count = now, 0
+        count += 1
+        dynamodb.update_item(
+            TableName=TABLE_NAME,
+            Key={"user_id": {"S": user_id}},
+            UpdateExpression="SET mfa_fail_count = :c, mfa_fail_window_start = :w",
+            ExpressionAttributeValues={
+                ":c": {"N": str(count)},
+                ":w": {"N": str(start)},
+            },
+        )
+    except Exception as e:
+        print(f"[mfa] record failure failed: {e}")
+
+
+def _mfa_clear_failures(dynamodb, user_id: str) -> None:
+    try:
+        dynamodb.update_item(
+            TableName=TABLE_NAME,
+            Key={"user_id": {"S": user_id}},
+            UpdateExpression="REMOVE mfa_fail_count, mfa_fail_window_start",
+        )
+    except Exception:
+        pass
+
+
 def _mfa_status(user_id: str, headers: dict) -> dict:
     dynamodb = boto3.client("dynamodb")
     resp = dynamodb.get_item(
@@ -221,6 +286,7 @@ def _mfa_status(user_id: str, headers: dict) -> dict:
     )
     item = resp.get("Item") or {}
     enabled = (item.get("app_totp_enabled") or {}).get("BOOL") is True
+    audit("mfa_status", user_id=user_id, enrolled=enabled)
     return _response(200, {"enrolled": enabled}, headers)
 
 
@@ -228,18 +294,15 @@ def _mfa_setup_start(user_id: str, body: dict, headers: dict) -> dict:
     """Begin app-level TOTP enroll (used for Google / federated users)."""
     account = (body.get("account_name") or user_id)[:128]
     secret = generate_secret()
-    # Pending secret in SSM SecureString (AWS managed key alias/aws/ssm).
-    put_secret(user_id, secret, pending=True)
-    # Clear any legacy plaintext pending attribute.
+    stored = encrypt_secret(secret)
     dynamodb = boto3.client("dynamodb")
-    try:
-        dynamodb.update_item(
-            TableName=TABLE_NAME,
-            Key={"user_id": {"S": user_id}},
-            UpdateExpression="REMOVE app_totp_secret_pending",
-        )
-    except ClientError:
-        pass
+    dynamodb.update_item(
+        TableName=TABLE_NAME,
+        Key={"user_id": {"S": user_id}},
+        UpdateExpression="SET app_totp_secret_pending = :s",
+        ExpressionAttributeValues={":s": {"S": stored}},
+    )
+    audit("mfa_setup_start", user_id=user_id)
     return _response(
         200,
         {
@@ -252,37 +315,57 @@ def _mfa_setup_start(user_id: str, body: dict, headers: dict) -> dict:
 
 def _mfa_setup_verify(user_id: str, body: dict, headers: dict) -> dict:
     code = (body.get("code") or "").strip()
-    secret = get_secret(user_id, pending=True) or ""
-    # Legacy fallback: plaintext pending still in Dynamo from earlier deploys.
-    if not secret:
-        dynamodb = boto3.client("dynamodb")
-        resp = dynamodb.get_item(
-            TableName=TABLE_NAME,
-            Key={"user_id": {"S": user_id}},
-            ProjectionExpression="app_totp_secret_pending",
-        )
-        item = resp.get("Item") or {}
-        secret = (item.get("app_totp_secret_pending") or {}).get("S") or ""
-    if not secret or not verify_totp(secret, code):
-        return _response(400, {"error": "Invalid authenticator code", "code": "MFA_INVALID"}, headers)
-    put_secret(user_id, secret, pending=False)
-    delete_secret(user_id, pending=True)
     dynamodb = boto3.client("dynamodb")
+    if _mfa_rate_limited(dynamodb, user_id):
+        audit("mfa_setup_verify_rate_limited", user_id=user_id)
+        return _response(
+            429,
+            {"error": "Too many attempts. Try again later.", "code": "MFA_RATE_LIMITED"},
+            headers,
+        )
+    resp = dynamodb.get_item(
+        TableName=TABLE_NAME,
+        Key={"user_id": {"S": user_id}},
+        ProjectionExpression="app_totp_secret_pending",
+    )
+    item = resp.get("Item") or {}
+    stored = (item.get("app_totp_secret_pending") or {}).get("S") or ""
+    try:
+        secret = decrypt_secret(stored) if stored else ""
+    except Exception:
+        secret = ""
+    if not secret or not verify_totp(secret, code):
+        _mfa_record_failure(dynamodb, user_id)
+        audit("mfa_setup_verify_fail", user_id=user_id)
+        return _response(400, {"error": "Invalid authenticator code", "code": "MFA_INVALID"}, headers)
+    encrypted = encrypt_secret(secret)
     dynamodb.update_item(
         TableName=TABLE_NAME,
         Key={"user_id": {"S": user_id}},
         UpdateExpression=(
-            "SET app_totp_enabled = :t "
-            "REMOVE app_totp_secret_pending, app_totp_secret"
+            "SET app_totp_secret = :s, app_totp_enabled = :t "
+            "REMOVE app_totp_secret_pending"
         ),
-        ExpressionAttributeValues={":t": {"BOOL": True}},
+        ExpressionAttributeValues={
+            ":s": {"S": encrypted},
+            ":t": {"BOOL": True},
+        },
     )
+    _mfa_clear_failures(dynamodb, user_id)
+    audit("mfa_setup_verify_ok", user_id=user_id)
     return _response(200, {"ok": True, "enrolled": True}, headers)
 
 
 def _mfa_verify(user_id: str, body: dict, headers: dict) -> dict:
     code = (body.get("code") or "").strip()
     dynamodb = boto3.client("dynamodb")
+    if _mfa_rate_limited(dynamodb, user_id):
+        audit("mfa_verify_rate_limited", user_id=user_id)
+        return _response(
+            429,
+            {"error": "Too many attempts. Try again later.", "code": "MFA_RATE_LIMITED"},
+            headers,
+        )
     resp = dynamodb.get_item(
         TableName=TABLE_NAME,
         Key={"user_id": {"S": user_id}},
@@ -290,23 +373,30 @@ def _mfa_verify(user_id: str, body: dict, headers: dict) -> dict:
     )
     item = resp.get("Item") or {}
     if (item.get("app_totp_enabled") or {}).get("BOOL") is not True:
+        audit("mfa_verify_not_enrolled", user_id=user_id)
         return _response(400, {"error": "Authenticator not enrolled", "code": "MFA_NOT_ENROLLED"}, headers)
-    secret = get_secret(user_id, pending=False) or ""
-    # Legacy fallback + one-time migrate plaintext Dynamo → SSM.
-    legacy = (item.get("app_totp_secret") or {}).get("S") or ""
-    if not secret and legacy:
-        secret = legacy
+    stored = (item.get("app_totp_secret") or {}).get("S") or ""
+    try:
+        secret = decrypt_secret(stored) if stored else ""
+    except Exception:
+        secret = ""
+    if not secret or not verify_totp(secret, code):
+        _mfa_record_failure(dynamodb, user_id)
+        audit("mfa_verify_fail", user_id=user_id)
+        return _response(400, {"error": "Invalid authenticator code", "code": "MFA_INVALID"}, headers)
+    # Re-encrypt legacy plaintext on successful verify
+    if stored and not stored.startswith("enc:v1:"):
         try:
-            put_secret(user_id, secret, pending=False)
             dynamodb.update_item(
                 TableName=TABLE_NAME,
                 Key={"user_id": {"S": user_id}},
-                UpdateExpression="REMOVE app_totp_secret",
+                UpdateExpression="SET app_totp_secret = :s",
+                ExpressionAttributeValues={":s": {"S": encrypt_secret(secret)}},
             )
         except Exception as e:
-            print(f"[mfa] migrate legacy totp to SSM failed: {e}")
-    if not secret or not verify_totp(secret, code):
-        return _response(400, {"error": "Invalid authenticator code", "code": "MFA_INVALID"}, headers)
+            print(f"[mfa] re-encrypt legacy failed: {e}")
+    _mfa_clear_failures(dynamodb, user_id)
+    audit("mfa_verify_ok", user_id=user_id)
     return _response(200, {"ok": True}, headers)
 
 

@@ -21,8 +21,8 @@ resource "aws_api_gateway_authorizer" "cognito" {
   provider_arns   = [var.cognito_user_pool_arn]
   identity_source = "method.request.header.Authorization"
 
-  # Cache auth results for 5 minutes to reduce Cognito calls
-  authorizer_result_ttl_in_seconds = 300
+  # Short cache so logout / session-epoch revocation takes effect quickly
+  authorizer_result_ttl_in_seconds = 30
 }
 
 # API Gateway deployment

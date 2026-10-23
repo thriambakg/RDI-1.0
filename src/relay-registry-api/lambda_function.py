@@ -24,6 +24,7 @@ from botocore.exceptions import ClientError
 from auth_session import reject_if_session_superseded
 from kvs_signaling import build_webrtc_master_bundle
 from relay_active_sessions import parse_active_sessions
+from security_audit import audit
 
 
 def _to_dynamo(obj: Any) -> dict:
@@ -554,7 +555,8 @@ def _claim_relay(user_id: str, body: dict, headers: dict) -> dict:
             status="offline",
         )
 
-    _log("relay claimed", relay_id=relay_id, user_id=user_id, claim_code=claim_code)
+    _log("relay claimed", relay_id=relay_id, user_id=user_id)
+    audit("relay_claim", user_id=user_id, relay_id=relay_id, zone=wavelength_zone_id)
     return _response(
         200,
         {

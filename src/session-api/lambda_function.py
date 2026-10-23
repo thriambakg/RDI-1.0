@@ -20,6 +20,7 @@ from botocore.exceptions import ClientError
 
 from auth_session import reject_if_session_superseded
 from hierarchy import add_session_to_folder, update_session_name, update_session_status, remove_session
+from security_audit import audit
 from kvs_signaling import (
     build_webrtc_viewer_bundle,
     create_signaling_channel,
@@ -862,6 +863,13 @@ def _create_session(user_id: str, body: dict, headers: dict) -> dict:
     }
     if webrtc_viewer:
         payload["webrtc"] = webrtc_viewer
+    audit(
+        "session_create",
+        user_id=user_id,
+        session_id=session_id,
+        relay_id=relay_id,
+        transport=payload.get("transport"),
+    )
     if relay_id:
         payload["relay_id"] = relay_id
     if relay_config:
@@ -1044,6 +1052,7 @@ def _release_session(user_id: str, session_id: str | None, headers: dict, *, per
         return _response(400, {"error": "session_id required"}, headers)
 
     _log("release_session start", session_id=session_id, permanent=permanent)
+    audit("session_release", user_id=user_id, session_id=session_id, permanent=permanent)
     dynamodb = boto3.client("dynamodb")
 
     if permanent:
