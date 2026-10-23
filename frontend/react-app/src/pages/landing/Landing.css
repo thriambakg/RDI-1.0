@@ -39,19 +39,6 @@
   opacity: 0.06;
 }
 
-.nav-brand {
-  font-family: "Space Grotesk", sans-serif;
-  font-size: 1.35rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  color: #f8fafc;
-  text-decoration: none;
-}
-
-.nav-brand:hover {
-  color: #fff;
-}
-
 @keyframes landingFadeUp {
   from {
     opacity: 0;

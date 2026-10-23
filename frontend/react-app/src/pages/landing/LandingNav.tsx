@@ -33,8 +33,28 @@ export function LandingNav({ hasAuth }: LandingNavProps) {
     >
       <Container maxWidth="lg" disableGutters sx={{ px: { xs: 2, md: 3 }, py: 1.25 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Link to="/" className="nav-brand" aria-label="RDI home">
-            RDI
+          <Link
+            to="/"
+            aria-label="RDI home"
+            style={{
+              textDecoration: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              margin: 0,
+              padding: 0,
+              lineHeight: 1,
+            }}
+          >
+            <Box
+              component="img"
+              src="/landing/icon.png"
+              alt="RDI"
+              sx={{
+                height: { xs: 44, sm: 52, md: 60 },
+                width: 'auto',
+                display: 'block',
+              }}
+            />
           </Link>
 
           <Box sx={{ display: { xs: 'none', md: 'flex' }, alignItems: 'center', gap: 1 }}>

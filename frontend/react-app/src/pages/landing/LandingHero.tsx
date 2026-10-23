@@ -15,8 +15,8 @@ export function LandingHero({ hasAuth }: LandingHeroProps) {
         position: 'relative',
         minHeight: { xs: '100svh', md: '100vh' },
         display: 'flex',
-        alignItems: 'flex-end',
-        pt: { xs: 10, md: 12 },
+        alignItems: 'center',
+        pt: { xs: 12, md: 14 },
         pb: { xs: 6, md: 10 },
         overflow: 'hidden',
       }}
@@ -39,28 +39,34 @@ export function LandingHero({ hasAuth }: LandingHeroProps) {
           position: 'absolute',
           inset: 0,
           background:
-            'linear-gradient(180deg, rgba(15,23,42,0.55) 0%, rgba(15,23,42,0.72) 45%, rgba(15,23,42,0.96) 100%)',
+            'linear-gradient(180deg, rgba(15,23,42,0.62) 0%, rgba(15,23,42,0.78) 45%, rgba(15,23,42,0.96) 100%)',
         }}
         aria-hidden
       />
 
-      <Container maxWidth="md" sx={{ position: 'relative', zIndex: 1 }}>
-        <Typography
-          className="landing-hero__brand"
-          component="p"
+      <Container maxWidth="md" sx={{ position: 'relative', zIndex: 1, textAlign: 'center' }}>
+        <Box
           sx={{
-            fontFamily: '"Space Grotesk", sans-serif',
-            fontWeight: 700,
-            letterSpacing: '0.12em',
-            fontSize: { xs: '2.75rem', sm: '3.5rem', md: '4.25rem' },
-            lineHeight: 1,
-            color: '#f8fafc',
-            mb: 2,
+            display: 'flex',
+            justifyContent: 'center',
+            mb: { xs: 2.5, md: 3.5 },
             animation: 'landingFadeUp 0.8s ease both',
           }}
         >
-          RDI
-        </Typography>
+          <Box
+            component="img"
+            src="/landing/logo.png"
+            alt="RDI — Remote Drone Interfaces"
+            className="landing-hero__brand"
+            sx={{
+              height: { xs: 120, sm: 150, md: 180 },
+              width: 'auto',
+              maxWidth: '100%',
+              display: 'block',
+            }}
+          />
+        </Box>
+
         <Typography
           component="h1"
           sx={{
@@ -70,6 +76,7 @@ export function LandingHero({ hasAuth }: LandingHeroProps) {
             lineHeight: 1.25,
             color: '#f8fafc',
             mb: 1.5,
+            mx: 'auto',
             maxWidth: 640,
             animation: 'landingFadeUp 0.8s ease 0.08s both',
           }}
@@ -82,6 +89,7 @@ export function LandingHero({ hasAuth }: LandingHeroProps) {
             fontSize: { xs: '1.05rem', md: '1.2rem' },
             lineHeight: 1.65,
             mb: 3.5,
+            mx: 'auto',
             maxWidth: 540,
             animation: 'landingFadeUp 0.8s ease 0.16s both',
           }}
@@ -90,7 +98,15 @@ export function LandingHero({ hasAuth }: LandingHeroProps) {
         </Typography>
 
         {hasAuth ? (
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, animation: 'landingFadeUp 0.8s ease 0.24s both' }}>
+          <Box
+            sx={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 1.5,
+              justifyContent: 'center',
+              animation: 'landingFadeUp 0.8s ease 0.24s both',
+            }}
+          >
             <Button
               component={Link}
               to="/?auth=signup"
