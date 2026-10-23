@@ -1,12 +1,13 @@
 """
-Field-level encryption for app TOTP secrets using the stack customer-managed KMS CMK.
+App TOTP secret storage helpers.
 
-DynamoDB AWS-managed / AWS-owned table encryption only protects disks; any principal
-with dynamodb:GetItem still sees plaintext attributes. Secrets are Encrypt'd before
-write and Decrypt'd on read.
+Prototyping: store plaintext in DynamoDB and rely on DynamoDB default at-rest
+encryption (AWS-owned keys — no extra CMK cost). Field-level KMS Encrypt/Decrypt
+requires a customer-managed CMK; AWS managed keys like aws/dynamodb cannot be used
+for arbitrary Lambda Encrypt of attribute values.
 
-Ciphertext stored as: enc:v1:<base64(ciphertext_blob)>
-Legacy plaintext secrets (no prefix) are still accepted and re-encrypted on next verify.
+Optional later: set TOTP_KMS_KEY_ARN to a customer-managed CMK to store
+enc:v1:<base64> ciphertext. Until then encrypt_secret is a no-op.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from botocore.exceptions import ClientError
 _PREFIX = "enc:v1:"
 _KMS_KEY_ARN = os.environ.get("TOTP_KMS_KEY_ARN", "").strip()
 
-_kms = boto3.client("kms")
+_kms = boto3.client("kms") if _KMS_KEY_ARN else None
 
 
 def kms_configured() -> bool:
@@ -28,10 +29,8 @@ def kms_configured() -> bool:
 
 
 def encrypt_secret(plaintext: str) -> str:
-    if not plaintext:
-        return plaintext
-    if not _KMS_KEY_ARN:
-        print("[totp_crypto] TOTP_KMS_KEY_ARN unset — storing plaintext (dev only)")
+    """Return plaintext unless TOTP_KMS_KEY_ARN is set (future hardening)."""
+    if not plaintext or not _KMS_KEY_ARN or _kms is None:
         return plaintext
     try:
         resp = _kms.encrypt(
@@ -50,10 +49,11 @@ def decrypt_secret(stored: str) -> str:
     if not stored:
         return ""
     if not stored.startswith(_PREFIX):
-        # Legacy plaintext row
         return stored
-    if not _KMS_KEY_ARN:
-        raise RuntimeError("Encrypted TOTP present but TOTP_KMS_KEY_ARN unset")
+    if not _KMS_KEY_ARN or _kms is None:
+        raise RuntimeError(
+            "Encrypted TOTP present but TOTP_KMS_KEY_ARN unset — re-enroll MFA"
+        )
     raw = base64.b64decode(stored[len(_PREFIX) :])
     try:
         resp = _kms.decrypt(

@@ -384,17 +384,6 @@ def _mfa_verify(user_id: str, body: dict, headers: dict) -> dict:
         _mfa_record_failure(dynamodb, user_id)
         audit("mfa_verify_fail", user_id=user_id)
         return _response(400, {"error": "Invalid authenticator code", "code": "MFA_INVALID"}, headers)
-    # Re-encrypt legacy plaintext on successful verify
-    if stored and not stored.startswith("enc:v1:"):
-        try:
-            dynamodb.update_item(
-                TableName=TABLE_NAME,
-                Key={"user_id": {"S": user_id}},
-                UpdateExpression="SET app_totp_secret = :s",
-                ExpressionAttributeValues={":s": {"S": encrypt_secret(secret)}},
-            )
-        except Exception as e:
-            print(f"[mfa] re-encrypt legacy failed: {e}")
     _mfa_clear_failures(dynamodb, user_id)
     audit("mfa_verify_ok", user_id=user_id)
     return _response(200, {"ok": True}, headers)

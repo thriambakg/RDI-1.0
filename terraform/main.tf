@@ -372,15 +372,13 @@ module "user_profile_api_lambda" {
 
   environment_variables = {
     USER_PROFILES_TABLE = local.user_profiles_tbl
-    TOTP_KMS_KEY_ARN    = module.kms.main_key_arn
+    # TOTP field encryption (CMK) deferred — DynamoDB default at-rest encryption is enough for prototyping.
+    # Later: set TOTP_KMS_KEY_ARN = module.kms.main_key_arn and attach module.kms.kms_access_policy_arn.
   }
 
-  additional_policy_arns = [
-    aws_iam_policy.user_profile_api_dynamodb[0].arn,
-    module.kms.kms_access_policy_arn,
-  ]
-  depends_on = [aws_iam_policy.user_profile_api_dynamodb]
-  layers     = [module.core_layer.layer_arn]
+  additional_policy_arns = [aws_iam_policy.user_profile_api_dynamodb[0].arn]
+  depends_on             = [aws_iam_policy.user_profile_api_dynamodb]
+  layers                 = [module.core_layer.layer_arn]
 
   tags = {}
 }

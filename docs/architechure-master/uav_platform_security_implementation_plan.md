@@ -106,8 +106,9 @@ These do **not** require Jetson/Microhard. They apply to Cognito, API Gateway, L
    - Correlation id / `user_id` prefix / `session_id` for incident reconstruction.
 
 6. **Secrets and TOTP storage**
-   - App TOTP secrets: **customer-managed KMS CMK** field encryption (`enc:v1:…`) via the RDI-1.0 stack key (`module.kms`). DynamoDB AWS-managed/AWS-owned SSE alone is **not** enough (GetItem would still return plaintext).
-   - Do **not** use the `aws/dynamodb` AWS managed key for app Encrypt/Decrypt of TOTP fields.
+   - **Prototyping (NOW):** store app TOTP secrets in DynamoDB with **default table at-rest encryption** (AWS-owned keys — no extra CMK cost). Prefer AWS-managed/owned encryption wherever the service supports it without a customer CMK.
+   - **Limitation:** AWS managed keys such as `aws/dynamodb` cannot be used by Lambda for arbitrary `Encrypt`/`Decrypt` of individual attributes. Field-level ciphertext therefore requires a **customer-managed CMK** (or Secrets Manager).
+   - **Later (production hardening):** enable optional `TOTP_KMS_KEY_ARN` + IAM so secrets are stored as `enc:v1:…` with a CMK. Not required for initial build.
    - Review IAM least privilege on user-profiles / connection-pool / relay tables.
 
 7. **Account security UX (app)**
