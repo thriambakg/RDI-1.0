@@ -1,5 +1,6 @@
-import { Button, Box, Typography, IconButton, Switch, Tooltip } from '@mui/material'
+import { Button, Box, Typography, IconButton, Switch, Tooltip, Paper } from '@mui/material'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
+import CloseIcon from '@mui/icons-material/Close'
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { FloatingWindow, type WindowRect } from './FloatingWindow'
 import { getSession, updateSession, fetchWebRtcBundleForSession } from '../../services/sessionApi'
@@ -14,18 +15,22 @@ import {
 } from '../../utils/rdiControl'
 import { labelForVehicleStack } from '../../controls/vehicleStacks'
 import { usePressedInputs } from '../../hooks/usePressedInputs'
+import { useIsLandscape, useIsMobile } from '../../hooks/useIsMobile'
 import { useRadioLinkHealth } from '../../hooks/useRadioLinkHealth'
 import {
+  CONTROL_ACTIONS,
   DEFAULT_KEYBINDS,
   resolveConnectionKeybinds,
   resolveActiveActions,
   sanitizeKeybindsForSave,
+  type ControlActionId,
   type ControlKeybinds,
 } from '../../controls/defaultKeybinds'
 import { getProfile, updateUserSettings, type RelayRef } from '../../services/profileApi'
 import type { WebRtcViewerBundle } from '../../services/sessionApi'
 import { ConnectionControlHud } from './ConnectionControlHud'
 import { ConnectionSetupPanel } from './ConnectionSetupPanel'
+import { MobileVirtualGamepad } from './MobileVirtualGamepad'
 
 const RLOG_PREFIX = new Uint8Array([0x52, 0x4c, 0x4f, 0x47]) // "RLOG"
 const LEGACY_CTRL_PREFIX = new TextEncoder().encode('CTRL')
@@ -138,6 +143,11 @@ export function ConnectionDetailDialog({
   const [allowLanShortcut, setAllowLanShortcut] = useState(false)
   const allowLanShortcutRef = useRef(false)
   allowLanShortcutRef.current = allowLanShortcut
+  /** Touch-held actions from the mobile virtual gamepad (no keybinds). */
+  const [touchActions, setTouchActions] = useState<ControlActionId[]>([])
+
+  const isMobile = useIsMobile()
+  const isLandscape = useIsLandscape()
 
   const { getWs, openSession, connectionState, connectionError } = useSessionWebSocket()
   const {
@@ -205,9 +215,43 @@ export function ConnectionDetailDialog({
     addLog,
   })
 
-  const listenInputs = isActiveController
-  const { pressed, stream, gamepads } = usePressedInputs(listenInputs)
-  const activeActions = useMemo(() => resolveActiveActions(pressed, keybinds), [pressed, keybinds])
+  // Mobile is touch-only — skip keyboard/gamepad capture on phones.
+  const listenInputs = isActiveController && !isMobile
+  const { pressed, stream: physicalStream, gamepads } = usePressedInputs(listenInputs)
+  const activeActions = useMemo(() => {
+    if (isMobile) {
+      const order = CONTROL_ACTIONS.map((a) => a.id)
+      const held = new Set(touchActions)
+      return order.filter((id) => held.has(id))
+    }
+    return resolveActiveActions(pressed, keybinds)
+  }, [isMobile, touchActions, pressed, keybinds])
+  const stream = useMemo(() => {
+    if (isMobile) {
+      return touchActions.length > 0 ? [...touchActions].sort().map((a) => `TOUCH-${a}`).join('+') : ''
+    }
+    return physicalStream
+  }, [isMobile, touchActions, physicalStream])
+
+  // Phones stay on the control deck (no keybind editor).
+  useEffect(() => {
+    if (isMobile) setPanelView('controls')
+  }, [isMobile])
+
+  useEffect(() => {
+    if (!isMobile) setTouchActions([])
+  }, [isMobile, sessionId, open])
+
+  // Lock page scroll while the mobile flight pad is open.
+  useEffect(() => {
+    if (!open || !isMobile || minimized) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    onFocus?.()
+    return () => {
+      document.body.style.overflow = prev
+    }
+  }, [open, isMobile, minimized, onFocus])
 
   const sendCommand = useCallback(
     (cmd: 'takeoff' | 'land', alt?: number) => {
@@ -357,7 +401,8 @@ export function ConnectionDetailDialog({
       return
     }
 
-    if (isTypingTarget(document.activeElement)) return
+    // Keyboard HUD skips while typing; mobile virtual pads are buttons — always flush.
+    if (!isMobile && isTypingTarget(document.activeElement)) return
 
     const CHORD_MS = 40
     // Radio path: slower heartbeats — each frame gets a desktop ACK (airtime).
@@ -367,7 +412,7 @@ export function ConnectionDetailDialog({
 
     const flush = (reason: 'edge' | 'beat') => {
       if (channel.readyState !== 'open') return
-      if (isTypingTarget(document.activeElement)) return
+      if (!isMobile && isTypingTarget(document.activeElement)) return
 
       const { actions, stream: liveStream } = liveControlsRef.current
       const path = controlPathRef.current
@@ -442,6 +487,7 @@ export function ConnectionDetailDialog({
     webRtcState,
     addLog,
     activeActions.length,
+    isMobile,
   ])
 
   // Handing off control (settings, another window, minimize) must not leave the
@@ -851,6 +897,216 @@ export function ConnectionDetailDialog({
       )}
     </Box>
   )
+
+  const connectionStatusDot = (
+    <Box
+      sx={{
+        width: 10,
+        height: 10,
+        borderRadius: '50%',
+        flexShrink: 0,
+        backgroundColor: isWebRtc
+          ? rtcState === 'connected'
+            ? '#22c55e'
+            : rtcState === 'failed'
+              ? '#ef4444'
+              : rtcState === 'connecting'
+                ? '#eab308'
+                : '#3b82f6'
+          : wsState === 'open'
+            ? '#22c55e'
+            : wsState === 'failed'
+              ? '#ef4444'
+              : wsState === 'connecting'
+                ? '#eab308'
+                : '#64748b',
+      }}
+    />
+  )
+
+  // Phone: fullscreen landscape flight pad (touch only — no keybinds).
+  if (isMobile) {
+    if (!open || minimized) return null
+    return (
+      <Paper
+        elevation={16}
+        onClick={() => onFocus?.()}
+        sx={{
+          position: 'fixed',
+          inset: 0,
+          zIndex,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          backgroundColor: '#050a12',
+          backgroundImage:
+            'radial-gradient(ellipse at top, rgba(56,189,248,0.1), transparent 55%), linear-gradient(#0b1220, #050a12)',
+          color: '#f8fafc',
+          borderRadius: 0,
+          touchAction: 'none',
+        }}
+      >
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            px: 1.25,
+            py: 0.75,
+            borderBottom: '1px solid #1e293b',
+            flexShrink: 0,
+          }}
+        >
+          {connectionStatusDot}
+          <Typography
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: '0.8rem',
+              fontWeight: 600,
+              letterSpacing: '0.1em',
+              textTransform: 'uppercase',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {name || data?.drone_id || 'Connection'}
+          </Typography>
+          {isWebRtc && (
+            <Tooltip
+              title={
+                allowLanShortcut
+                  ? 'Same-Wi‑Fi shortcut on'
+                  : 'Same-Wi‑Fi shortcut off (TURN)'
+              }
+            >
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+                <Typography sx={{ fontSize: '0.6rem', color: allowLanShortcut ? '#38bdf8' : '#64748b' }}>
+                  LAN
+                </Typography>
+                <Switch
+                  size="small"
+                  checked={allowLanShortcut}
+                  onChange={handleLanShortcutToggle}
+                  inputProps={{ 'aria-label': 'Same Wi-Fi LAN shortcut' }}
+                  sx={{
+                    m: 0,
+                    '& .MuiSwitch-switchBase.Mui-checked': { color: '#38bdf8' },
+                    '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
+                      backgroundColor: '#0ea5e9',
+                    },
+                  }}
+                />
+              </Box>
+            </Tooltip>
+          )}
+          <IconButton size="small" aria-label="Close" onClick={onClose} sx={{ color: '#94a3b8' }}>
+            <CloseIcon sx={{ fontSize: 20 }} />
+          </IconButton>
+        </Box>
+
+        {loading && (
+          <Typography sx={{ color: '#94a3b8', p: 2 }}>Loading…</Typography>
+        )}
+        {error && <Typography sx={{ color: '#f87171', p: 2 }}>{error}</Typography>}
+
+        {isWebRtc && data?.status === 'active' && !isConnected && !isFailed && !isConnecting && data?.webrtc && (
+          <Box sx={{ px: 2, pt: 1 }}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => openWebRtc(sessionId!, data.webrtc!, { force: true })}
+              sx={{ color: '#3b82f6', borderColor: '#475569', textTransform: 'none' }}
+            >
+              Connect WebRTC
+            </Button>
+          </Box>
+        )}
+        {isWebRtc && isFailed && rtcError && (
+          <Box sx={{ px: 2, pt: 1 }}>
+            <Typography sx={{ color: '#f87171', fontSize: '0.8rem', mb: 1 }}>{rtcError}</Typography>
+            {data?.webrtc && (
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => openWebRtc(sessionId!, data.webrtc!, { force: true })}
+                sx={{ color: '#3b82f6', borderColor: '#475569', textTransform: 'none' }}
+              >
+                Retry WebRTC
+              </Button>
+            )}
+          </Box>
+        )}
+
+        {data && isWebRtc && (
+          <MobileVirtualGamepad
+            activeActions={activeActions}
+            onActionsChange={setTouchActions}
+            path={controlPath}
+            onPathChange={setControlPath}
+            armed={
+              isConnected &&
+              data.status === 'active' &&
+              (controlPath !== 'radio' || radioLinkArmed)
+            }
+            connected={isConnected}
+            livePing={livePing}
+            landscape={isLandscape}
+          />
+        )}
+
+        {isLandscape && (
+          <Box
+            sx={{
+              display: 'flex',
+              gap: 1,
+              px: 1.25,
+              py: 0.75,
+              borderTop: '1px solid #1e293b',
+              flexShrink: 0,
+            }}
+          >
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => runPing('local')}
+              disabled={pingRunning || (isWebRtc && isConnecting)}
+              sx={{
+                flex: 1,
+                color: '#38bdf8',
+                borderColor: '#334155',
+                textTransform: 'none',
+                borderRadius: '2px',
+              }}
+            >
+              {pingRunning ? '…' : 'Ping relay'}
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => runPing('radio')}
+              disabled={pingRunning || (isWebRtc && isConnecting) || !isWebRtc}
+              sx={{
+                flex: 1,
+                color: '#fbbf24',
+                borderColor: '#334155',
+                textTransform: 'none',
+                borderRadius: '2px',
+              }}
+            >
+              {pingRunning ? '…' : 'Ping radio'}
+            </Button>
+          </Box>
+        )}
+        {ctrlError && (
+          <Typography sx={{ color: '#f87171', fontSize: '0.75rem', px: 1.5, pb: 0.75 }}>
+            {ctrlError}
+          </Typography>
+        )}
+      </Paper>
+    )
+  }
 
   return (
     <FloatingWindow
