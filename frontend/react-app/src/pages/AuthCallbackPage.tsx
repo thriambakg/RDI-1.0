@@ -6,12 +6,16 @@ import { useAuth } from '../contexts/AuthContext'
 /** Handles OAuth redirect from Cognito. Amplify processes the callback automatically. */
 export default function AuthCallbackPage() {
   const navigate = useNavigate()
-  const { isAuthenticated, isLoading } = useAuth()
+  const { canAccessApp, isLoading, mfaPending } = useAuth()
   const fallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    if (isAuthenticated) {
+    if (canAccessApp) {
       navigate('/console', { replace: true })
+      return
+    }
+    if (mfaPending) {
+      navigate('/?auth=signin', { replace: true })
       return
     }
     if (!isLoading) {
@@ -22,7 +26,7 @@ export default function AuthCallbackPage() {
     return () => {
       if (fallbackRef.current != null) clearTimeout(fallbackRef.current)
     }
-  }, [isAuthenticated, isLoading, navigate])
+  }, [canAccessApp, mfaPending, isLoading, navigate])
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', gap: 2 }}>

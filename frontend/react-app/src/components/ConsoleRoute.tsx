@@ -7,20 +7,21 @@ interface ConsoleRouteProps {
 }
 
 /**
- * Protects /console/*: unauthenticated users are redirected to /?auth=signin
+ * Protects /console/*: requires Cognito session + MFA gate (email Cognito TOTP or Google app TOTP).
  */
 export function ConsoleRoute(_props: ConsoleRouteProps) {
   const navigate = useNavigate()
-  const { isAuthenticated, isLoading } = useAuth()
+  const { canAccessApp, isLoading, mfaPending } = useAuth()
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
+    if (isLoading) return
+    if (mfaPending || !canAccessApp) {
       navigate('/?auth=signin', { replace: true })
     }
-  }, [isLoading, isAuthenticated, navigate])
+  }, [isLoading, canAccessApp, mfaPending, navigate])
 
   if (isLoading) return null
-  if (!isAuthenticated) return null
+  if (!canAccessApp) return null
 
   return <Outlet />
 }

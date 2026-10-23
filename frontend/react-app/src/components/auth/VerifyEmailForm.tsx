@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Box, Button, Card, TextField, Typography } from '@mui/material'
+import { Box, Button, Card, Collapse, TextField, Typography } from '@mui/material'
 import { useAuth } from '../../contexts/AuthContext'
 
 const fieldSx = {
@@ -19,8 +19,14 @@ interface VerifyEmailFormProps {
   onBack: () => void
 }
 
+/**
+ * After email/password signup, Cognito emails a verification *link*.
+ * Primary UX: open email → click Verify Email → return here to sign in.
+ * Optional: paste the code from the link URL if the click failed.
+ */
 export function VerifyEmailForm({ email, onSuccess, onBack }: VerifyEmailFormProps) {
   const { verifyEmail } = useAuth()
+  const [showCode, setShowCode] = useState(false)
   const [code, setCode] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -56,34 +62,64 @@ export function VerifyEmailForm({ email, onSuccess, onBack }: VerifyEmailFormPro
         backdropFilter: 'blur(16px)',
       }}
     >
-      <Box textAlign="center" sx={{ mb: 4 }}>
+      <Box textAlign="center" sx={{ mb: 3 }}>
         <Typography variant="h5" sx={{ fontWeight: 700, color: '#ffffff', mb: 1, textTransform: 'uppercase' }}>
-          Verify your email
+          Check your email
         </Typography>
-        <Typography variant="body2" sx={{ fontSize: '0.875rem', color: '#94a3b8' }}>
-          We sent a verification code to {email}
+        <Typography variant="body2" sx={{ fontSize: '0.875rem', color: '#94a3b8', mb: 1 }}>
+          We sent a verification link to
+        </Typography>
+        <Typography sx={{ color: '#e2e8f0', fontWeight: 600, wordBreak: 'break-all' }}>{email}</Typography>
+        <Typography variant="body2" sx={{ fontSize: '0.875rem', color: '#94a3b8', mt: 2 }}>
+          Open the message and click <strong style={{ color: '#93c5fd' }}>Verify Email</strong>. Then come back
+          here and sign in. Check spam if you do not see it within a minute.
         </Typography>
       </Box>
 
-      {error && (
-        <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mb: 2 }}>{error}</Typography>
-      )}
+      <Button type="button" variant="contained" fullWidth disableRipple onClick={onSuccess} sx={{ mb: 2 }}>
+        I verified — go to sign in
+      </Button>
 
-      <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <TextField
-          fullWidth
-          label="Verification code"
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          required
-          autoComplete="one-time-code"
-          placeholder="Enter 6-digit code"
-          sx={fieldSx}
-        />
-        <Button type="submit" variant="contained" fullWidth disabled={loading} disableRipple>
-          {loading ? 'Verifying...' : 'Verify'}
-        </Button>
-      </Box>
+      <Typography
+        component="button"
+        type="button"
+        onClick={() => setShowCode((v) => !v)}
+        sx={{
+          display: 'block',
+          width: '100%',
+          textAlign: 'center',
+          fontWeight: 600,
+          color: '#64748b',
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          fontSize: '0.8rem',
+          mb: 1,
+          '&:hover': { color: '#94a3b8' },
+        }}
+      >
+        {showCode ? 'Hide code entry' : 'Have a code instead?'}
+      </Typography>
+
+      <Collapse in={showCode}>
+        {error && (
+          <Typography sx={{ color: '#f87171', fontSize: '0.875rem', mb: 2 }}>{error}</Typography>
+        )}
+        <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <TextField
+            fullWidth
+            label="Verification code"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            autoComplete="one-time-code"
+            placeholder="From the email link URL if needed"
+            sx={fieldSx}
+          />
+          <Button type="submit" variant="outlined" fullWidth disabled={loading || !code.trim()} disableRipple>
+            {loading ? 'Verifying...' : 'Verify with code'}
+          </Button>
+        </Box>
+      </Collapse>
 
       <Box textAlign="center" sx={{ mt: 3 }}>
         <Typography

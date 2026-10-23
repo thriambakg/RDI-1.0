@@ -5,6 +5,7 @@ import { useAuth } from '../../contexts/AuthContext'
 import { LoginForm } from './LoginForm'
 import { SignUpForm } from './SignUpForm'
 import { VerifyEmailForm } from './VerifyEmailForm'
+import { MfaForm } from './MfaForm'
 
 export interface AuthModalProps {
   children: React.ReactNode
@@ -18,7 +19,7 @@ type AuthMode = 'signIn' | 'signUp' | 'verify'
 
 /** MUI-based auth modal. Uses aws-amplify/auth - bearer token flow unchanged. */
 export function AuthModal({ children, initialState = 'signIn', onClose }: AuthModalProps) {
-  const { isAuthenticated } = useAuth()
+  const { canAccessApp, mfaPending } = useAuth()
   const [mode, setMode] = useState<AuthMode>(initialState === 'signUp' ? 'signUp' : 'signIn')
   const [verifyEmail, setVerifyEmail] = useState('')
 
@@ -27,7 +28,7 @@ export function AuthModal({ children, initialState = 'signIn', onClose }: AuthMo
     setVerifyEmail('')
   }, [initialState])
 
-  if (isAuthenticated) {
+  if (canAccessApp) {
     return <>{children}</>
   }
 
@@ -77,10 +78,12 @@ export function AuthModal({ children, initialState = 'signIn', onClose }: AuthMo
             <Close />
           </IconButton>
         )}
-        {mode === 'signIn' && (
+        {mfaPending ? (
+          <MfaForm onSuccess={() => {}} />
+        ) : mode === 'signIn' ? (
           <LoginForm onSwitchToSignUp={() => setMode('signUp')} onSuccess={() => {}} />
-        )}
-        {mode === 'signUp' && (
+        ) : null}
+        {!mfaPending && mode === 'signUp' && (
           <SignUpForm
             onSwitchToSignIn={() => setMode('signIn')}
             onVerificationRequired={(email) => {
@@ -89,7 +92,7 @@ export function AuthModal({ children, initialState = 'signIn', onClose }: AuthMo
             }}
           />
         )}
-        {mode === 'verify' && verifyEmail && (
+        {!mfaPending && mode === 'verify' && verifyEmail && (
           <VerifyEmailForm
             email={verifyEmail}
             onSuccess={() => setMode('signIn')}

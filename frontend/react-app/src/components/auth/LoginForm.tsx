@@ -38,6 +38,8 @@ export function LoginForm({ onSwitchToSignUp, onSuccess }: LoginFormProps) {
       const result = await login(email, password)
       if (result.success) {
         onSuccess()
+      } else if (result.mfa) {
+        // AuthModal switches to MfaForm via mfaPending
       } else {
         setError(result.error || 'Login failed')
       }

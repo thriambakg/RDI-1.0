@@ -99,6 +99,86 @@ export async function getProfile(): Promise<UserProfile> {
   return res.json()
 }
 
+export async function getAppMfaStatus(): Promise<{ enrolled: boolean }> {
+  const url = `${getApiBaseUrl()}/user-profile`
+  const headers = await getAuthHeaders()
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ action: 'mfa_status' }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    checkSessionSuperseded(res.status, data)
+    throw new Error((data as { error?: string }).error || `MFA status failed: ${res.status}`)
+  }
+  return { enrolled: !!(data as { enrolled?: boolean }).enrolled }
+}
+
+export async function startAppMfaSetup(accountName: string): Promise<{ sharedSecret: string; setupUri: string }> {
+  const url = `${getApiBaseUrl()}/user-profile`
+  const headers = await getAuthHeaders()
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ action: 'mfa_setup_start', account_name: accountName }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    checkSessionSuperseded(res.status, data)
+    throw new Error((data as { error?: string }).error || `MFA setup failed: ${res.status}`)
+  }
+  const d = data as { shared_secret?: string; setup_uri?: string }
+  return { sharedSecret: d.shared_secret || '', setupUri: d.setup_uri || '' }
+}
+
+export async function verifyAppMfaSetup(code: string): Promise<void> {
+  const url = `${getApiBaseUrl()}/user-profile`
+  const headers = await getAuthHeaders()
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ action: 'mfa_setup_verify', code }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    checkSessionSuperseded(res.status, data)
+    throw new Error((data as { error?: string }).error || 'Invalid authenticator code')
+  }
+}
+
+export async function verifyAppMfa(code: string): Promise<void> {
+  const url = `${getApiBaseUrl()}/user-profile`
+  const headers = await getAuthHeaders()
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ action: 'mfa_verify', code }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    checkSessionSuperseded(res.status, data)
+    throw new Error((data as { error?: string }).error || 'Invalid authenticator code')
+  }
+}
+
+/** Clear the active-session lock so another device can sign in (call before Cognito signOut). */
+export async function releaseAuthSession(): Promise<void> {
+  const url = `${getApiBaseUrl()}/user-profile`
+  const body = { action: 'release_auth_session' }
+  const headers = await getAuthHeaders()
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}))
+    checkSessionSuperseded(res.status, errBody)
+    // Best-effort: logout still proceeds even if release fails (idle timeout clears lock).
+  }
+}
+
 export async function updateUserSettings(settings: Record<string, unknown>): Promise<UserProfile['settings']> {
   const url = `${getApiBaseUrl()}/user-profile`
   const body = { action: 'update_settings', settings }

@@ -12,7 +12,8 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
-from auth_session import reject_if_session_superseded
+from auth_session import reject_if_session_superseded, release_auth_session
+from totp_util import generate_secret, otpauth_uri, verify_totp
 
 TABLE_NAME = os.environ["USER_PROFILES_TABLE"]
 
@@ -196,7 +197,95 @@ def _patch_profile(user_id: str, body: dict, headers: dict) -> dict:
         if not isinstance(settings_patch, dict):
             return _response(400, {"error": "settings object required"}, headers)
         return _update_settings(user_id, settings_patch, headers)
+    if action == "release_auth_session":
+        release_auth_session(user_id)
+        return _response(200, {"ok": True}, headers)
+    if action == "mfa_status":
+        return _mfa_status(user_id, headers)
+    if action == "mfa_setup_start":
+        return _mfa_setup_start(user_id, body, headers)
+    if action == "mfa_setup_verify":
+        return _mfa_setup_verify(user_id, body, headers)
+    if action == "mfa_verify":
+        return _mfa_verify(user_id, body, headers)
     return _response(400, {"error": f"Unknown action: {action}"}, headers)
+
+
+def _mfa_status(user_id: str, headers: dict) -> dict:
+    dynamodb = boto3.client("dynamodb")
+    resp = dynamodb.get_item(
+        TableName=TABLE_NAME,
+        Key={"user_id": {"S": user_id}},
+        ProjectionExpression="app_totp_enabled",
+    )
+    item = resp.get("Item") or {}
+    enabled = (item.get("app_totp_enabled") or {}).get("BOOL") is True
+    return _response(200, {"enrolled": enabled}, headers)
+
+
+def _mfa_setup_start(user_id: str, body: dict, headers: dict) -> dict:
+    """Begin app-level TOTP enroll (used for Google / federated users)."""
+    account = (body.get("account_name") or user_id)[:128]
+    secret = generate_secret()
+    dynamodb = boto3.client("dynamodb")
+    dynamodb.update_item(
+        TableName=TABLE_NAME,
+        Key={"user_id": {"S": user_id}},
+        UpdateExpression="SET app_totp_secret_pending = :s",
+        ExpressionAttributeValues={":s": {"S": secret}},
+    )
+    return _response(
+        200,
+        {
+            "shared_secret": secret,
+            "setup_uri": otpauth_uri(secret, account, issuer="RDI"),
+        },
+        headers,
+    )
+
+
+def _mfa_setup_verify(user_id: str, body: dict, headers: dict) -> dict:
+    code = (body.get("code") or "").strip()
+    dynamodb = boto3.client("dynamodb")
+    resp = dynamodb.get_item(
+        TableName=TABLE_NAME,
+        Key={"user_id": {"S": user_id}},
+        ProjectionExpression="app_totp_secret_pending",
+    )
+    item = resp.get("Item") or {}
+    secret = (item.get("app_totp_secret_pending") or {}).get("S") or ""
+    if not secret or not verify_totp(secret, code):
+        return _response(400, {"error": "Invalid authenticator code", "code": "MFA_INVALID"}, headers)
+    dynamodb.update_item(
+        TableName=TABLE_NAME,
+        Key={"user_id": {"S": user_id}},
+        UpdateExpression=(
+            "SET app_totp_secret = :s, app_totp_enabled = :t "
+            "REMOVE app_totp_secret_pending"
+        ),
+        ExpressionAttributeValues={
+            ":s": {"S": secret},
+            ":t": {"BOOL": True},
+        },
+    )
+    return _response(200, {"ok": True, "enrolled": True}, headers)
+
+
+def _mfa_verify(user_id: str, body: dict, headers: dict) -> dict:
+    code = (body.get("code") or "").strip()
+    dynamodb = boto3.client("dynamodb")
+    resp = dynamodb.get_item(
+        TableName=TABLE_NAME,
+        Key={"user_id": {"S": user_id}},
+        ProjectionExpression="app_totp_secret, app_totp_enabled",
+    )
+    item = resp.get("Item") or {}
+    if (item.get("app_totp_enabled") or {}).get("BOOL") is not True:
+        return _response(400, {"error": "Authenticator not enrolled", "code": "MFA_NOT_ENROLLED"}, headers)
+    secret = (item.get("app_totp_secret") or {}).get("S") or ""
+    if not secret or not verify_totp(secret, code):
+        return _response(400, {"error": "Invalid authenticator code", "code": "MFA_INVALID"}, headers)
+    return _response(200, {"ok": True}, headers)
 
 
 def _update_settings(user_id: str, settings_patch: dict, headers: dict) -> dict:
