@@ -18,6 +18,7 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
+from auth_session import reject_if_session_superseded
 from hierarchy import add_session_to_folder, update_session_name, update_session_status, remove_session
 from kvs_signaling import (
     build_webrtc_viewer_bundle,
@@ -628,6 +629,10 @@ def lambda_handler(event: dict, context: Any) -> dict:
         if not user_id:
             _log("auth failed", reason="no user_id from claims")
             return _response(401, {"error": "Unauthorized"}, headers)
+        superseded = reject_if_session_superseded(event, headers, _response)
+        if superseded is not None:
+            _log("auth failed", reason="session_superseded")
+            return superseded
         _log("auth ok", user_id=user_id[:8] + ".." if len(user_id) > 8 else user_id)
 
         if http_method == "POST" and "sessions" in path:

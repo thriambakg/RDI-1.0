@@ -12,6 +12,8 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
+from auth_session import reject_if_session_superseded
+
 TABLE_NAME = os.environ["USER_PROFILES_TABLE"]
 
 # Shared folder has nested "Shared with me" and "Shared with others"
@@ -105,6 +107,9 @@ def lambda_handler(event: dict, context: Any) -> dict:
         user_id = _get_user_id(event)
         if not user_id:
             return _response(401, {"error": "Unauthorized"}, headers)
+        superseded = reject_if_session_superseded(event, headers, _response)
+        if superseded is not None:
+            return superseded
 
         if http_method == "GET" and "user-profile" in path:
             return _get_profile(user_id, headers)

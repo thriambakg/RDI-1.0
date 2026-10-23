@@ -3,6 +3,7 @@
  */
 import { getConfig } from '../config'
 import { getAuthHeaders } from './authHeaders'
+import { checkSessionSuperseded } from './sessionGuard'
 
 const getApiBaseUrl = (): string => {
   const cfg = getConfig()
@@ -121,6 +122,7 @@ export async function createSession(params: CreateSessionParams): Promise<Create
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
+    checkSessionSuperseded(res.status, err)
     console.error('❌ [RDI Session API] Create session failed:', { status: res.status, error: err })
     throw new Error(err.error || `Session create failed: ${res.status}`)
   }
@@ -151,6 +153,7 @@ export async function releaseSession(session_id: string): Promise<void> {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
+    checkSessionSuperseded(res.status, err)
     console.error('❌ [RDI Session API] Release session failed:', { status: res.status, error: err })
     throw new Error(err.error || `Session release failed: ${res.status}`)
   }
@@ -196,6 +199,7 @@ export async function updateSession(params: {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
+    checkSessionSuperseded(res.status, err)
     console.error('❌ [RDI Session API] PATCH session failed:', { status: res.status, error: err })
     throw new Error((err as { error?: string }).error || `Update session failed: ${res.status}`)
   }
@@ -246,6 +250,7 @@ export async function listSessions(wavelengthZoneId?: string): Promise<ListSessi
   const res = await fetch(url, { method: 'GET', headers })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
+    checkSessionSuperseded(res.status, err)
     console.error('❌ [RDI Session API] List sessions failed:', { status: res.status, error: err })
     throw new Error(err.error || `List sessions failed: ${res.status}`)
   }
@@ -275,6 +280,7 @@ export async function getSession(session_id: string): Promise<{
   const res = await fetch(url, { method: 'GET', headers })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
+    checkSessionSuperseded(res.status, err)
     throw new Error(err.error || `Get session failed: ${res.status}`)
   }
   return res.json()
@@ -292,6 +298,7 @@ export async function deleteSession(session_id: string, permanent = true): Promi
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
+    checkSessionSuperseded(res.status, err)
     console.error('❌ [RDI Session API] Delete session failed:', { status: res.status, error: err })
     throw new Error(err.error || `Delete session failed: ${res.status}`)
   }

@@ -4,6 +4,7 @@
 import { getConfig } from '../config'
 import { getAuthHeaders } from './authHeaders'
 import type { RelayRef } from './profileApi'
+import { checkSessionSuperseded } from './sessionGuard'
 
 const getApiBaseUrl = (): string => {
   const cfg = getConfig()
@@ -51,6 +52,7 @@ export async function registerRelay(params: RegisterRelayParams): Promise<Regist
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
+    checkSessionSuperseded(res.status, err)
     throw new Error((err as { error?: string }).error || `Register relay failed: ${res.status}`)
   }
   return res.json()
@@ -73,6 +75,7 @@ export async function claimRelay(params: ClaimRelayParams): Promise<RegisterRela
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
+    checkSessionSuperseded(res.status, err)
     throw new Error((err as { error?: string }).error || `Claim relay failed: ${res.status}`)
   }
   return res.json()
@@ -85,6 +88,7 @@ export async function listRelays(wavelengthZoneId?: string): Promise<{ relays: R
   const res = await fetch(url, { method: 'GET', headers })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
+    checkSessionSuperseded(res.status, err)
     throw new Error((err as { error?: string }).error || `List relays failed: ${res.status}`)
   }
   return res.json()
@@ -104,6 +108,7 @@ export async function updateRelayStatus(
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
+    checkSessionSuperseded(res.status, err)
     throw new Error((err as { error?: string }).error || `Update relay status failed: ${res.status}`)
   }
 }
@@ -118,6 +123,7 @@ export async function deleteRelay(relay_id: string, wavelength_zone_id: string):
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
+    checkSessionSuperseded(res.status, err)
     throw new Error((err as { error?: string }).error || `Delete relay failed: ${res.status}`)
   }
 }

@@ -15,6 +15,7 @@ import {
   type AuthUser,
 } from 'aws-amplify/auth'
 import { Hub } from 'aws-amplify/utils'
+import { SESSION_SUPERSEDED_EVENT } from '../services/sessionGuard'
 
 export interface RDIUser {
   id: string
@@ -77,9 +78,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       } else if (payload.event === 'signedOut') {
         setUser(null)
+      } else if (payload.event === 'tokenRefresh_failure') {
+        // Refresh token invalidated (e.g. signed in elsewhere) — clear local session.
+        try {
+          await signOut()
+        } catch {
+          /* ignore */
+        }
+        setUser(null)
       }
     })
     return () => hubListener()
+  }, [])
+
+  useEffect(() => {
+    const onSuperseded = () => {
+      void (async () => {
+        try {
+          await signOut()
+        } catch {
+          /* ignore */
+        }
+        setUser(null)
+      })()
+    }
+    window.addEventListener(SESSION_SUPERSEDED_EVENT, onSuperseded)
+    return () => window.removeEventListener(SESSION_SUPERSEDED_EVENT, onSuperseded)
   }, [])
 
   const login = async (email: string, password: string) => {

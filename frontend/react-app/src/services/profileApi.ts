@@ -3,6 +3,7 @@
  */
 import { getConfig } from '../config'
 import { getAuthHeaders } from './authHeaders'
+import { checkSessionSuperseded } from './sessionGuard'
 
 const getApiBaseUrl = (): string => {
   const cfg = getConfig()
@@ -91,6 +92,7 @@ export async function getProfile(): Promise<UserProfile> {
   const errBody = !res.ok ? await res.json().catch(() => ({})) : undefined
   logProfileResponse('GET', url, res.status, res.ok, errBody)
   if (!res.ok) {
+    checkSessionSuperseded(res.status, errBody)
     const err = errBody as { error?: string }
     throw new Error(err?.error || `Get profile failed: ${res.status}`)
   }
@@ -110,6 +112,7 @@ export async function updateUserSettings(settings: Record<string, unknown>): Pro
   const data = await res.json().catch(() => ({}))
   logProfileResponse('PATCH', url, res.status, res.ok, res.ok ? undefined : data)
   if (!res.ok) {
+    checkSessionSuperseded(res.status, data)
     const err = data as { error?: string }
     throw new Error(err?.error || `Update settings failed: ${res.status}`)
   }
@@ -129,6 +132,7 @@ export async function createFolder(parentPath: string[], folderName: string): Pr
   const errBody = !res.ok ? await res.json().catch(() => ({})) : undefined
   logProfileResponse('PATCH', url, res.status, res.ok, errBody)
   if (!res.ok) {
+    checkSessionSuperseded(res.status, errBody)
     const err = errBody as { error?: string }
     throw new Error(err?.error || `Create folder failed: ${res.status}`)
   }
@@ -147,6 +151,7 @@ export async function deleteFolder(folderPath: string[]): Promise<void> {
   const errBody = !res.ok ? await res.json().catch(() => ({})) : undefined
   logProfileResponse('PATCH', url, res.status, res.ok, errBody)
   if (!res.ok) {
+    checkSessionSuperseded(res.status, errBody)
     const err = errBody as { error?: string }
     throw new Error(err?.error || `Delete folder failed: ${res.status}`)
   }

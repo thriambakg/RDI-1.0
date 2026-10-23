@@ -21,6 +21,7 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
+from auth_session import reject_if_session_superseded
 from kvs_signaling import build_webrtc_master_bundle
 from relay_active_sessions import parse_active_sessions
 
@@ -118,6 +119,10 @@ def lambda_handler(event: dict, context: Any) -> dict:
         if not user_id:
             _log("auth failed", reason="no user_id from claims", path=path)
             return _response(401, {"error": "Unauthorized"}, headers)
+        superseded = reject_if_session_superseded(event, headers, _response)
+        if superseded is not None:
+            _log("auth failed", reason="session_superseded", path=path)
+            return superseded
 
         if "relays" not in path:
             return _response(404, {"error": "Not found"}, headers)
