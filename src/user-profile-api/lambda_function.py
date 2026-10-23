@@ -13,6 +13,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from auth_session import reject_if_session_superseded, release_auth_session
+from totp_store import delete_secret, get_secret, put_secret
 from totp_util import generate_secret, otpauth_uri, verify_totp
 
 TABLE_NAME = os.environ["USER_PROFILES_TABLE"]
@@ -227,13 +228,18 @@ def _mfa_setup_start(user_id: str, body: dict, headers: dict) -> dict:
     """Begin app-level TOTP enroll (used for Google / federated users)."""
     account = (body.get("account_name") or user_id)[:128]
     secret = generate_secret()
+    # Pending secret in SSM SecureString (AWS managed key alias/aws/ssm).
+    put_secret(user_id, secret, pending=True)
+    # Clear any legacy plaintext pending attribute.
     dynamodb = boto3.client("dynamodb")
-    dynamodb.update_item(
-        TableName=TABLE_NAME,
-        Key={"user_id": {"S": user_id}},
-        UpdateExpression="SET app_totp_secret_pending = :s",
-        ExpressionAttributeValues={":s": {"S": secret}},
-    )
+    try:
+        dynamodb.update_item(
+            TableName=TABLE_NAME,
+            Key={"user_id": {"S": user_id}},
+            UpdateExpression="REMOVE app_totp_secret_pending",
+        )
+    except ClientError:
+        pass
     return _response(
         200,
         {
@@ -246,27 +252,30 @@ def _mfa_setup_start(user_id: str, body: dict, headers: dict) -> dict:
 
 def _mfa_setup_verify(user_id: str, body: dict, headers: dict) -> dict:
     code = (body.get("code") or "").strip()
-    dynamodb = boto3.client("dynamodb")
-    resp = dynamodb.get_item(
-        TableName=TABLE_NAME,
-        Key={"user_id": {"S": user_id}},
-        ProjectionExpression="app_totp_secret_pending",
-    )
-    item = resp.get("Item") or {}
-    secret = (item.get("app_totp_secret_pending") or {}).get("S") or ""
+    secret = get_secret(user_id, pending=True) or ""
+    # Legacy fallback: plaintext pending still in Dynamo from earlier deploys.
+    if not secret:
+        dynamodb = boto3.client("dynamodb")
+        resp = dynamodb.get_item(
+            TableName=TABLE_NAME,
+            Key={"user_id": {"S": user_id}},
+            ProjectionExpression="app_totp_secret_pending",
+        )
+        item = resp.get("Item") or {}
+        secret = (item.get("app_totp_secret_pending") or {}).get("S") or ""
     if not secret or not verify_totp(secret, code):
         return _response(400, {"error": "Invalid authenticator code", "code": "MFA_INVALID"}, headers)
+    put_secret(user_id, secret, pending=False)
+    delete_secret(user_id, pending=True)
+    dynamodb = boto3.client("dynamodb")
     dynamodb.update_item(
         TableName=TABLE_NAME,
         Key={"user_id": {"S": user_id}},
         UpdateExpression=(
-            "SET app_totp_secret = :s, app_totp_enabled = :t "
-            "REMOVE app_totp_secret_pending"
+            "SET app_totp_enabled = :t "
+            "REMOVE app_totp_secret_pending, app_totp_secret"
         ),
-        ExpressionAttributeValues={
-            ":s": {"S": secret},
-            ":t": {"BOOL": True},
-        },
+        ExpressionAttributeValues={":t": {"BOOL": True}},
     )
     return _response(200, {"ok": True, "enrolled": True}, headers)
 
@@ -282,7 +291,20 @@ def _mfa_verify(user_id: str, body: dict, headers: dict) -> dict:
     item = resp.get("Item") or {}
     if (item.get("app_totp_enabled") or {}).get("BOOL") is not True:
         return _response(400, {"error": "Authenticator not enrolled", "code": "MFA_NOT_ENROLLED"}, headers)
-    secret = (item.get("app_totp_secret") or {}).get("S") or ""
+    secret = get_secret(user_id, pending=False) or ""
+    # Legacy fallback + one-time migrate plaintext Dynamo → SSM.
+    legacy = (item.get("app_totp_secret") or {}).get("S") or ""
+    if not secret and legacy:
+        secret = legacy
+        try:
+            put_secret(user_id, secret, pending=False)
+            dynamodb.update_item(
+                TableName=TABLE_NAME,
+                Key={"user_id": {"S": user_id}},
+                UpdateExpression="REMOVE app_totp_secret",
+            )
+        except Exception as e:
+            print(f"[mfa] migrate legacy totp to SSM failed: {e}")
     if not secret or not verify_totp(secret, code):
         return _response(400, {"error": "Invalid authenticator code", "code": "MFA_INVALID"}, headers)
     return _response(200, {"ok": True}, headers)

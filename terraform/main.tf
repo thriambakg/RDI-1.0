@@ -372,11 +372,18 @@ module "user_profile_api_lambda" {
 
   environment_variables = {
     USER_PROFILES_TABLE = local.user_profiles_tbl
+    TOTP_SSM_PREFIX     = "/rdi/${var.environment}/app-totp"
   }
 
-  additional_policy_arns = [aws_iam_policy.user_profile_api_dynamodb[0].arn]
-  depends_on             = [aws_iam_policy.user_profile_api_dynamodb]
-  layers                 = [module.core_layer.layer_arn]
+  additional_policy_arns = [
+    aws_iam_policy.user_profile_api_dynamodb[0].arn,
+    aws_iam_policy.user_profile_api_totp_ssm[0].arn,
+  ]
+  depends_on = [
+    aws_iam_policy.user_profile_api_dynamodb,
+    aws_iam_policy.user_profile_api_totp_ssm,
+  ]
+  layers = [module.core_layer.layer_arn]
 
   tags = {}
 }
@@ -400,6 +407,47 @@ resource "aws_iam_policy" "user_profile_api_dynamodb" {
         Resource = [
           "arn:aws:dynamodb:${local.region}:${data.aws_caller_identity.current.account_id}:table/${local.user_profiles_tbl}"
         ]
+      }
+    ]
+  })
+}
+
+# App TOTP secrets: SSM SecureString with AWS managed key alias/aws/ssm (no CMK).
+resource "aws_iam_policy" "user_profile_api_totp_ssm" {
+  count       = var.base_state_bucket != "" ? 1 : 0
+  name        = "${var.project_name}-user-profile-api-totp-ssm-${var.environment}"
+  description = "SSM SecureString (AWS managed KMS) for app TOTP secrets"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:PutParameter",
+          "ssm:GetParameter",
+          "ssm:DeleteParameter",
+          "ssm:AddTagsToResource"
+        ]
+        Resource = [
+          "arn:aws:ssm:${local.region}:${data.aws_caller_identity.current.account_id}:parameter/rdi/${var.environment}/app-totp",
+          "arn:aws:ssm:${local.region}:${data.aws_caller_identity.current.account_id}:parameter/rdi/${var.environment}/app-totp/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:Encrypt",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey"
+        ]
+        Resource = ["*"]
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "ssm.${local.region}.amazonaws.com"
+          }
+        }
       }
     ]
   })
