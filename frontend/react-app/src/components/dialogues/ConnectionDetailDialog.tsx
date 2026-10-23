@@ -38,6 +38,25 @@ import './VideoFeedPlaceholder.css'
 const RLOG_PREFIX = new Uint8Array([0x52, 0x4c, 0x4f, 0x47]) // "RLOG"
 const LEGACY_CTRL_PREFIX = new TextEncoder().encode('CTRL')
 
+/** Short HUD labels for live actions (desktop video top-left). */
+const ACTION_HUD_LABEL: Record<ControlActionId, string> = {
+  move_forward: 'Forward',
+  move_back: 'Back',
+  move_left: 'Left',
+  move_right: 'Right',
+  move_up: 'Up',
+  move_down: 'Down',
+  yaw_left: 'Yaw left',
+  yaw_right: 'Yaw right',
+  brake: 'Brake',
+  rtl: 'RTL',
+}
+
+function formatActiveInputHud(actions: ControlActionId[]): string {
+  if (actions.length === 0) return ''
+  return actions.map((id) => ACTION_HUD_LABEL[id] ?? id).join(' + ')
+}
+
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
   const tag = target.tagName
@@ -948,9 +967,10 @@ export function ConnectionDetailDialog({
         sx={{
           position: 'relative',
           width: '100%',
-          height: videoLocked ? '100%' : 'min(100dvh - 48px, 100%)',
+          height: videoLocked ? '100%' : undefined,
           minHeight: videoLocked ? 0 : 'calc(100dvh - 48px)',
           flex: videoLocked ? 1 : undefined,
+          alignSelf: 'stretch',
           overflow: 'hidden',
           backgroundColor: '#020617',
         }}
@@ -1165,8 +1185,8 @@ export function ConnectionDetailDialog({
           <Tooltip
             title={
               videoLocked
-                ? 'Video locked — feed stays fixed for CV / autonomous'
-                : 'Lock video stage (keep feed in place while scrolling logs)'
+                ? 'Video locked — full-screen feed for CV / autonomous (unlock to scroll logs)'
+                : 'Lock video full-screen (hide logs until unlocked)'
             }
           >
             <IconButton
@@ -1228,23 +1248,8 @@ export function ConnectionDetailDialog({
 
         <Box sx={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
           {videoLocked ? (
-            <>
-              {videoStage}
-              <Box
-                sx={{
-                  flex: '0 0 38%',
-                  minHeight: 140,
-                  maxHeight: '42%',
-                  overflowY: 'auto',
-                  WebkitOverflowScrolling: 'touch',
-                  touchAction: 'pan-y',
-                  borderTop: '1px solid #1e293b',
-                  zIndex: 1,
-                }}
-              >
-                {belowPanel}
-              </Box>
-            </>
+            // Full-bleed flight stage — logs/path only when unlocked (scroll).
+            videoStage
           ) : (
             <Box
               sx={{
@@ -1261,7 +1266,7 @@ export function ConnectionDetailDialog({
             </Box>
           )}
 
-          {/* Sticks stay screen-fixed over video/logs; only the stick hitboxes capture touch */}
+          {/* Sticks stay screen-fixed over video; only stick hitboxes capture touch */}
           {data && isWebRtc && (
             <Box
               sx={{
@@ -1279,7 +1284,7 @@ export function ConnectionDetailDialog({
                 activeActions={activeActions}
                 onActionsChange={setTouchActions}
                 landscape={isLandscape}
-                bottomInset={videoLocked ? '38%' : '0px'}
+                bottomInset="0px"
               />
             </Box>
           )}
@@ -1443,6 +1448,13 @@ export function ConnectionDetailDialog({
           {isWebRtc && (
             <Box className="rdi-video-stage-desktop">
               <VideoFeedPlaceholder variant="desktop" />
+              <div className="rdi-video-stage-input" aria-live="polite">
+                {activeActions.length > 0 ? (
+                  formatActiveInputHud(activeActions)
+                ) : (
+                  <span className="is-idle">— awaiting input —</span>
+                )}
+              </div>
               <div className="rdi-video-stage-hud">
                 <div
                   className={`rdi-video-stage-hud-armed ${
