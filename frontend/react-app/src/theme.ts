@@ -15,6 +15,12 @@ export const rdiTheme = createTheme({
       disabled: '#64748b',
     },
   },
+  typography: {
+    fontFamily: '"Source Sans 3", "Segoe UI", sans-serif',
+    h1: { fontFamily: '"Space Grotesk", sans-serif' },
+    h2: { fontFamily: '"Space Grotesk", sans-serif' },
+    h3: { fontFamily: '"Space Grotesk", sans-serif' },
+  },
   components: {
     MuiDialog: {
       styleOverrides: {
