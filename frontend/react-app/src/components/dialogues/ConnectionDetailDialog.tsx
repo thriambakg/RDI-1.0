@@ -943,7 +943,6 @@ export function ConnectionDetailDialog({
             'radial-gradient(ellipse at top, rgba(56,189,248,0.1), transparent 55%), linear-gradient(#0b1220, #050a12)',
           color: '#f8fafc',
           borderRadius: 0,
-          touchAction: 'none',
         }}
       >
         <Box
@@ -1006,104 +1005,148 @@ export function ConnectionDetailDialog({
           </IconButton>
         </Box>
 
-        {loading && (
-          <Typography sx={{ color: '#94a3b8', p: 2 }}>Loading…</Typography>
-        )}
-        {error && <Typography sx={{ color: '#f87171', p: 2 }}>{error}</Typography>}
+        {/* Scroll away from sticks to reach ping + logs */}
+        <Box
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            WebkitOverflowScrolling: 'touch',
+            touchAction: 'pan-y',
+            overscrollBehavior: 'contain',
+          }}
+        >
+          {loading && (
+            <Typography sx={{ color: '#94a3b8', p: 2 }}>Loading…</Typography>
+          )}
+          {error && <Typography sx={{ color: '#f87171', p: 2 }}>{error}</Typography>}
 
-        {isWebRtc && data?.status === 'active' && !isConnected && !isFailed && !isConnecting && data?.webrtc && (
-          <Box sx={{ px: 2, pt: 1 }}>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => openWebRtc(sessionId!, data.webrtc!, { force: true })}
-              sx={{ color: '#3b82f6', borderColor: '#475569', textTransform: 'none' }}
-            >
-              Connect WebRTC
-            </Button>
-          </Box>
-        )}
-        {isWebRtc && isFailed && rtcError && (
-          <Box sx={{ px: 2, pt: 1 }}>
-            <Typography sx={{ color: '#f87171', fontSize: '0.8rem', mb: 1 }}>{rtcError}</Typography>
-            {data?.webrtc && (
+          {isWebRtc && data?.status === 'active' && !isConnected && !isFailed && !isConnecting && data?.webrtc && (
+            <Box sx={{ px: 2, pt: 1 }}>
               <Button
                 variant="outlined"
                 size="small"
                 onClick={() => openWebRtc(sessionId!, data.webrtc!, { force: true })}
                 sx={{ color: '#3b82f6', borderColor: '#475569', textTransform: 'none' }}
               >
-                Retry WebRTC
+                Connect WebRTC
               </Button>
-            )}
-          </Box>
-        )}
+            </Box>
+          )}
+          {isWebRtc && isFailed && rtcError && (
+            <Box sx={{ px: 2, pt: 1 }}>
+              <Typography sx={{ color: '#f87171', fontSize: '0.8rem', mb: 1 }}>{rtcError}</Typography>
+              {data?.webrtc && (
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={() => openWebRtc(sessionId!, data.webrtc!, { force: true })}
+                  sx={{ color: '#3b82f6', borderColor: '#475569', textTransform: 'none' }}
+                >
+                  Retry WebRTC
+                </Button>
+              )}
+            </Box>
+          )}
 
-        {data && isWebRtc && (
-          <MobileVirtualGamepad
-            activeActions={activeActions}
-            onActionsChange={setTouchActions}
-            path={controlPath}
-            onPathChange={setControlPath}
-            armed={
-              isConnected &&
-              data.status === 'active' &&
-              (controlPath !== 'radio' || radioLinkArmed)
-            }
-            connected={isConnected}
-            livePing={livePing}
-            landscape={isLandscape}
-          />
-        )}
+          {data && isWebRtc && (
+            <MobileVirtualGamepad
+              activeActions={activeActions}
+              onActionsChange={setTouchActions}
+              path={controlPath}
+              onPathChange={setControlPath}
+              armed={
+                isConnected &&
+                data.status === 'active' &&
+                (controlPath !== 'radio' || radioLinkArmed)
+              }
+              connected={isConnected}
+              livePing={livePing}
+              landscape={isLandscape}
+            />
+          )}
 
-        {isLandscape && (
-          <Box
-            sx={{
-              display: 'flex',
-              gap: 1,
-              px: 1.25,
-              py: 0.75,
-              borderTop: '1px solid #1e293b',
-              flexShrink: 0,
-            }}
-          >
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => runPing('local')}
-              disabled={pingRunning || (isWebRtc && isConnecting)}
+          {isLandscape && (
+            <Box
               sx={{
-                flex: 1,
-                color: '#38bdf8',
-                borderColor: '#334155',
-                textTransform: 'none',
-                borderRadius: '2px',
+                display: 'flex',
+                gap: 1,
+                px: 1.25,
+                py: 0.75,
+                borderTop: '1px solid #1e293b',
               }}
             >
-              {pingRunning ? '…' : 'Ping relay'}
-            </Button>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => runPing('radio')}
-              disabled={pingRunning || (isWebRtc && isConnecting) || !isWebRtc}
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => runPing('local')}
+                disabled={pingRunning || (isWebRtc && isConnecting)}
+                sx={{
+                  flex: 1,
+                  color: '#38bdf8',
+                  borderColor: '#334155',
+                  textTransform: 'none',
+                  borderRadius: '2px',
+                }}
+              >
+                {pingRunning ? '…' : 'Ping relay'}
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => runPing('radio')}
+                disabled={pingRunning || (isWebRtc && isConnecting) || !isWebRtc}
+                sx={{
+                  flex: 1,
+                  color: '#fbbf24',
+                  borderColor: '#334155',
+                  textTransform: 'none',
+                  borderRadius: '2px',
+                }}
+              >
+                {pingRunning ? '…' : 'Ping radio'}
+              </Button>
+            </Box>
+          )}
+
+          {ctrlError && (
+            <Typography sx={{ color: '#f87171', fontSize: '0.75rem', px: 1.5, pb: 0.75 }}>
+              {ctrlError}
+            </Typography>
+          )}
+
+          <Box sx={{ px: 1.25, pt: 1, pb: 2 }}>
+            <Typography
               sx={{
-                flex: 1,
-                color: '#fbbf24',
-                borderColor: '#334155',
-                textTransform: 'none',
-                borderRadius: '2px',
+                color: '#64748b',
+                mb: 0.75,
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+                fontSize: '0.65rem',
               }}
             >
-              {pingRunning ? '…' : 'Ping radio'}
-            </Button>
+              Session log
+            </Typography>
+            <Box
+              component="pre"
+              sx={{
+                m: 0,
+                p: 1.25,
+                minHeight: 120,
+                backgroundColor: '#020617',
+                border: '1px solid #1e293b',
+                borderRadius: '2px',
+                fontSize: '0.72rem',
+                color: '#94a3b8',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              }}
+            >
+              {logLines.length > 0 ? logLines.join('\n') : 'No log lines yet — scroll here after flying or pinging.'}
+            </Box>
           </Box>
-        )}
-        {ctrlError && (
-          <Typography sx={{ color: '#f87171', fontSize: '0.75rem', px: 1.5, pb: 0.75 }}>
-            {ctrlError}
-          </Typography>
-        )}
+        </Box>
       </Paper>
     )
   }
