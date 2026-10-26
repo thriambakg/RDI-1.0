@@ -1,8 +1,8 @@
 /**
  * Auth context - aws-amplify/auth.
  * Email/password: Cognito required TOTP MFA every sign-in.
- * Google (federated): Cognito cannot enforce MFA — app-level TOTP gate after OAuth.
- * Email signup: Cognito email verification code (VerifyEmailForm), same pattern as Cosine.
+ * Google (federated): IdP owns auth + MFA — no extra app TOTP after OAuth.
+ * Email signup: Cognito email verification link (VerifyEmailForm).
  */
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import type { ReactNode } from 'react'
@@ -15,19 +15,12 @@ import {
   confirmSignIn,
   signInWithRedirect,
   fetchUserAttributes,
-  fetchAuthSession,
   updateMFAPreference,
   type AuthUser,
   type SignInOutput,
 } from 'aws-amplify/auth'
 import { Hub } from 'aws-amplify/utils'
-import {
-  getAppMfaStatus,
-  releaseAuthSession,
-  startAppMfaSetup,
-  verifyAppMfa,
-  verifyAppMfaSetup,
-} from '../services/profileApi'
+import { releaseAuthSession } from '../services/profileApi'
 import { notifyTransportTeardown, SESSION_SUPERSEDED_EVENT } from '../services/sessionGuard'
 
 export interface RDIUser {
@@ -36,8 +29,8 @@ export interface RDIUser {
 }
 
 export type MfaPending =
-  | { kind: 'setup'; setupUri: string; sharedSecret: string; source: 'cognito' | 'app' }
-  | { kind: 'confirm'; source: 'cognito' | 'app' }
+  | { kind: 'setup'; setupUri: string; sharedSecret: string; source: 'cognito' }
+  | { kind: 'confirm'; source: 'cognito' }
 
 export interface AuthContextType {
   user: RDIUser | null
@@ -56,35 +49,6 @@ export interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
-
-function mfaStorageKey(authTime: number | string): string {
-  return `rdi_app_mfa_${authTime}`
-}
-
-async function tokenAuthTime(): Promise<number | null> {
-  try {
-    const session = await fetchAuthSession()
-    const raw = session.tokens?.idToken?.payload?.auth_time
-    if (raw == null) return null
-    return typeof raw === 'number' ? raw : parseInt(String(raw), 10)
-  } catch {
-    return null
-  }
-}
-
-async function isFederatedUser(): Promise<boolean> {
-  try {
-    const session = await fetchAuthSession()
-    const payload = session.tokens?.idToken?.payload as Record<string, unknown> | undefined
-    if (!payload) return false
-    const identities = payload.identities
-    if (Array.isArray(identities) && identities.length > 0) return true
-    const username = String(payload['cognito:username'] || '')
-    return /^Google_/i.test(username) || username.includes('_Google_')
-  } catch {
-    return false
-  }
-}
 
 async function convertCognitoUser(authUser: AuthUser): Promise<RDIUser | null> {
   try {
@@ -119,68 +83,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<RDIUser | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [mfaPending, setMfaPending] = useState<MfaPending | null>(null)
-  const [appMfaOk, setAppMfaOk] = useState(false)
 
   const isAuthenticated = !!user
-  const [federatedNeedsMfa, setFederatedNeedsMfa] = useState(false)
-  const canEnter =
-    isAuthenticated && !mfaPending && (!federatedNeedsMfa || appMfaOk)
-
-  const markAppMfaVerified = useCallback(async () => {
-    const at = await tokenAuthTime()
-    if (at != null && typeof sessionStorage !== 'undefined') {
-      sessionStorage.setItem(mfaStorageKey(at), '1')
-    }
-    setAppMfaOk(true)
-    setFederatedNeedsMfa(false)
-    setMfaPending(null)
-  }, [])
-
-  const startFederatedMfaGate = useCallback(
-    async (u: RDIUser) => {
-      setFederatedNeedsMfa(true)
-      const at = await tokenAuthTime()
-      if (at != null && sessionStorage.getItem(mfaStorageKey(at)) === '1') {
-        setAppMfaOk(true)
-        setFederatedNeedsMfa(false)
-        return
-      }
-      setAppMfaOk(false)
-      try {
-        const status = await getAppMfaStatus()
-        if (status.enrolled) {
-          setMfaPending({ kind: 'confirm', source: 'app' })
-        } else {
-          const setup = await startAppMfaSetup(u.email || u.id)
-          setMfaPending({
-            kind: 'setup',
-            setupUri: setup.setupUri,
-            sharedSecret: setup.sharedSecret,
-            source: 'app',
-          })
-        }
-      } catch (e) {
-        console.warn('[RDI Auth] federated MFA gate failed:', e)
-        // Fail closed for federated — require retry
-        setMfaPending({ kind: 'confirm', source: 'app' })
-      }
-    },
-    []
-  )
+  const canEnter = isAuthenticated && !mfaPending
 
   const afterCognitoSignedIn = useCallback(async () => {
     const authUser = await getCurrentUser()
     const u = await convertCognitoUser(authUser)
     setUser(u)
-    if (!u) return
-    if (await isFederatedUser()) {
-      await startFederatedMfaGate(u)
-    } else {
-      setFederatedNeedsMfa(false)
-      setAppMfaOk(true)
-      setMfaPending(null)
-    }
-  }, [startFederatedMfaGate])
+    setMfaPending(null)
+  }, [])
 
   useEffect(() => {
     const init = async () => {
@@ -188,12 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const authUser = await getCurrentUser()
         const u = await convertCognitoUser(authUser)
         setUser(u)
-        if (u && (await isFederatedUser())) {
-          await startFederatedMfaGate(u)
-        } else {
-          setAppMfaOk(true)
-          setFederatedNeedsMfa(false)
-        }
+        setMfaPending(null)
       } catch {
         setUser(null)
       } finally {
@@ -201,7 +108,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
     void init()
-  }, [startFederatedMfaGate])
+  }, [])
 
   useEffect(() => {
     const hubListener = Hub.listen('auth', async ({ payload }) => {
@@ -214,9 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else if (payload.event === 'signedOut') {
         setUser(null)
         setMfaPending(null)
-        setAppMfaOk(false)
-        setFederatedNeedsMfa(false)
-      } else if (payload.event === 'tokenRefresh_failure') {
+      } else if (payload.event === 'tokenRefresh_failure' || payload.event === 'signInWithRedirect_failure') {
         try {
           await signOut()
         } catch {
@@ -224,8 +129,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         setUser(null)
         setMfaPending(null)
-        setAppMfaOk(false)
-        setFederatedNeedsMfa(false)
       }
     })
     return () => hubListener()
@@ -241,8 +144,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         setUser(null)
         setMfaPending(null)
-        setAppMfaOk(false)
-        setFederatedNeedsMfa(false)
       })()
     }
     window.addEventListener(SESSION_SUPERSEDED_EVENT, onSuperseded)
@@ -322,20 +223,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const confirmMfa = async (code: string) => {
     const trimmed = code.replace(/\s/g, '')
-    const pending = mfaPending
-    if (!pending) {
+    if (!mfaPending) {
       return { success: false, error: 'No MFA challenge pending.' }
     }
     try {
-      if (pending.source === 'app') {
-        if (pending.kind === 'setup') {
-          await verifyAppMfaSetup(trimmed)
-        } else {
-          await verifyAppMfa(trimmed)
-        }
-        await markAppMfaVerified()
-        return { success: true }
-      }
       const result = await confirmSignIn({ challengeResponse: trimmed })
       return await applySignInStep(result)
     } catch (err: unknown) {
@@ -345,8 +236,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const cancelMfa = async () => {
     setMfaPending(null)
-    setAppMfaOk(false)
-    setFederatedNeedsMfa(false)
     try {
       await signOut()
     } catch {
@@ -356,7 +245,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const loginWithProvider = async (provider: 'Google') => {
-    await signInWithRedirect({ provider: provider as 'Google' })
+    try {
+      // Clear a stale Cognito session so Hosted UI / Google can start cleanly.
+      await signOut({ global: false })
+    } catch {
+      /* not signed in */
+    }
+    await signInWithRedirect({ provider })
   }
 
   const register = async (email: string, password: string) => {
@@ -390,13 +285,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       /* ignore */
     }
-    const at = await tokenAuthTime()
-    if (at != null) sessionStorage.removeItem(mfaStorageKey(at))
     await signOut()
     setUser(null)
     setMfaPending(null)
-    setAppMfaOk(false)
-    setFederatedNeedsMfa(false)
   }
 
   const value: AuthContextType = {

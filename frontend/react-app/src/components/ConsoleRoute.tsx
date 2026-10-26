@@ -7,7 +7,7 @@ interface ConsoleRouteProps {
 }
 
 /**
- * Protects /console/*: requires Cognito session + MFA gate (email Cognito TOTP or Google app TOTP).
+ * Protects /console/*: requires Cognito session (email/password includes Cognito TOTP MFA).
  */
 export function ConsoleRoute(_props: ConsoleRouteProps) {
   const navigate = useNavigate()

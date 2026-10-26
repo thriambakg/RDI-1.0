@@ -15,6 +15,7 @@ import App from './App'
 
 const config = getConfig()
 if (config.COGNITO_USER_POOL_ID && config.COGNITO_CLIENT_ID) {
+  const oauthDomain = (config.COGNITO_DOMAIN || '').replace(/^https?:\/\//, '')
   Amplify.configure({
     Auth: {
       Cognito: {
@@ -23,11 +24,12 @@ if (config.COGNITO_USER_POOL_ID && config.COGNITO_CLIENT_ID) {
         identityPoolId: undefined,
         loginWith: {
           oauth: {
-            domain: `${config.COGNITO_DOMAIN}`,
+            domain: oauthDomain,
             scopes: ['email', 'openid', 'profile'],
             redirectSignIn: [config.REDIRECT_SIGN_IN],
             redirectSignOut: [config.REDIRECT_SIGN_OUT],
             responseType: 'code',
+            ...(config.ENABLE_GOOGLE_AUTH ? { providers: ['Google'] as const } : {}),
           },
         },
         passwordFormat: {

@@ -63,7 +63,9 @@ interface SignUpFormProps {
 export function SignUpForm({ onSwitchToSignIn, onVerificationRequired }: SignUpFormProps) {
   const { register, loginWithProvider } = useAuth()
   const config = getConfig()
-  const hasGoogle = config.COGNITO_USER_POOL_ID && config.COGNITO_CLIENT_ID
+  const hasGoogle = Boolean(
+    config.ENABLE_GOOGLE_AUTH && config.COGNITO_USER_POOL_ID && config.COGNITO_CLIENT_ID && config.COGNITO_DOMAIN
+  )
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -113,8 +115,9 @@ export function SignUpForm({ onSwitchToSignIn, onVerificationRequired }: SignUpF
     setLoading(true)
     try {
       await loginWithProvider('Google')
-    } catch {
-      setError('Google sign-in failed')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Google sign-in failed'
+      setError(msg || 'Google sign-in failed')
       setLoading(false)
     }
   }
